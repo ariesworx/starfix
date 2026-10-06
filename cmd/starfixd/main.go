@@ -2,11 +2,16 @@
 //
 //	starfixd serve [--dev] [--config FILE] [--socket PATH] [--project UUID] [--prefix P]
 //	starfixd stdio --principal NAME [--socket PATH]
+//	starfixd import-bd [--dry-run] [--json] FILE|-
+//	starfixd export-bd [-o FILE]
 //	starfixd version
 //
 // serve is the long-running daemon: it owns the Dolt store and serves the
 // protocol on a unix socket. stdio is the forced command in each developer
 // key's authorized_keys line; it bridges the SSH session to that socket.
+// import-bd and export-bd are admin commands run on the server: they open
+// the store directly with the daemon's DSN settings and move a backlog in
+// and out as bd's JSONL.
 package main
 
 import (
@@ -29,6 +34,8 @@ import (
 const usage = `usage:
   starfixd serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P]
   starfixd stdio --principal NAME [--config FILE] [--socket PATH]
+  starfixd import-bd [--config FILE] [--dsn DSN] [--principal NAME] [--dry-run] [--json] FILE|-
+  starfixd export-bd [--config FILE] [--dsn DSN] [-o FILE]
   starfixd version
 
 The database DSN comes from --dsn (no password allowed there), $STARFIXD_DSN,
@@ -44,6 +51,10 @@ func main() {
 	stop()
 	if err == nil {
 		os.Exit(0)
+	}
+	// A bare exitError means the command already said what went wrong.
+	if code, ok := err.(exitError); ok { //nolint:errorlint // only the unwrapped value is silent
+		os.Exit(int(code))
 	}
 	fmt.Fprintf(os.Stderr, "starfixd: %v\n", err)
 	var ue usageError
@@ -63,6 +74,10 @@ func run(ctx context.Context, args []string) error {
 		return serve(ctx, args[1:])
 	case "stdio":
 		return stdio(ctx, args[1:])
+	case "import-bd":
+		return importBD(ctx, osEnv(), args[1:])
+	case "export-bd":
+		return exportBD(ctx, osEnv(), args[1:])
 	case "version", "--version":
 		fmt.Printf("starfixd %s (protocol %d-%d)\n", version.Version, proto.ProtoMin, proto.ProtoMax)
 		return nil
