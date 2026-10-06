@@ -56,10 +56,11 @@ removes.
   processes and worktrees: a developer's laptop, a headless server, or both.
   Several can share one starfix server; that is the multi-machine story, and it
   mostly falls out of starfix's single authority and leases.
-- **Deployment order.** Laptop first (B0–B2): supervise agents on the
-  developer's machine under their own logins. The merge train (§3.5) holds push
-  credentials and the branch lock, so it runs in exactly one place, on the
-  server, from B3.
+- **Deployment order.** Developer machines first, until Bearing is proven:
+  supervise agents on the developer's machine under their own logins. Then a
+  server `bearingd` that keeps working when no developer is online. The merge
+  train (§3.5) holds push credentials and the branch lock, so it runs in
+  exactly one place, on that server.
 - Agents talk to starfix through its MCP server. Bearing never types into an
   agent's terminal.
 - `bearing` is the operator CLI. It talks to the local `bearingd` over a unix
@@ -123,8 +124,11 @@ Go handlers on the event stream replace LLM watchdog roles:
 
 ### 3.4 Path reservations at dispatch
 
-- Before dispatch, reserve the paths the issue predicts (from its `design`
-  field or a planning step).
+- Before dispatch, reserve the paths the issue predicts. Proposed order of
+  sources (open question 2): paths in the issue's `design` field; else files
+  that similar past issues touched (starfix's files-to-issues index); else
+  reserve on first write, with `bearingd` watching the worktree. No model call
+  until data shows one is needed.
 - The dispatcher picks a wave of issues whose reservations do not overlap.
   Overlapping work waits or is serialized.
 - Agents widen or narrow their reservation through the starfix MCP `reserve`
@@ -137,9 +141,10 @@ Go handlers on the event stream replace LLM watchdog roles:
   culprit back to its issue with the failure attached.
 - Gates come from the starfix gate runner: required CI checks and, by default,
   human approval.
-- **Default mode opens pull requests and stops.** Direct merging is opt-in per
-  project and still requires green CI. Never force-push; never push to a
-  protected branch.
+- **Queue only until the server runs.** The train orders, tests and opens pull
+  requests; a human merges. Merging by the train waits for the server
+  `bearingd`, is then opt-in per project, and still requires green CI. Never
+  force-push; never push to a protected branch.
 - Only the merge train holds push credentials. Agents never do.
 
 ### 3.6 Structured handoff
@@ -217,8 +222,9 @@ require a gate: CI, a human approval, or a named reviewer.
 
 ### 3.12 Sandboxed workers
 
-Run each agent in a container or bubblewrap with only its worktree mounted and a
-network allowlist. Inject a session-scoped credential that starfixd maps to
+Run each agent in a container with only its worktree mounted and a network
+allowlist. Containers, not bubblewrap, so one design runs on macOS (most
+developers, through the local container runtime's VM) and Linux (servers). Inject a session-scoped credential that starfixd maps to
 (principal, session). No ambient `~/.ssh`, no git push rights. Unrestricted
 agent permissions are allowed only here.
 
@@ -245,7 +251,7 @@ mode = "pr"            # "pr" (default) or "train"
 require = ["ci", "human"]
 
 [sandbox]
-mode = "none"          # "none", "bwrap" or "container"
+mode = "none"          # "none" or "container"
 ```
 
 ## 5. What Bearing does not build
@@ -276,23 +282,28 @@ Bearing stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
 | B3 | Reservations (§3.4), merge train in PR mode (§3.5), formula runner (§3.10) | 6 (locks, reservations, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
+| B5 | Server `bearingd` running unattended; merge train may merge (opt-in) | 6 |
+| — | Gas City shim: an `exec:` beads provider backed by starfix, so Gas City users can try it | 1 (issues, deps, ready) |
 
 Gate for B0: a dozen agents across two machines run for a day with no stuck
 claims, no orphaned processes and no reaped live agents.
 
-## 7. Open questions
+## 7. Decisions
 
-1. **Repository.** Inside starfix (`cmd/bearing`) or its own repository? A
-   separate repository keeps starfix's surface small; one repository keeps the
-   protocol and its main client in lockstep.
-2. ~~**Where `bearingd` runs by default.**~~ Decided: both. Laptop first, and
-   the merge train only on the server from B3 (§2).
-3. **Planning step for reservations.** Where predicted paths come from when an
-   issue has no `design` field: a cheap model call, the files-to-issues index
-   (starfix §12), or none (reserve on first edit).
-4. **Merge train scope.** Does the train ever merge, or only queue, test and
-   open pull requests for a human?
-5. **Sandbox baseline.** bubblewrap (Linux only) versus containers (heavier,
-   portable to macOS through a VM).
-6. **Gas City shim.** Worth a small `exec:` provider so Gas City users can try
-   starfix, or skip it?
+| # | Decision |
+|---|---|
+| 1 | Developer machines first; a server `bearingd` follows once proven, for work while no developer is online (§2). |
+| 2 | The merge train only queues, tests and opens pull requests until the server runs (§3.5). |
+| 3 | Sandboxes are containers, on macOS and Linux (§3.12). |
+| 4 | Build the Gas City shim (§6). |
+
+## 8. Open questions
+
+1. **Repository.** Recommended: inside starfix as `cmd/bearing` and
+   `cmd/bearingd`, one Go module, one release tag for all binaries, so Bearing
+   never ships against a protocol starfix does not speak. A separate repository
+   would need a public, versioned client API and a compatibility matrix from
+   day one. Split later if Bearing outgrows it.
+2. **Reservation sources** (§3.4). The trade-off: over-reserving serializes
+   work; under-reserving brings merge conflicts back; a model call adds tokens
+   and latency to every dispatch. Recommended: the layered order in §3.4.
