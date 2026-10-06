@@ -76,7 +76,7 @@ addresses.
 | 1 | **Supervisor with lease coupling** | claims, epochs, leases, agents registry | claims stuck `in_progress`; leases reading expired on live agents; orphaned processes |
 | 2 | **Typed agent state** | agents registry, events | usage limits indistinguishable from hangs |
 | 3 | **Event-driven patrol** | SSE events, reaper, gates | LLM patrol loops, heartbeat drift, idle token burn |
-| 4 | **Path reservations at dispatch** | reservations, swarm waves | conflicts discovered only at merge time |
+| 4 | **Conflict log; reservations later** | events; later reservations | rework from overlapping work, unmeasured |
 | 5 | **Safe merge train** | locks, gates, events | merges on red CI, force-push recovery |
 | 6 | **Structured handoff** | handoffs, scoped memory, prime | lost reasoning when a session ends |
 | 7 | **Budget and concurrency governor** | semaphores, cost tracking (starfix §12.1) | rate-limit exhaustion, runaway spend |
@@ -122,17 +122,20 @@ Go handlers on the event stream replace LLM watchdog roles:
 | budget threshold | pause dispatch; notify through the inbox |
 | agent stalled longer than N | ask a model once for a diagnosis; post it to the inbox |
 
-### 3.4 Path reservations at dispatch
+### 3.4 Conflicts: worktrees first, reservations later
 
-- Before dispatch, reserve the paths the issue predicts. Proposed order of
-  sources (open question 2): paths in the issue's `design` field; else files
-  that similar past issues touched (starfix's files-to-issues index); else
-  reserve on first write, with `bearingd` watching the worktree. No model call
-  until data shows one is needed.
-- The dispatcher picks a wave of issues whose reservations do not overlap.
-  Overlapping work waits or is serialized.
-- Agents widen or narrow their reservation through the starfix MCP `reserve`
-  tool as they learn more. Reservations expire with the claim.
+Every agent works in its own worktree and branch, and conflicts are resolved at
+the pull request by rebasing. That is the safety net, and the first stages
+rely on it alone.
+
+- **Log every conflict.** When a branch conflicts, `bearingd` records an event
+  with the issues and files involved, and the rework it cost in tokens.
+- **Reservations are deferred.** If the log shows rework is expensive, add
+  reservations: before dispatch, reserve the paths an issue will touch, and hold
+  overlapping issues until the first merges. Sources, in order: paths in the
+  issue's `design` field; files similar past issues touched (starfix's
+  files-to-issues index); reserve on first write. No model call unless data
+  shows it is needed.
 
 ### 3.5 Safe merge train
 
@@ -278,11 +281,12 @@ Bearing stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
 | Stage | Delivers | Needs starfix |
 |---|---|---|
 | B0 | Supervisor (§3.1), typed state (§3.2), `bearing who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
-| B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), Codex and Gemini | 3 |
+| B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), conflict log (§3.4), Codex and Gemini | 3 |
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
-| B3 | Reservations (§3.4), merge train in PR mode (§3.5), formula runner (§3.10) | 6 (locks, reservations, gates, molecules) |
+| B3 | Merge train in queue mode (§3.5), formula runner (§3.10) | 6 (locks, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
 | B5 | Server `bearingd` running unattended; merge train may merge (opt-in) | 6 |
+| — | Reservations (§3.4), only if the conflict log shows rework is expensive | 6 (reservations) |
 | — | Gas City shim: an `exec:` beads provider backed by starfix, so Gas City users can try it | 1 (issues, deps, ready) |
 
 Gate for B0: a dozen agents across two machines run for a day with no stuck
@@ -296,6 +300,7 @@ claims, no orphaned processes and no reaped live agents.
 | 2 | The merge train only queues, tests and opens pull requests until the server runs (§3.5). |
 | 3 | Sandboxes are containers, on macOS and Linux (§3.12). |
 | 4 | Build the Gas City shim (§6). |
+| 5 | Worktrees and pull requests handle conflicts; log them, and defer reservations until the log justifies them (§3.4). |
 
 ## 8. Open questions
 
@@ -304,6 +309,3 @@ claims, no orphaned processes and no reaped live agents.
    never ships against a protocol starfix does not speak. A separate repository
    would need a public, versioned client API and a compatibility matrix from
    day one. Split later if Bearing outgrows it.
-2. **Reservation sources** (§3.4). The trade-off: over-reserving serializes
-   work; under-reserving brings merge conflicts back; a model call adds tokens
-   and latency to every dispatch. Recommended: the layered order in §3.4.
