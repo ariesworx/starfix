@@ -258,6 +258,19 @@ Agreed 6 Oct 2026; each item lands in the stage shown in §13.
 | 9 | **Token budget in CI** | Scripted agent sessions measure tokens for each tool schema, each result shape and prime; CI fails when one exceeds its budget. |
 | 10 | **Time and token reporting** | Optional: the client records wall time per claim and, where the harness exposes it, tokens per issue. Shown in `show` and `digest`. |
 
+### 12.1 Token and cost tracking
+
+Agreed 6 Oct 2026. Extends item 10.
+
+- **Account.** Every project has an `account`: a client's engagement code name or an internal department. It defaults to `internal`. An epic or issue can override it, and children inherit it. Code names only; the map to real clients lives outside starfix.
+- **What is recorded, per issue and per session:** model, input tokens, output tokens, cache-write tokens, cache-read tokens, wall time, harness. Cache tokens are separate because they are priced differently.
+- **Where the numbers come from:** the harness, never the model's own report. The client reads whatever the harness exposes (for example Claude Code's OpenTelemetry usage metrics or hook payloads, and Codex's token-usage log) and attributes each delta to the issue the session held at that moment. When a session holds several issues, the delta is split by time held, and the record says it was split. A harness that exposes nothing records wall time only, marked as such.
+- **Prices.** A `prices` table keyed by (model, effective date) with input, output, cache-write and cache-read rates. Cost is computed when a report runs, never stored, so a price change never rewrites history. Admins update prices with `starfix admin prices set`.
+- **Subscriptions.** Reports always show the **list-price equivalent** (tokens at API rates). For a flat-rate plan, an admin records the plan's monthly fee and its seats; reports then also show the **amortized cost**: the month's fee split across all issues in proportion to their tokens.
+- **Human time.** `starfix log 1.5h <id>` records a person's hours against the same account.
+- **Reports.** `starfix cost --by account|issue|epic|person|model --since <date>` (CLI only), and a cost line in `digest`. Agents see their current issue's running total in `show`, so they can notice when an issue gets expensive.
+- **Limits.** Attribution is approximate when a session switches issues, and harnesses differ in what they expose. Invoicing stays outside starfix.
+
 ## 13. Plan
 
 | Stage | Delivers | Gate |
@@ -265,8 +278,8 @@ Agreed 6 Oct 2026; each item lands in the stage shown in §13.
 | 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
 | 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `starfix upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
-| 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting | Multi-session soak test |
-| 4 | Memory with scopes and tags, migrated from bd `kv.memory.*` | |
+| 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting, `account` and token capture (§12.1) | Multi-session soak test |
+| 4 | Memory with scopes and tags, migrated from bd `kv.memory.*`; prices, `starfix cost` and `starfix log` (§12.1) | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
 | 6 | Locks, reservations, gates, molecules/formulas, swarm, cross-project | |
 | 7 | Scheduled digests (draft only), GitHub sync, compaction, duplicate check, vectors, other trackers | |
@@ -283,3 +296,4 @@ Maintainer, 6 Oct 2026:
 4. License: Apache-2.0.
 5. Dolt stays the backend. `starfix upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
 6. All ten developer-experience features in §12 are in scope, and `digest` is an agent tool.
+7. Track input and output tokens per issue, with cost estimates even on subscription plans (§12.1); accounts default to `internal`.
