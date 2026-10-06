@@ -1,6 +1,6 @@
 # Bearing: an agent orchestrator on starfix
 
-Status: **draft specification**, open for review. Companion to
+Status: **draft specification**; no open questions as of this revision. Companion to
 [starfix.md](starfix.md).
 
 Bearing runs and supervises many AI coding agents across sessions and machines.
@@ -301,11 +301,4 @@ claims, no orphaned processes and no reaped live agents.
 | 3 | Sandboxes are containers, on macOS and Linux (§3.12). |
 | 4 | Build the Gas City shim (§6). |
 | 5 | Worktrees and pull requests handle conflicts; log them, and defer reservations until the log justifies them (§3.4). |
-
-## 8. Open questions
-
-1. **Repository.** Recommended: inside starfix as `cmd/bearing` and
-   `cmd/bearingd`, one Go module, one release tag for all binaries, so Bearing
-   never ships against a protocol starfix does not speak. A separate repository
-   would need a public, versioned client API and a compatibility matrix from
-   day one. Split later if Bearing outgrows it.
+| 6 | Bearing lives in this repository as `cmd/bearing` and `cmd/bearingd`, in the same Go module, released under one tag with starfix, so it never ships against a protocol starfix does not speak. |
