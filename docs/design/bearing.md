@@ -401,3 +401,9 @@ claims, no orphaned processes and no reaped live agents.
    default; a per-epic policy later, once spend forecasts are trustworthy.
 3. **Who plans epics.** A person, or a planning agent whose output a person
    approves. Recommended: both allowed; dispatch always waits for approval.
+4. **Epic-branch merges before the server runs.** Decision 2 keeps the train
+   to queueing until the server `bearingd` exists. Landing children on an epic
+   branch is a merge, though not to `main`. Either a human merges each child
+   into the epic branch until then, or the train may merge into `epic/*` only
+   (never `main`) from B3. Recommended: allow `epic/*` merges with green CI from
+   B3; `main` still waits for a human.
