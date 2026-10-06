@@ -125,3 +125,7 @@ Reading: the index is 3x faster than an unoptimized Go scan but misses 1 in 6 tr
 - Worst-case contention (everyone claims the queue head) is deliberately pessimistic; the realistic case with server-side claiming is the 1-worker row.
 - No MySQL or Postgres baseline: none was installed.
 - The Go brute force is single-threaded and unoptimized (no SIMD, no int8).
+
+## Found later (stage 1)
+
+- `SELECT MAX(pk)` and `COALESCE(MAX(pk), 0)` over an empty table's primary key return **no row at all** in Dolt 2.4.2; `COUNT(*)` is fine. Read the last key with `ORDER BY pk DESC LIMIT 1` instead.
