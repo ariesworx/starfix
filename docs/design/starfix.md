@@ -131,6 +131,7 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 | Memory | `remember`, `recall`, `forget` |
 | Coordination | `inbox`, `lock`, `reserve`, `who` |
 | Sync | `conflicts` (only listed when there are unresolved conflicts) |
+| Reporting | `digest(since, by?, label?)`: structured summary of work closed, in progress, stalled, blocked and handed off, from `events`; capped at ~1.5k tokens. The calling agent writes any narrative; starfix runs no model |
 
 - **No admin tools:** delete, purge, rename, import, setup, settings and provisioning are CLI only.
 - **The session is implicit.** The server learns the principal from the SSH key. The client generates the session ID, or takes `CLAUDE_SESSION_ID` or its equivalent, and records the machine. An agent never passes identity.
@@ -240,22 +241,39 @@ Dolt stays the backend (decided 6 Oct 2026). starfix and starfixd ship as one si
 
 The protocol supports one version back and one forward (principle 9), so the server and clients can be upgraded independently.
 
-## 12. Plan
+## 12. Developer experience
+
+Agreed 6 Oct 2026; each item lands in the stage shown in §13.
+
+| # | Feature | Agent or person sees |
+|---|---|---|
+| 1 | **`start` and `finish`** | `start` claims the top ready issue (or a named one) and returns it with acceptance criteria, the last handoff and the relevant memories. `finish` closes it, writes the handoff and files discovered work linked `discovered-from`. A typical session is two calls, not six. |
+| 2 | **Git awareness** | `claim`/`start` can create the branch or worktree (`<type>/<id>-<slug>`). Commits and PRs link to the issue by branch name or a `Starfix:` trailer. A merged PR closes the issue through the GitHub webhook. No git hooks are installed. |
+| 3 | **Files to issues** | The server records which paths each issue's commits touched. `ready` ranks down work that overlaps paths held by another claim or reservation; `show` lists likely files. |
+| 4 | **Acceptance checklist** | Acceptance criteria are items, not prose. The agent ticks them; `close` refuses until all are ticked or waived with a reason. |
+| 5 | **Errors that say what to do next** | Every refusal names the cause and the next action, for example `sf-a1b2 claimed by ed/codex 3m ago; next ready: sf-c3d4`. Typed error codes for programs. |
+| 6 | **Similar closed issues** | `show` and `create` list up to three similar closed issues: full-text first, vectors when §10 lands. |
+| 7 | **Live board** | `starfix tui` (terminal) and an optional read-only web view served by `starfixd`, both driven by the event stream. |
+| 8 | **`starfixd --dev`** | A throwaway local server with a temporary Dolt database and seeded sample data, for trying starfix, demos and agent tests. |
+| 9 | **Token budget in CI** | Scripted agent sessions measure tokens for each tool schema, each result shape and prime; CI fails when one exceeds its budget. |
+| 10 | **Time and token reporting** | Optional: the client records wall time per claim and, where the harness exposes it, tokens per issue. Shown in `show` and `digest`. |
+
+## 13. Plan
 
 | Stage | Delivers | Gate |
 |---|---|---|
 | 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
-| 2 | MCP server (work and issue tools), prime, `starfix upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
-| 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency | Multi-session soak test |
+| 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `starfix upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
+| 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting | Multi-session soak test |
 | 4 | Memory with scopes and tags, migrated from bd `kv.memory.*` | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
 | 6 | Locks, reservations, gates, molecules/formulas, swarm, cross-project | |
-| 7 | GitHub sync, compaction, duplicate check, vectors, other trackers | |
+| 7 | Scheduled digests (draft only), GitHub sync, compaction, duplicate check, vectors, other trackers | |
 
 bd stays in use until stage 2 passes on a real project.
 
-## 13. Decisions
+## 14. Decisions
 
 Maintainer, 6 Oct 2026:
 
@@ -264,3 +282,4 @@ Maintainer, 6 Oct 2026:
 3. Embeddings: open; recommendation is a local model on the server (see §10).
 4. License: Apache-2.0.
 5. Dolt stays the backend. `starfix upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
+6. All ten developer-experience features in §12 are in scope, and `digest` is an agent tool.
