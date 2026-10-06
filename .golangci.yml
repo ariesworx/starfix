@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gosec
+    - revive
+    - ineffassign
+    - unused
+  exclusions:
+    paths:
+      # Stage 0 measurement code, kept as evidence; not maintained.
+      - spike/
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -5,7 +5,8 @@ across sessions and machines. Agents use it through MCP; people administer it
 from the command line. It is written in Go and stores its data in
 [Dolt](https://github.com/dolthub/dolt) behind a small server.
 
-**Status: design.** Nothing is built yet. Read the
+**Status: stage 1 in progress.** The server-side store (`internal/store`) is
+built; the server, transport and CLI are not. Read the
 [design](docs/design/starfix.md) and the [database choice](docs/design/database.md).
 
 starfix is an independent project, inspired by and able to import from
