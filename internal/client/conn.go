@@ -152,6 +152,11 @@ func start(ctx context.Context, client *ssh.Client, cfg *Config, opts Options) (
 	defer stop()
 	if err := c.enc.Encode(&proto.Frame{T: proto.FrameHello, Version: opts.Version, Proto: proto.Proto,
 		Project: cfg.Project, Session: opts.Session, Machine: opts.Machine}); err != nil {
+		// The bridge may have refused and closed before reading the hello;
+		// its refusal is still waiting to be read.
+		if w, rerr := c.next(); rerr == nil && w.T == proto.FrameWelcome && w.Err != nil {
+			return nil, w.Err
+		}
 		return nil, c.lost(err)
 	}
 	w, err := c.next()
