@@ -1,6 +1,6 @@
 // Command starfixd is the starfix server.
 //
-//	starfixd serve [--config FILE] [--socket PATH] [--project UUID] [--prefix P]
+//	starfixd serve [--dev] [--config FILE] [--socket PATH] [--project UUID] [--prefix P]
 //	starfixd stdio --principal NAME [--socket PATH]
 //	starfixd version
 //
@@ -27,7 +27,7 @@ import (
 )
 
 const usage = `usage:
-  starfixd serve [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P]
+  starfixd serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P]
   starfixd stdio --principal NAME [--config FILE] [--socket PATH]
   starfixd version
 
@@ -91,11 +91,16 @@ func flags(name string, args []string, s *server.Settings, cfg *string, extra fu
 func serve(ctx context.Context, args []string) error {
 	var fl server.Settings
 	var cfgPath string
+	var dev bool
 	if err := flags("serve", args, &fl, &cfgPath, func(fs *flag.FlagSet) {
+		fs.BoolVar(&dev, "dev", false, "allow serving off Linux, where socket peers are not checked")
 		fs.StringVar(&fl.DSN, "dsn", "", "Dolt DSN (no password)")
 		fs.StringVar(&fl.Project, "project", "", "project UUID")
 		fs.StringVar(&fl.Prefix, "prefix", "", "issue-ID prefix")
 	}); err != nil {
+		return err
+	}
+	if err := server.RequirePeerCheck(dev); err != nil {
 		return err
 	}
 	s, err := server.ResolveSettings(fl, cfgPath, os.Getenv)

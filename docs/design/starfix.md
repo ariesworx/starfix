@@ -45,7 +45,7 @@ person ──CLI──────> (same binary)
 
 **Transport.** `golang.org/x/crypto/ssh` runs inside the process: no system `ssh` and no port juggling. The developer's SSH key is their identity. No new port is opened: the server's own sshd authenticates each key, and each line in the starfixd account's `authorized_keys` is `restrict,command="starfixd stdio --principal <name>" <key>`, so the principal comes from which key authenticated, never from the client, and shared Unix accounts no longer hide who did what.
 
-- `starfixd serve` is the daemon. It owns the store and listens on a unix socket in a 0700 directory.
+- `starfixd serve` is the daemon. It owns the store and listens on a unix socket in a 0700 directory. It runs on Linux only, because only there can it check which user connects (`--dev` overrides this on a single-user machine; Windows hosts use WSL2). The `starfix` client and MCP server run natively on Linux, macOS and Windows.
 - `starfixd stdio` is the forced command. It connects to that socket, sends a bridge frame naming the principal, then copies the session's stdin and stdout. The daemon trusts the bridge frame only because the socket peer is local and is the daemon's own user (SO_PEERCRED on Linux).
 - The protocol is newline-delimited JSON frames (`internal/proto`): a hello and welcome that negotiate the protocol version (§11), then requests and responses with typed error codes. A frame type is reserved for server-pushed events (stage 3).
 - This replaces the earlier plan of JSON over HTTP/2: an SSH session already gives an authenticated, encrypted, ordered stream, and a forced command needs no extra listener.

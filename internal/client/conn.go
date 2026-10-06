@@ -278,12 +278,10 @@ func (c *Conn) Close() error {
 func signers(cfg *Config, getenv func(string) string) ([]ssh.Signer, func(), error) {
 	var out []ssh.Signer
 	closeAgent := func() {}
-	if sock := getenv("SSH_AUTH_SOCK"); sock != "" {
-		if ac, err := net.Dial("unix", sock); err == nil {
-			closeAgent = func() { _ = ac.Close() }
-			if ss, err := agent.NewClient(ac).Signers(); err == nil {
-				out = append(out, ss...)
-			}
+	if ac, err := dialAgent(getenv); err == nil {
+		closeAgent = func() { _ = ac.Close() }
+		if ss, err := agent.NewClient(ac).Signers(); err == nil {
+			out = append(out, ss...)
 		}
 	}
 	path, err := cfg.KeyPath()

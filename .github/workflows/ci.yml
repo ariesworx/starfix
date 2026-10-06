@@ -29,6 +29,13 @@ jobs:
           version: v2.14.0
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: cross-platform build
+        # The client must build and vet on every developer OS, not only Linux.
+        run: |
+          for os in darwin windows; do
+            GOOS=$os GOARCH=amd64 go vet ./...
+            GOOS=$os GOARCH=amd64 go build ./cmd/...
+          done
 
   # The store tests run against a real dolt sql-server, pinned and verified.
   test:

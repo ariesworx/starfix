@@ -4,7 +4,7 @@
 // is used. The server's ED25519 host key is pinned in .starfix.yaml and
 // checked on every connection: a mismatch is refused, and an unpinned host
 // is never trusted on first use. The developer authenticates with a key
-// from ssh-agent (SSH_AUTH_SOCK) or the key file named in the config.
+// from ssh-agent (SSH_AUTH_SOCK, or the OpenSSH named pipe on Windows) or the key file named in the config.
 package client
 
 import (

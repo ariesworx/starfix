@@ -11,6 +11,9 @@ import (
 	"syscall"
 )
 
+// PeerChecked reports whether CheckPeer verifies the connecting user.
+const PeerChecked = true
+
 // CheckPeer refuses a unix socket connection from any user but the
 // daemon's own, using SO_PEERCRED.
 func CheckPeer(c net.Conn) error {
