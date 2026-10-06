@@ -80,16 +80,17 @@ func (r *Report) Summary() string {
 			}
 		}
 		if len(xs) == 0 {
-			return fmt.Sprintf("0 %s", name)
+			return "0 " + name + "s"
 		}
-		return fmt.Sprintf("%d %s (%s)", c.total(), name, strings.Join(xs, ", "))
+		return fmt.Sprintf("%d %s (%s)", c.total(), plural(c.total(), name), strings.Join(xs, ", "))
 	}
 	warnings := len(r.Problems) - r.Errors()
 	return fmt.Sprintf("%s %s, %s, %s; %d %s, %d %s", verb,
-		part("issues", r.Issues), part("deps", r.Deps), part("comments", r.Comments),
+		part("issue", r.Issues), part("dep", r.Deps), part("comment", r.Comments),
 		r.Errors(), plural(r.Errors(), "error"), warnings, plural(warnings, "warning"))
 }
 
+// plural returns w for 1 and w+"s" otherwise.
 func plural(n int, w string) string {
 	if n == 1 {
 		return w
