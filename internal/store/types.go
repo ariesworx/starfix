@@ -115,6 +115,9 @@ const (
 	OpLabelAdd    Op = "label.add"
 	OpLabelRemove Op = "label.remove"
 	OpCommentAdd  Op = "comment.add"
+	// OpIssueImport records an issue written by an importer, created or
+	// overwritten with the source's own timestamps and author.
+	OpIssueImport Op = "issue.import"
 )
 
 // Actor identifies who made a change: the authenticated principal, the
@@ -228,6 +231,8 @@ type Dep struct {
 	Type      DepType   `json:"type"`
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
+	// Metadata is the edge's JSON metadata, such as a waits-for gate.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
 // Comment is an append-only note on an issue.
