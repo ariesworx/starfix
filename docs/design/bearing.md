@@ -1,6 +1,6 @@
 # Bearing: an agent orchestrator on starfix
 
-Status: **draft specification**; no open questions as of this revision. Companion to
+Status: **draft specification**, open for review. Companion to
 [starfix.md](starfix.md).
 
 Bearing runs and supervises many AI coding agents across sessions and machines.
@@ -85,6 +85,7 @@ addresses.
 | 10 | **Formula runner** | molecules, idempotency keys, gates | duplicate workflow instances |
 | 11 | **Observability** | events, agents, digest | many stores, polling dashboards |
 | 12 | **Sandboxed workers** | principal and session mapping | host-wide credential access |
+| 13 | **Epics** | parent links, gates, events, memory, cost | half-landed epics, stale bases, sibling drift |
 
 ### 3.1 Supervisor with lease coupling
 
@@ -231,6 +232,87 @@ developers, through the local container runtime's VM) and Linux (servers). Injec
 (principal, session). No ambient `~/.ssh`, no git push rights. Unrestricted
 agent permissions are allowed only here.
 
+### 3.13 Epics: distributed work on one goal
+
+An epic is a starfix issue of type `epic` whose children point to it with
+`parent_id`. Bearing never dispatches the epic itself; it runs the children,
+possibly on several machines at once, and lands them as one change. That is the
+hardest coordination problem Bearing has, because siblings share a goal, often
+share files, and depend on each other's code, not just each other's status.
+
+**What goes wrong without a design**
+
+| Failure | Cause |
+|---|---|
+| `main` holds half an epic | Each child lands on its own |
+| A child builds on code that isn't there | Its blocker is *closed* but not yet *merged* where the child branches from |
+| Siblings disagree on an interface | Each agent decides alone; nothing carries the decision to the others |
+| Conflicts pile up late | Siblings touch the same area in parallel |
+| Scope and spend creep | Agents file new children mid-epic and Bearing dispatches them |
+| One failing child stalls the epic silently | Retries loop; siblings keep building on a broken base |
+| The epic branch drifts from `main` | Long-lived branch, no one merges `main` back |
+
+**Design**
+
+1. **Plan, then approve.** A planning step (a person, or an agent at a person's
+   request) splits the epic into children sized for one session each, with
+   dependencies and an epic-level `design` (interfaces, conventions, out of
+   scope). Dispatch starts only after a human approves the plan through a
+   starfix gate. Parallelism comes from the dependency graph, so a poor split
+   costs more than any scheduler can win back.
+2. **One integration branch per epic.** The merge train creates
+   `epic/<id>` from `main`. Children branch from its tip and land on it through
+   the train (queue, test, then merge into the epic branch, since that branch is
+   not protected). Only the final epic pull request to `main` goes to a human.
+   Small epics can opt into `integration = "trunk"`: each child opens its own
+   pull request to `main`, as for standalone issues.
+3. **"Landed", not "closed", unblocks.** A child's dependents become dispatchable
+   when it has *landed* on the epic branch, not when its agent closes it. The
+   merge train records a `landed {issue, branch, sha}` event in starfix, and the
+   dispatcher requires every blocker to be landed. Workers on any machine fetch
+   the epic branch before creating a worktree, so they always start from code
+   that contains their blockers.
+4. **Shared epic context.** `prime` for a child includes the epic's `design`, the
+   epic's decision log, and short handoffs from landed siblings. When an agent
+   makes a decision others must follow (an interface, a name, a schema), it
+   records it with the starfix MCP tools as an epic decision; Bearing pushes it
+   to the inboxes of running siblings, whose next prompt sees it.
+5. **Lower parallelism, measured conflicts.** Siblings collide more than
+   unrelated issues, so each epic has its own cap (`max_parallel`, default 3)
+   under the governor's global caps. The conflict log (§3.4) is grouped by
+   epic; epics are where reservations would pay off first, if the log shows
+   they are needed.
+6. **Discovered work waits.** A child an agent files during the epic is created
+   `deferred` with `discovered-from`. It is dispatched only after a human (or a
+   per-epic policy, such as "under N points and under budget") accepts it. Bugs
+   outside the epic go to the backlog, not into the epic.
+7. **Budget for the whole epic.** The governor caps spend across all children
+   (`per_epic_usd`), forecasts remaining cost from children done so far, and
+   stops dispatching when the forecast exceeds the cap, posting to the inbox.
+8. **Failure stops the line, not the fleet.** A child that fails CI on the
+   epic branch is ejected by the train and retried at most twice, with the
+   failure attached to its handoff. Then it is marked `blocked{needs_human}`.
+   Its dependents wait; independent siblings keep running.
+9. **Keep the branch fresh.** When `main` moves, the train merges `main` into
+   `epic/<id>` (never a rebase or force-push). A conflict there becomes a child
+   issue at the head of the queue, and dispatch on that epic pauses until it
+   lands.
+10. **Close-out.** When every child has landed and the epic branch is green,
+    Bearing opens the epic pull request to `main` and marks the epic
+    close-eligible. The epic closes when that pull request merges. Cancelling an
+    epic stops its agents, releases claims and keeps every branch.
+
+**What starfix needs** (beyond stage 3): a `landed` event and "blockers landed"
+in the ready query used for dispatch (stage 6, with gates); epic decisions as
+epic-tagged memory (stage 4); `epic status` and close-eligible (bd parity);
+`cost --by epic` (stage 4, already designed).
+
+**Distributed by construction.** Nothing in this design depends on where an
+agent runs. Claims, the landed event, decisions and budgets live in starfix;
+code moves only through the epic branch on the git remote. A laptop and a
+server can work the same epic, and a child resumed on another machine starts
+from its handoff and the branch.
+
 ## 4. Configuration
 
 One TOML file per project, `bearing.toml`, plus a per-machine file for local
@@ -251,6 +333,12 @@ per_day_usd = 150
 
 [merge]
 mode = "pr"            # "pr" (default) or "train"
+
+[epics]
+integration = "branch" # "branch" (epic/<id>, default) or "trunk"
+max_parallel = 3
+per_epic_usd = 300
+discovered = "hold"    # "hold" (human accepts) or a policy name
 require = ["ci", "human"]
 
 [sandbox]
@@ -283,7 +371,7 @@ Bearing stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
 | B0 | Supervisor (§3.1), typed state (§3.2), `bearing who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
 | B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), conflict log (§3.4), Codex and Gemini | 3 |
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
-| B3 | Merge train in queue mode (§3.5), formula runner (§3.10) | 6 (locks, gates, molecules) |
+| B3 | Merge train in queue mode (§3.5), formula runner (§3.10), epics (§3.13) | 6 (locks, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
 | B5 | Server `bearingd` running unattended; merge train may merge (opt-in) | 6 |
 | — | Reservations (§3.4), only if the conflict log shows rework is expensive | 6 (reservations) |
@@ -302,3 +390,14 @@ claims, no orphaned processes and no reaped live agents.
 | 4 | Build the Gas City shim (§6). |
 | 5 | Worktrees and pull requests handle conflicts; log them, and defer reservations until the log justifies them (§3.4). |
 | 6 | Bearing lives in this repository as `cmd/bearing` and `cmd/bearingd`, in the same Go module, released under one tag with starfix, so it never ships against a protocol starfix does not speak. |
+
+## 8. Open questions
+
+1. **Epic integration default** (§3.13). An epic branch keeps `main` whole but
+   adds a long-lived branch to keep fresh. Trunk with per-child pull requests is
+   simpler but lands half-done epics on `main` unless the code is hidden behind
+   flags. Recommended: branch by default, trunk opt-in for small epics.
+2. **Who may accept discovered children** (§3.13). Recommended: a human by
+   default; a per-epic policy later, once spend forecasts are trustworthy.
+3. **Who plans epics.** A person, or a planning agent whose output a person
+   approves. Recommended: both allowed; dispatch always waits for approval.
