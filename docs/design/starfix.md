@@ -211,13 +211,42 @@ The client keeps a SQLite read cache of everything you can see, plus an outbox o
   - the duplicate check at create;
   - ranking memories for prime.
 
-## 11. Plan
+## 11. Versions and upgrades
+
+Dolt stays the backend (decided 6 Oct 2026). starfix and starfixd ship as one signed release: cosign keyless signature on the checksums, plus a build provenance attestation.
+
+**`starfix upgrade [--check] [--rollback]`** (each developer machine)
+- Reads the latest release, verifies the signature and checksum, and replaces the binary atomically. The previous binary is kept for `--rollback`.
+- `--check` prints one line and changes nothing.
+- Nothing upgrades itself without the command.
+
+**`starfixd upgrade [--check] [--to vX.Y.Z] [--rollback]`** (on the server, as admin, or remotely as `starfix admin server upgrade`)
+1. Verify the release, as above.
+2. Back up first: a SQL dump and a Dolt tag `starfix-<old version>`.
+3. Drain: refuse new writes, flush the commit batcher.
+4. Swap the binary, run schema migrations, restart through systemd.
+5. Health check. On failure, restore the old binary and report. Migrations are additive for one release, so the old binary still runs against the new schema.
+
+**Dolt version.** Each starfix release pins the Dolt version it was tested with. `starfixd upgrade` installs that version (checksum verified), not simply the newest Dolt, because Dolt releases about weekly and an untested server/client mix is how bd lost data. `starfixd check` warns when the running Dolt differs from the pin.
+
+**Version handshake.** Every response carries the server version, its protocol range and the latest release it knows of. starfixd checks for releases at most once a day; this can be turned off for air-gapped servers, where the admin sets the latest version by hand.
+
+| Situation | Who is told | How |
+|---|---|---|
+| Server behind the latest release | every client and the admin | CLI: one stderr line, at most once a day per machine. MCP: one line in prime, never in tool results. `starfixd check` fails with a `fix:` line |
+| Server behind a security release | everyone | as above, but on every CLI command and every session start until upgraded |
+| Client behind the server | that client | one line: `starfix upgrade` |
+| Client outside the server's protocol range | that client | refused, with a typed exit code and a `fix:` line (fail closed) |
+
+The protocol supports one version back and one forward (principle 9), so the server and clients can be upgraded independently.
+
+## 12. Plan
 
 | Stage | Delivers | Gate |
 |---|---|---|
 | 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
-| 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import | Real bd backlogs imported and round-tripped |
-| 2 | MCP server (work and issue tools), prime, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
+| 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
+| 2 | MCP server (work and issue tools), prime, `starfix upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
 | 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency | Multi-session soak test |
 | 4 | Memory with scopes and tags, migrated from bd `kv.memory.*` | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
@@ -226,7 +255,7 @@ The client keeps a SQLite read cache of everything you can see, plus an outbox o
 
 bd stays in use until stage 2 passes on a real project.
 
-## 12. Decisions
+## 13. Decisions
 
 Maintainer, 6 Oct 2026:
 
@@ -234,3 +263,4 @@ Maintainer, 6 Oct 2026:
 2. Memory defaults to `project` scope; the agent decides when a memory is a personal preference (`user`) and asks when borderline.
 3. Embeddings: open; recommendation is a local model on the server (see §10).
 4. License: Apache-2.0.
+5. Dolt stays the backend. `starfix upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
