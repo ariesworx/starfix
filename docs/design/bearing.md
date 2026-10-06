@@ -52,9 +52,14 @@ removes.
      starfixd ─── Dolt
 ```
 
-- `bearingd` runs on each developer machine, or on a server for a headless
-  fleet. Several can share one starfix server; that is the multi-machine story,
-  and it mostly falls out of starfix's single authority and leases.
+- `bearingd` runs on every machine that runs agents, because it owns their
+  processes and worktrees: a developer's laptop, a headless server, or both.
+  Several can share one starfix server; that is the multi-machine story, and it
+  mostly falls out of starfix's single authority and leases.
+- **Deployment order.** Laptop first (B0–B2): supervise agents on the
+  developer's machine under their own logins. The merge train (§3.5) holds push
+  credentials and the branch lock, so it runs in exactly one place, on the
+  server, from B3.
 - Agents talk to starfix through its MCP server. Bearing never types into an
   agent's terminal.
 - `bearing` is the operator CLI. It talks to the local `bearingd` over a unix
@@ -153,6 +158,33 @@ forking.
   the amortized cost.
 - At a threshold the governor stops dispatching, lets running agents finish
   their current step, and posts to the inbox.
+
+### 3.7.1 Accounting split
+
+starfix owns the accounting: token usage per issue, session and `account`, the
+price table, list-price and amortized cost, `starfix cost`, `starfix log` and
+the MCP `cost` tool (starfix §12.1). Bearing keeps no ledger. It does two
+things:
+
+- **Capture.** Because it launches each agent, Bearing reads the harness's
+  usage output at the end of each turn or session and reports it to starfix
+  against the claimed issue. This covers harnesses whose hooks cannot report
+  usage.
+- **Enforce.** The governor reads cost back from starfix to apply budgets.
+
+The numbers are the same whether work ran under Bearing or by hand.
+
+### 3.7.2 Plans and credentials
+
+Bearing never calls a model API itself. It launches the providers' own CLIs
+under whatever login they have, an API key or a subscription plan. Judgment
+calls (§3.3) go through the same CLI in headless mode.
+
+- Parallel agents on one subscription share its usage limits. A limit is the
+  `blocked{usage_limit, until}` state (§3.2), not a failure, and the governor
+  caps concurrency per provider.
+- Unattended servers need a login on that host. Check each provider's terms
+  for unattended and parallel use; API keys are the usual fit for fleets.
 
 ### 3.8 MCP inbox instead of keystrokes
 
@@ -253,8 +285,8 @@ claims, no orphaned processes and no reaped live agents.
 1. **Repository.** Inside starfix (`cmd/bearing`) or its own repository? A
    separate repository keeps starfix's surface small; one repository keeps the
    protocol and its main client in lockstep.
-2. **Where `bearingd` runs by default.** Per developer machine, on the starfix
-   server, or both with roles.
+2. ~~**Where `bearingd` runs by default.**~~ Decided: both. Laptop first, and
+   the merge train only on the server from B3 (§2).
 3. **Planning step for reservations.** Where predicted paths come from when an
    issue has no `design` field: a cheap model call, the files-to-issues index
    (starfix §12), or none (reserve on first edit).
