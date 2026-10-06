@@ -49,7 +49,7 @@ Each table has one copy. bd's mirror tables for ephemeral issues are replaced by
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `issues` | `id`, `project`, `parent_id`, `title`, `body`, `design`, `acceptance`, `notes`, `status`, `priority`, `type`, `assignee`, `owner`, `due_at`, `defer_until`, `ephemeral`, `expires_at`, `pinned`, `template`, `metadata` JSON, `rev` | `rev` increments on every change (compare-and-swap). No stored `is_blocked`. No orchestrator columns. |
+| `issues` | `id`, `project`, `parent_id`, `title`, `body`, `design`, `acceptance`, `notes`, `status`, `priority`, `type`, `assignee`, `owner`, `due_at`, `defer_until`, `ephemeral`, `expires_at`, `pinned`, `template`, `metadata` JSON, `rev` | `rev` increments on every change, and `write_id` takes a value unique to each write; together they make a compare-and-swap that Dolt actually enforces (stage 0). No stored `is_blocked`. No orchestrator columns. |
 | `deps` | (`from`, `to`, `type`), `metadata` JSON | Keying on all three allows several edge types between the same two issues, which bd forbids. `to` may be another project's issue or capability. |
 | `labels` | (`issue`, `label`) | `dim:value` labels are state dimensions. |
 | `comments` | `id`, `issue`, `author`, `session`, `body`, `at` | Append-only, so concurrent writes never conflict. |
@@ -215,7 +215,7 @@ The client keeps a SQLite read cache of everything you can see, plus an outbox o
 
 | Stage | Delivers | Gate |
 |---|---|---|
-| 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | Numbers acceptable, else Postgres |
+| 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import | Real bd backlogs imported and round-tripped |
 | 2 | MCP server (work and issue tools), prime, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
 | 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency | Multi-session soak test |

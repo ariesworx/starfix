@@ -29,7 +29,7 @@ No alternative gives us versioned history, an audit trail and three-way merge fo
 
 ## The gaps, and where they go
 
-- **Lost updates.** Dolt runs at repeatable read. Two writers changing the same cell fail at commit, and two changing different cells both win silently. Fix: every write is a compare-and-set on a version column (`UPDATE … WHERE id=? AND version=?`), retried on a deadlock-style error. bd already does this with `row_lock`; ours is stricter.
+- **Lost updates.** Dolt runs at repeatable read and detects conflicts per cell, not per row. Two writers setting a cell to different values: the second commit fails (error 1213). Different cells, or the *same* value, both win silently, so `rev = rev + 1` alone is not a compare-and-swap: two writers that read the same `rev` both write the same new value and both succeed (measured in stage 0: 937 reported wins, 532 applied). Fix: every write also sets a `write_id` column to a value unique to that write, which turns the race into a same-cell conflict; retry on 1213. `SELECT … FOR UPDATE` is accepted but does not lock. Claims go through one goroutine in starfixd, and writes through a pool of 1–4 connections, which measured fastest.
 - **No row locks or `SKIP LOCKED`.** A claim is a conditional update on version and lease, and the row count says who won. That is enough for a claim queue. The spike measures conflict rates with 20 or more concurrent claimers.
 - **No push notifications.** The starfix server sends events to connected clients after its own writes. It is the only writer, so it knows every change.
 - **One global commit lock.** DoltHub reports "hundreds of commit graph operations per second". A team of agents writes tens per second at most. Batching Dolt commits (one per request, or a short window) keeps headroom.
@@ -82,6 +82,8 @@ Vectors don't decide the database: every row above works behind starfixd, and th
 
 
 ## Spike (one day, before any schema work)
+
+Done 6 Oct 2026: Dolt is OK with the conditions above. Results: `spike/dolt/RESULTS.md`.
 
 1. 20–50 goroutines claiming from one ready queue through compare-and-set: conflict rate, p99 latency, double claims (must be 0).
 2. A sustained write mix with a Dolt commit per request versus batched commits: throughput and p99.
