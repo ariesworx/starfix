@@ -132,6 +132,7 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 | Coordination | `inbox`, `lock`, `reserve`, `who` |
 | Sync | `conflicts` (only listed when there are unresolved conflicts) |
 | Reporting | `digest(since, by?, label?)`: structured summary of work closed, in progress, stalled, blocked and handed off, from `events`; capped at ~1.5k tokens. The calling agent writes any narrative; starfix runs no model |
+| Cost | `cost(by?, since?, account?, issue?)`: read-only token and cost totals (list price and, for subscriptions, amortized), grouped by account, issue, epic, person or model; capped like `digest`. Setting prices and plan fees stays in the admin CLI |
 
 - **No admin tools:** delete, purge, rename, import, setup, settings and provisioning are CLI only.
 - **The session is implicit.** The server learns the principal from the SSH key. The client generates the session ID, or takes `CLAUDE_SESSION_ID` or its equivalent, and records the machine. An agent never passes identity.
@@ -268,7 +269,7 @@ Agreed 6 Oct 2026. Extends item 10.
 - **Prices.** A `prices` table keyed by (model, effective date) with input, output, cache-write and cache-read rates. Cost is computed when a report runs, never stored, so a price change never rewrites history. Admins update prices with `starfix admin prices set`.
 - **Subscriptions.** Reports always show the **list-price equivalent** (tokens at API rates). For a flat-rate plan, an admin records the plan's monthly fee and its seats; reports then also show the **amortized cost**: the month's fee split across all issues in proportion to their tokens.
 - **Human time.** `starfix log 1.5h <id>` records a person's hours against the same account.
-- **Reports.** `starfix cost --by account|issue|epic|person|model --since <date>` (CLI only), and a cost line in `digest`. Agents see their current issue's running total in `show`, so they can notice when an issue gets expensive.
+- **Reports.** `starfix cost --by account|issue|epic|person|model --since <date>` on the CLI, the MCP tool `cost` (below), and a cost line in `digest`. Agents see their current issue's running total in `show`, so they can notice when an issue gets expensive.
 - **Limits.** Attribution is approximate when a session switches issues, and harnesses differ in what they expose. Invoicing stays outside starfix.
 
 ## 13. Plan
