@@ -16,8 +16,12 @@ const (
 	// CodeInvalid: the request failed validation.
 	CodeInvalid Code = "invalid"
 	// CodeAcceptance: close or finish was refused because acceptance
-	// items are neither ticked nor waived.
+	// items are neither ticked nor waived, or an update would drop such
+	// items from the text.
 	CodeAcceptance Code = "acceptance"
+	// CodeForbidden: the caller may not make this change: another
+	// principal holds the issue, or the change is for admins.
+	CodeForbidden Code = "forbidden"
 	// CodeUnavailable: the server, or the daemon behind it, cannot serve
 	// the request now.
 	CodeUnavailable Code = "unavailable"

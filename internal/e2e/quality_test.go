@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ariesworx/starfix/internal/cli"
 	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
@@ -41,8 +42,8 @@ func TestMCPRetryAfterDropWritesOnce(t *testing.T) {
 // ticks and waives; close refuses until every item is settled, unless
 // forced.
 func TestCLIAcceptanceAndSimilar(t *testing.T) {
-	w := newWorld(t, daemonOpts{})
-	alice := w.newUser("alice", "")
+	w := newWorld(t, daemonOpts{admins: []string{"dana"}})
+	alice, dana := w.newUser("alice", ""), w.newUser("dana", "")
 	old := strings.TrimSpace(alice.ok("create", "Login fails with expired token"))
 	alice.ok("close", old)
 
@@ -72,7 +73,11 @@ func TestCLIAcceptanceAndSimilar(t *testing.T) {
 	alice.ok("close", id)
 
 	forced := strings.TrimSpace(alice.ok("create", "Obsolete", "--acceptance", "- never done"))
-	alice.ok("close", forced, "--force")
+	r = alice.run("v0.2.0", "close", forced, "--force")
+	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "sfx: close --force is for starfix admins\nfix: ") {
+		t.Fatalf("close --force by alice: exit %d\n%s", r.code, r.stderr)
+	}
+	dana.ok("close", forced, "--force")
 	h := decode[proto.HistoryResult](t, alice.ok("history", forced, "--json"))
 	if last := h.Events[len(h.Events)-1]; last.Op != "issue.close" || !strings.Contains(string(last.After), `"acceptance_overridden":[1]`) {
 		t.Fatalf("forced close event: %+v", last)

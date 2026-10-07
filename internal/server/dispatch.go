@@ -351,25 +351,30 @@ func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (an
 	return out, nil
 }
 
-// lease reads a start or renew lease; empty is the default.
-func lease(op, s string) (time.Duration, *proto.Error) {
+// lease reads a start or renew lease of at most most (store.MaxClaimLease
+// or store.MaxLease); empty is the default.
+func lease(op, s string, most time.Duration) (time.Duration, *proto.Error) {
 	if s == "" {
 		return store.DefaultLease, nil
 	}
+	upTo := "24h"
+	if most == store.MaxLease {
+		upTo = "7d"
+	}
 	d, err := proto.ParseDuration(s)
-	if err != nil || d < store.MinLease || d > store.MaxLease {
-		return 0, proto.Errf(proto.CodeInvalid, fmt.Sprintf("give a lease from 1m to 7d; `sfx %s -h` lists the options", command(op)),
-			fmt.Sprintf("lease %q is not a duration from 1m to 7d", s))
+	if err != nil || d < store.MinLease || d > most {
+		return 0, proto.Errf(proto.CodeInvalid, fmt.Sprintf("give a lease from 1m to %s; `sfx %s -h` lists the options", upTo, command(op)),
+			fmt.Sprintf("lease %q is not a duration from 1m to %s", s, upTo))
 	}
 	return d, nil
 }
 
 func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (any, *proto.Error) {
-	d, perr := lease(proto.OpStart, in.Lease)
+	d, perr := lease(proto.OpStart, in.Lease, store.MaxClaimLease)
 	if perr != nil {
 		return nil, perr
 	}
-	is, claim, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID), d)
+	is, claim, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID), d, in.Take)
 	if errors.Is(err, store.ErrNothingReady) {
 		return nil, proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue",
 			"nothing is ready to start")
@@ -440,7 +445,19 @@ func accept(ctx context.Context, s *Server, a store.Actor, in proto.AcceptArgs) 
 }
 
 func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (any, *proto.Error) {
-	d, perr := lease(proto.OpRenew, in.Lease)
+	most := store.MaxClaimLease
+	if in.All {
+		// Renewing every session's claims is a person's call before going
+		// away (`sfx away`), not an agent's: only their own terminal's
+		// session may ask (S-12).
+		if a.Session != proto.CLISession {
+			return nil, proto.Errf(proto.CodeInvalid,
+				"run `sfx away` from your own terminal, outside an agent session; an agent renews only its own claims",
+				fmt.Sprintf("session %s may renew only its own claims", a.Session))
+		}
+		most = store.MaxLease
+	}
+	d, perr := lease(proto.OpRenew, in.Lease, most)
 	if perr != nil {
 		return nil, perr
 	}

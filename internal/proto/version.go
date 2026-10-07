@@ -16,7 +16,8 @@ import (
 // fields on finish and handoff; then idempotency keys on comment, finish
 // and handoff, the acceptance checklist (accept, finish's ticked and
 // waived, close's force) and similar closed issues in create's and
-// show's results. Everything after claims was added before protocol 2
+// show's results; then start's take and the forbidden code (the
+// authorization review). Everything after claims was added before protocol 2
 // shipped in a release (v0.1.0 speaks 1), so without another bump. A
 // protocol 1 client sends none of them and gets the default lease.
 const (

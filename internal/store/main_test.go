@@ -62,6 +62,9 @@ func openStore(t *testing.T, dsn string, opts Options) *Store {
 	if opts.Prefix == "" {
 		opts.Prefix = "tst"
 	}
+	if opts.Admins == nil {
+		opts.Admins = []string{"dana"}
+	}
 	s, err := Open(t.Context(), dsn, opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)

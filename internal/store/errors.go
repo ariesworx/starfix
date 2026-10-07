@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -27,6 +28,9 @@ var (
 	ErrNothingReady = fmt.Errorf("nothing is ready to start: %w", ErrNotFound)
 	// ErrSchemaTooNew: the database was migrated by a newer starfix.
 	ErrSchemaTooNew = errors.New("database schema is newer than this binary")
+	// ErrForbidden: the actor may not make this change: another
+	// principal holds the issue, or the change is for admins.
+	ErrForbidden = errors.New("forbidden")
 
 	// errRetry marks a failure that rerunning the write resolves.
 	errRetry = errors.New("retry")
@@ -57,14 +61,25 @@ func isDuplicate(err error) bool {
 	return errors.As(err, &me) && me.Number == 1062
 }
 
-// HeldError reports an issue in progress under another principal. It
-// wraps ErrConflict.
+// HeldError refuses a start of an issue held under a live claim: by
+// another principal, or (Own) by another session of the actor's own
+// principal, which a start may take over only when asked to. It wraps
+// ErrConflict.
 type HeldError struct {
 	ID IssueID
 	By string
+	// Own is set when By is the actor's principal; Session is the
+	// session holding it then.
+	Own     bool
+	Session string
 }
 
-func (e *HeldError) Error() string { return fmt.Sprintf("issue %s is in progress by %s", e.ID, e.By) }
+func (e *HeldError) Error() string {
+	if e.Own {
+		return fmt.Sprintf("issue %s is held by your session %s", e.ID, e.Session)
+	}
+	return fmt.Sprintf("issue %s is in progress by %s", e.ID, e.By)
+}
 
 // Unwrap makes errors.Is(err, ErrConflict) hold.
 func (e *HeldError) Unwrap() error { return ErrConflict }
@@ -104,3 +119,25 @@ func (e *StaleEpochError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrConflict) hold.
 func (e *StaleEpochError) Unwrap() error { return ErrConflict }
+
+// ForbiddenError refuses a change the actor may not make. Either Holder,
+// another principal, holds the issue under a live claim until Until, and
+// only the holder or an admin may change it; or Action is for admins only
+// (for example "close --force"). It wraps ErrForbidden.
+type ForbiddenError struct {
+	ID     IssueID
+	Holder Actor
+	Until  time.Time
+	Action string
+}
+
+func (e *ForbiddenError) Error() string {
+	if e.Action != "" {
+		return fmt.Sprintf("%s on %s is for admins", e.Action, e.ID)
+	}
+	return fmt.Sprintf("issue %s is held by %s/%s until %s; only the holder or an admin may change it",
+		e.ID, e.Holder.Principal, e.Holder.Session, e.Until.UTC().Format(time.RFC3339))
+}
+
+// Unwrap makes errors.Is(err, ErrForbidden) hold.
+func (e *ForbiddenError) Unwrap() error { return ErrForbidden }

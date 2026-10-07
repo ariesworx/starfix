@@ -22,6 +22,12 @@ import (
 // stored per item text in acceptance_state, so it follows an item that
 // moves and lapses when its text changes. Close and finish refuse while
 // an item is neither ticked nor waived.
+//
+// A box ticked in the text ("- [x] …") counts only when the issue is
+// created or imported, where it is stored as ticked by the creator; after
+// that the text's boxes are ignored, so editing the text cannot tick an
+// item, and an edit that drops an item still open is refused
+// (checkDropped). Ticks go through Accept or finish, each on the record.
 
 // ItemState is an acceptance item's state.
 type ItemState string
@@ -42,7 +48,7 @@ const (
 
 // AcceptanceItem is one acceptance criterion and its state. N counts from
 // 1. By and At say who set the state and when; an item ticked in the text
-// itself ("- [x] …") has neither.
+// at create has the creator and the create time.
 type AcceptanceItem struct {
 	N      int        `json:"n"`
 	Text   string     `json:"text"`
@@ -95,13 +101,19 @@ func (a Acceptance) validate() error {
 }
 
 // AcceptanceError refuses closing an issue whose acceptance items Open
-// (numbers) are neither ticked nor waived. It wraps ErrInvalid.
+// (numbers) are neither ticked nor waived, or (Dropped) an update whose
+// acceptance text leaves out those items while they are open. It wraps
+// ErrInvalid.
 type AcceptanceError struct {
-	ID   IssueID
-	Open []int
+	ID      IssueID
+	Open    []int
+	Dropped bool
 }
 
 func (e *AcceptanceError) Error() string {
+	if e.Dropped {
+		return fmt.Sprintf("the new acceptance text of %s drops items neither ticked nor waived: %s", e.ID, joinInts(e.Open))
+	}
 	return fmt.Sprintf("issue %s has acceptance items neither ticked nor waived: %s", e.ID, joinInts(e.Open))
 }
 
@@ -215,9 +227,6 @@ func acceptanceItems(ctx context.Context, q querier, is Issue) ([]AcceptanceItem
 	items := make([]AcceptanceItem, len(parsed))
 	for i, p := range parsed {
 		it := AcceptanceItem{N: i + 1, Text: p.text}
-		if p.ticked {
-			it.State = ItemTicked
-		}
 		if r, ok := set[itemKey(p.text)]; ok {
 			it.State, it.Reason, it.By = ItemState(r.state), r.reason, r.by
 			if it.State == "open" {
@@ -229,6 +238,53 @@ func acceptanceItems(ctx context.Context, q querier, is Issue) ([]AcceptanceItem
 		items[i] = it
 	}
 	return items, nil
+}
+
+// tickInText stores the items text ticks ("- [x] …") as ticked by w's
+// actor, for an issue being created or imported. An item with a stored
+// state keeps it.
+func tickInText(ctx context.Context, w *wtx, id IssueID, text string) error {
+	for i, p := range parseAcceptance(text) {
+		if !p.ticked {
+			continue
+		}
+		var n int
+		err := w.tx.QueryRowContext(ctx, `SELECT n FROM acceptance_state WHERE issue_id = ? AND item_key = ?`,
+			string(id), itemKey(p.text)).Scan(&n)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("acceptance item %d of %s: %w", i+1, id, err)
+		}
+		if err := setItemState(ctx, w, id, AcceptanceItem{N: i + 1, Text: p.text}, string(ItemTicked), ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkDropped refuses new acceptance text for is that leaves out an item
+// still open, with an *AcceptanceError (Dropped) naming them.
+func checkDropped(ctx context.Context, q querier, is Issue, text string) error {
+	items, err := acceptanceItems(ctx, q, is)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, p := range parseAcceptance(text) {
+		keep[p.text] = true
+	}
+	var dropped []int
+	for _, it := range items {
+		if it.State == ItemOpen && !keep[it.Text] {
+			dropped = append(dropped, it.N)
+		}
+	}
+	if len(dropped) > 0 {
+		return &AcceptanceError{ID: is.ID, Open: dropped, Dropped: true}
+	}
+	return nil
 }
 
 // openItems lists the numbers of the items neither ticked nor waived.
@@ -244,7 +300,8 @@ func openItems(items []AcceptanceItem) []int {
 
 // Accept ticks, unticks and waives an issue's acceptance items and
 // returns them all. Changing an item to the state it has is a no-op. A
-// closed issue is refused: reopen it first.
+// closed issue is refused: reopen it first; one another principal holds
+// with a *ForbiddenError unless the actor is an admin (guard).
 func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptance) ([]AcceptanceItem, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
@@ -263,6 +320,13 @@ func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptanc
 		}
 		if is.Status == StatusClosed {
 			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+		}
+		c, err := loadClaim(ctx, w.tx, id)
+		if err != nil {
+			return err
+		}
+		if err := w.guard(ctx, c, "accept"); err != nil {
+			return err
 		}
 		out, err = applyAcceptance(ctx, w, is, a)
 		return err

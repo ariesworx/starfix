@@ -78,7 +78,7 @@ func TestAcceptanceGatesClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := states(items); !slices.Equal(got, []ItemState{ItemTicked, ItemTicked, ItemWaived}) ||
-		items[2].Reason != "no docs for this" || items[0].By != "alice" || items[0].At == nil || items[1].By != "" {
+		items[2].Reason != "no docs for this" || items[0].By != "alice" || items[0].At == nil || items[1].By != "alice" {
 		t.Fatalf("after accept: %+v", items)
 	}
 	seq := lastSeq(t, s)
@@ -101,12 +101,12 @@ func TestAcceptanceGatesClose(t *testing.T) {
 		t.Errorf("history = %v, want %v", ops, want)
 	}
 
-	// Forcing a close records what it overrode.
+	// Forcing a close, an admin's call, records what it overrode.
 	forced := mustCreate(t, s, NewIssue{Title: "forced", Acceptance: "- a\n- b"})
 	if _, err := s.Accept(ctx, alice, forced.ID, Acceptance{Tick: []int{2}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ForceClose(ctx, bob, forced.ID, 0, "obsolete"); err != nil {
+	if _, err := s.ForceClose(ctx, dana, forced.ID, 0, "obsolete"); err != nil {
 		t.Fatalf("force close: %v", err)
 	}
 	evs, _ = s.History(ctx, forced.ID)
@@ -129,7 +129,7 @@ func TestAcceptRefusals(t *testing.T) {
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{Title: "x", Acceptance: "- a\n- b"})
 	closed := mustCreate(t, s, NewIssue{Title: "closed", Acceptance: "- a"})
-	if _, err := s.ForceClose(ctx, alice, closed.ID, 0, ""); err != nil {
+	if _, err := s.ForceClose(ctx, dana, closed.ID, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -158,7 +158,7 @@ func TestAcceptRefusals(t *testing.T) {
 
 // Ticks follow an item's text: editing the criteria keeps the state of
 // items whose text is unchanged, wherever they move; untick reopens one,
-// even one ticked in the text.
+// even one ticked in the text at create.
 func TestAcceptanceFollowsEdits(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
@@ -166,16 +166,16 @@ func TestAcceptanceFollowsEdits(t *testing.T) {
 	if _, err := s.Accept(ctx, alice, is.ID, Acceptance{Tick: []int{2}}); err != nil {
 		t.Fatal(err)
 	}
-	acc := "- new\n- b\n- [x] c"
+	acc := "- new\n- a\n- b\n- [x] c"
 	is, err := s.UpdateIssue(ctx, alice, is.ID, is.Rev, IssuePatch{Acceptance: &acc})
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, err := s.Accept(ctx, alice, is.ID, Acceptance{Untick: []int{3}})
+	items, err := s.Accept(ctx, alice, is.ID, Acceptance{Untick: []int{4}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := states(items); !slices.Equal(got, []ItemState{ItemOpen, ItemTicked, ItemOpen}) {
+	if got := states(items); !slices.Equal(got, []ItemState{ItemOpen, ItemOpen, ItemTicked, ItemOpen}) {
 		t.Errorf("after edit and untick: %+v", items)
 	}
 }

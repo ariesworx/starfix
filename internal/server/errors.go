@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
 	"github.com/ariesworx/starfix/internal/store"
@@ -28,13 +29,17 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var stale *store.StaleEpochError
 	var idem *store.IdemError
 	var unmet *store.AcceptanceError
+	var forbidden *store.ForbiddenError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
 			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
 
 	case errors.As(err, &held):
-		return s.held(ctx, op, held)
+		return s.held(ctx, held)
+
+	case errors.As(err, &forbidden):
+		return forbiddenErr(forbidden)
 
 	case errors.As(err, &stale):
 		msg := fmt.Sprintf("your claim on %s (epoch %d) was lost; it is now epoch %d", stale.ID, stale.Epoch, stale.Current)
@@ -62,8 +67,16 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 		return proto.Errf(proto.CodeCycle, "remove an edge with `sfx dep rm`, or choose another parent",
 			strings.TrimSuffix(text, ": "+store.ErrCycle.Error())+", so this would make a cycle")
 
+	case errors.Is(err, store.ErrStatusInProgress):
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("take it with `sfx start %s`, which claims it", id),
+			"status in_progress is set only by start")
+
 	case errors.Is(err, store.ErrInvalid):
 		switch {
+		case strings.Contains(text, " is claimed by "):
+			return proto.Errf(proto.CodeInvalid,
+				fmt.Sprintf("finish it, or let it go with `sfx handoff %s --release` first; only the holder or an admin can", id),
+				strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
 		case strings.HasSuffix(text, " is closed; reopen it first"):
 			return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `sfx reopen %s`", id),
 				strings.TrimSuffix(text, "; reopen it first"))
@@ -89,18 +102,40 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 }
 
 // unmetErr refuses a close or finish with acceptance items open, naming
-// the command that ticks them; close may also be forced.
+// the command that ticks them; an admin may also force a close. An
+// update that drops open items is told to settle them first.
 func unmetErr(op string, e *store.AcceptanceError) *proto.Error {
 	nums := make([]string, len(e.Open))
 	for i, n := range e.Open {
 		nums[i] = strconv.Itoa(n)
 	}
+	if e.Dropped {
+		return proto.Errf(proto.CodeAcceptance,
+			fmt.Sprintf("tick them with `sfx accept %s %s`, or waive each with `sfx accept %s N --waive REASON`, then edit the text",
+				e.ID, strings.Join(nums, " "), e.ID), e.Error())
+	}
 	fix := fmt.Sprintf("tick what is met with `sfx accept %s %s`, or waive an item with `sfx accept %s N --waive REASON`",
 		e.ID, strings.Join(nums, " "), e.ID)
 	if op == proto.OpClose {
-		fix += fmt.Sprintf("; `sfx close %s --force` closes anyway, on the record", e.ID)
+		fix += "; a starfix admin can close it anyway with --force, on the record"
 	}
 	return proto.Errf(proto.CodeAcceptance, fix, e.Error())
+}
+
+// forbiddenErr refuses a change to an issue another principal holds,
+// naming the holder and the ways forward, or an admin-only action.
+func forbiddenErr(e *store.ForbiddenError) *proto.Error {
+	if e.Action != "" {
+		return proto.Errf(proto.CodeForbidden,
+			fmt.Sprintf("tick or waive the open items with `sfx accept %s N`, or ask a starfix admin to run it", e.ID),
+			fmt.Sprintf("%s is for starfix admins", e.Action))
+	}
+	h := e.Holder
+	return proto.Errf(proto.CodeForbidden,
+		fmt.Sprintf("ask %s to hand it off (`sfx handoff %s --release`), wait for the lease to run out, or ask a starfix admin; `sfx comment %s` works on any issue",
+			h.Principal, e.ID, e.ID),
+		fmt.Sprintf("%s is held by %s (session %s) until %s; only the holder or an admin may change it",
+			e.ID, h.Principal, h.Session, e.Until.UTC().Format(time.RFC3339)))
 }
 
 // conflict explains a failed compare-and-swap: who moved the issue to
@@ -128,16 +163,16 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 		fmt.Sprintf("%s changed since rev %d (now rev %d%s)", id, rev, cur.Rev, by))
 }
 
-// held explains an issue another principal has in progress. Refusing a
-// start names the next ready issue to take instead (design §12 item 5).
-func (s *Server) held(ctx context.Context, op string, h *store.HeldError) *proto.Error {
-	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
-	switch op {
-	case proto.OpHandoff:
-		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s; a note without --release needs no hold", h.By), msg)
-	case proto.OpFinish:
-		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s, or close it with `sfx close %s`", h.By, h.ID), msg)
+// held explains a refused start: another session of the caller's own
+// principal holds the issue, which --take overrides, or another principal
+// does, and the next ready issue is named instead (design §12 item 5).
+func (s *Server) held(ctx context.Context, h *store.HeldError) *proto.Error {
+	if h.Own {
+		return proto.Errf(proto.CodeConflict,
+			fmt.Sprintf("take it over with `sfx start %s --take` only if that session has stopped; it loses the claim", h.ID),
+			fmt.Sprintf("%s is held by your session %s", h.ID, h.Session))
 	}
+	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
 	next, err := s.cfg.Store.Ready(ctx, 1)
 	if err != nil || len(next) == 0 {
 		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s; nothing else is ready, so see `sfx blocked`", h.By),

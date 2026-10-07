@@ -88,7 +88,9 @@ func TestInboxKinds(t *testing.T) {
 			do: func(t *testing.T, s *Store, _ *clock) IssueID {
 				is := mustCreate(t, s, NewIssue{Title: "work"})
 				mustStart(t, s, alice, is.ID)
-				mustStart(t, s, alice2, is.ID)
+				if _, _, err := s.StartIssue(t.Context(), alice2, is.ID, 0, true); err != nil {
+					t.Fatal(err)
+				}
 				return is.ID
 			},
 			reader: alice,
@@ -211,7 +213,7 @@ func TestInboxKinds(t *testing.T) {
 
 func mustStart(t *testing.T, s *Store, a Actor, id IssueID) {
 	t.Helper()
-	if _, _, err := s.StartIssue(t.Context(), a, id, 0); err != nil {
+	if _, _, err := s.StartIssue(t.Context(), a, id, 0, false); err != nil {
 		t.Fatalf("start %s as %s/%s: %v", id, a.Principal, a.Session, err)
 	}
 }

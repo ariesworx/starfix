@@ -53,6 +53,8 @@ func nextStep(pe *proto.Error) string {
 		switch {
 		case strings.HasPrefix(pe.Fix, "take that one"):
 			return "call start with the next ready id named above"
+		case strings.HasPrefix(pe.Fix, "take it over"):
+			return "another session of yours holds it: call start with take: true only if the user says that session has stopped; otherwise pick other work"
 		case strings.HasPrefix(pe.Fix, "leave it to"):
 			return "someone else holds this issue: pick other work with start, or tell the user if it must move"
 		case strings.HasPrefix(pe.Fix, "re-read"):
@@ -67,6 +69,10 @@ func nextStep(pe *proto.Error) string {
 		switch {
 		case strings.HasPrefix(pe.Fix, "reopen"):
 			return "call reopen first"
+		case strings.HasPrefix(pe.Fix, "take it with"):
+			return "call start to take it; update cannot set in_progress"
+		case strings.HasPrefix(pe.Fix, "finish it, or let it go"):
+			return "it is claimed: call finish or handoff with release: true first if it is yours; otherwise leave it"
 		case pe.Fix == "nothing to do":
 			return "nothing to do"
 		case strings.HasPrefix(pe.Fix, "upgrade"):
@@ -74,7 +80,15 @@ func nextStep(pe *proto.Error) string {
 		}
 		return "correct the arguments and retry"
 	case proto.CodeAcceptance:
+		if strings.HasSuffix(pe.Fix, "then edit the text") {
+			return "the edit drops open acceptance items: keep them in the text, or tell the user they must be ticked or waived first"
+		}
 		return "call finish with ticked: [numbers met] and waived: {number: reason} for the rest; show lists the items"
+	case proto.CodeForbidden:
+		if strings.HasPrefix(pe.Fix, "ask ") {
+			return "someone else holds this issue: do not change it; leave a comment, pick other work with start, or tell the user"
+		}
+		return "this is for a starfix admin: tell the user"
 	case proto.CodeUnavailable:
 		return "retry once; if it fails again, tell the user: " + personFix(pe)
 	}

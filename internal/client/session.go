@@ -3,6 +3,8 @@ package client
 import (
 	"crypto/rand"
 	"encoding/hex"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // SessionEnv lists the environment variables that name the harness session,
@@ -43,8 +45,9 @@ func HarnessFromEnv(getenv func(string) string) string {
 
 // CLISession is the session of a person's own `sfx` commands: one per
 // principal and machine, so a claim taken in one command is the same
-// session's in the next.
-const CLISession = "cli"
+// session's in the next. The server lets only this session renew every
+// session's claims (`sfx away`).
+const CLISession = proto.CLISession
 
 // NewSessionID returns a random session id, "m-" and 16 hex digits, for a
 // process that runs without a harness session id.

@@ -60,7 +60,7 @@ func newServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(t.Context(), dsn, store.Options{Prefix: "sf", CommitInterval: -1})
+	st, err := store.Open(t.Context(), dsn, store.Options{Prefix: "sf", CommitInterval: -1, Admins: []string{dana.Principal}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +75,8 @@ func newServer(t *testing.T) *Server {
 var (
 	alice = store.Actor{Principal: "alice", Session: "s-a", Machine: "laptop-a"}
 	bob   = store.Actor{Principal: "bob", Session: "s-b", Machine: "laptop-b"}
+	// dana is the test servers' admin (newServer).
+	dana = store.Actor{Principal: "dana", Session: "s-d", Machine: "laptop-d"}
 )
 
 func call[R any](t *testing.T, s *Server, a store.Actor, op string, args any) (R, *proto.Error) {
@@ -178,7 +180,7 @@ func TestDispatchErrors(t *testing.T) {
 	mustCall[proto.Empty](t, s, alice, proto.OpDepAdd, proto.DepArgs{From: a.ID, To: b.ID})
 	mustCall[proto.WriteResult](t, s, alice, proto.OpClose, proto.CloseArgs{ID: b.ID})
 	stale := "stale"
-	open := "in_progress"
+	open := "blocked"
 
 	tests := []struct {
 		name    string
@@ -280,6 +282,8 @@ func TestHandshake(t *testing.T) {
 		{name: "request before hello", frames: []*proto.Frame{bridge, {T: proto.FrameReq, ID: 1, Op: "show"}}, code: proto.CodeInvalid},
 		{name: "no bridge frame", frames: []*proto.Frame{hello(1, project, "")}, closed: true},
 		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}}, closed: true},
+		{name: "reaper principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "starfixd"}, hello(2, project, "")}, closed: true},
+		{name: "importer principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "import"}, hello(2, project, "")}, closed: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,6 +431,16 @@ func TestBridgeUnavailable(t *testing.T) {
 	if !strings.Contains(out.String(), `"c":"auth"`) {
 		t.Fatalf("refusal: %s", out.String())
 	}
+	// S-15: no key may authenticate as the server's own principals.
+	for _, p := range store.ReservedPrincipals {
+		out.Reset()
+		if err := Bridge(t.Context(), "/nonexistent", p, strings.NewReader(""), &out); err == nil {
+			t.Fatalf("reserved principal %q accepted", p)
+		}
+		if !strings.Contains(out.String(), `"c":"auth"`) || !strings.Contains(out.String(), "reserved") {
+			t.Fatalf("refusal of %q: %s", p, out.String())
+		}
+	}
 }
 
 func TestResolveSettings(t *testing.T) {
@@ -448,6 +462,8 @@ func TestResolveSettings(t *testing.T) {
 	unit := write("unit.yaml", "systemd_unit: starfixd.service\n", 0o600)
 	badUnit := write("badunit.yaml", "systemd_unit: --no-block\n", 0o600)
 	logs := write("logs.yaml", "log_level: warn\nlog_format: json\n", 0o600)
+	admins := write("admins.yaml", "admins: [alice, bob]\n", 0o600)
+	reserved := write("reserved.yaml", "admins: [starfixd]\n", 0o600)
 	env := map[string]string{}
 	getenv := func(k string) string { return env[k] }
 
@@ -483,6 +499,13 @@ func TestResolveSettings(t *testing.T) {
 		{name: "unknown log level refused", flags: Settings{LogLevel: "loud"}, err: "log level"},
 		{name: "unknown log format refused", flags: Settings{LogFormat: "xml"}, err: "log format"},
 		{name: "named file must exist", path: filepath.Join(dir, "missing.yaml"), err: "no such file"},
+		{name: "no admins by default", path: "", check: func(s Settings) bool { return len(s.Admins) == 0 }},
+		{name: "admins from file", path: admins, check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"alice", "bob"}) }},
+		{name: "admins env beats file", path: admins, env: map[string]string{EnvAdmins: "dana, erin"},
+			check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"dana", "erin"}) }},
+		{name: "reserved admin refused", path: reserved, err: `admin "starfixd"`},
+		{name: "reserved admin in env refused", env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
+		{name: "invalid admin refused", env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -554,9 +577,9 @@ func TestDispatchWork(t *testing.T) {
 			code: proto.CodeConflict, msg: b.ID + " is in progress by alice; next ready: " + f.Created[0],
 			fix: "take that one with `sfx start " + f.Created[0] + "`"},
 		{name: "finish held", a: bob, op: proto.OpFinish, args: proto.FinishArgs{ID: b.ID},
-			code: proto.CodeConflict, msg: b.ID + " is in progress by alice", fix: "`sfx close " + b.ID + "`"},
+			code: proto.CodeForbidden, msg: b.ID + " is held by alice (session s-a) until ", fix: "ask alice to hand it off"},
 		{name: "release held", a: bob, op: proto.OpHandoff, args: proto.HandoffArgs{ID: b.ID, Note: "x", Release: true},
-			code: proto.CodeConflict, msg: "in progress by alice", fix: "without --release"},
+			code: proto.CodeForbidden, msg: "only the holder or an admin may change it", fix: "`sfx comment " + b.ID + "` works on any issue"},
 		{name: "start closed", a: bob, op: proto.OpStart, args: proto.StartArgs{ID: a.ID},
 			code: proto.CodeInvalid, msg: "is closed", fix: "sfx reopen " + a.ID},
 		{name: "finish closed", a: bob, op: proto.OpFinish, args: proto.FinishArgs{ID: a.ID}, code: proto.CodeInvalid, fix: "nothing to do"},
@@ -603,26 +626,41 @@ func TestDispatchClaims(t *testing.T) {
 	if show.Claim == nil || show.Claim.Epoch != 1 {
 		t.Fatalf("show claim: %+v", show.Claim)
 	}
-	r := mustCall[proto.ClaimsResult](t, s, alice, proto.OpRenew, proto.RenewArgs{Lease: "3d", All: true})
+	// Renewing every session's claims is for a person's terminal (S-12).
+	_, perr := call[proto.Empty](t, s, alice, proto.OpRenew, proto.RenewArgs{Lease: "3d", All: true})
+	if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "sfx away") {
+		t.Fatalf("renew all from an agent session: %+v", perr)
+	}
+	aliceCLI := store.Actor{Principal: "alice", Session: proto.CLISession, Machine: "laptop-a"}
+	r := mustCall[proto.ClaimsResult](t, s, aliceCLI, proto.OpRenew, proto.RenewArgs{Lease: "3d", All: true})
 	if len(r.Claims) != 1 || time.Until(r.Claims[0].ExpiresAt) < 71*time.Hour {
 		t.Fatalf("renew: %+v", r)
 	}
+	if _, perr := call[proto.Empty](t, s, alice, proto.OpRenew, proto.RenewArgs{Lease: "25h"}); perr == nil ||
+		!strings.Contains(perr.Fix, "1m to 24h") {
+		t.Fatalf("renew own claims for 25h: %+v", perr)
+	}
 
-	// Another session of alice takes over; the first session's finish is
-	// fenced off by its epoch.
+	// Another session of alice takes over only with take; the first
+	// session's finish is then fenced off by its epoch.
 	alice2 := store.Actor{Principal: "alice", Session: "s-a2", Machine: "desktop"}
-	if st := mustCall[proto.StartResult](t, s, alice2, proto.OpStart, proto.StartArgs{ID: a.ID}); st.Claim.Epoch != 2 {
+	_, perr = call[proto.Empty](t, s, alice2, proto.OpStart, proto.StartArgs{ID: a.ID})
+	if perr == nil || perr.Code != proto.CodeConflict || perr.Message != a.ID+" is held by your session s-a" ||
+		!strings.Contains(perr.Fix, "`sfx start "+a.ID+" --take`") {
+		t.Fatalf("takeover without take: %+v", perr)
+	}
+	if st := mustCall[proto.StartResult](t, s, alice2, proto.OpStart, proto.StartArgs{ID: a.ID, Take: true}); st.Claim.Epoch != 2 {
 		t.Fatalf("takeover: %+v", st.Claim)
 	}
-	_, perr := call[proto.Empty](t, s, alice, proto.OpFinish, proto.FinishArgs{ID: a.ID, Epoch: 1})
+	_, perr = call[proto.Empty](t, s, alice, proto.OpFinish, proto.FinishArgs{ID: a.ID, Epoch: 1})
 	if perr == nil || perr.Code != proto.CodeConflict ||
 		perr.Message != "your claim on "+a.ID+" (epoch 1) was lost; it is now epoch 2, held by alice/s-a2" ||
 		!strings.Contains(perr.Fix, "sfx comment "+a.ID) {
 		t.Fatalf("stale finish: %+v", perr)
 	}
-	for _, l := range []string{"5s", "8d", "soon"} {
+	for _, l := range []string{"5s", "25h", "8d", "soon"} {
 		_, perr := call[proto.Empty](t, s, alice, proto.OpStart, proto.StartArgs{ID: a.ID, Lease: l})
-		if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "1m to 7d") {
+		if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "1m to 24h") {
 			t.Fatalf("lease %q: %+v", l, perr)
 		}
 	}

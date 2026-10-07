@@ -206,12 +206,12 @@ func TestUpdateCloseReopen(t *testing.T) {
 
 	future := time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond)
 	up, err := s.UpdateIssue(ctx, alice, is.ID, is.Rev, IssuePatch{
-		Assignee: ptr(""), DeferUntil: &future, Metadata: json.RawMessage("null"), Status: ptr(StatusInProgress),
+		Assignee: ptr(""), DeferUntil: &future, Metadata: json.RawMessage("null"), Status: ptr(StatusBlocked),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if up.Assignee != "" || up.Metadata != nil || up.Status != StatusInProgress || up.DeferUntil == nil || !up.DeferUntil.Equal(future) {
+	if up.Assignee != "" || up.Metadata != nil || up.Status != StatusBlocked || up.DeferUntil == nil || !up.DeferUntil.Equal(future) {
 		t.Errorf("after update: %+v", up)
 	}
 	up, err = s.UpdateIssue(ctx, alice, is.ID, up.Rev, IssuePatch{DeferUntil: &time.Time{}})

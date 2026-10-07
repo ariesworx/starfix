@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,9 @@ type Options struct {
 	Now func() time.Time
 	// Logger receives background committer errors. Default discards.
 	Logger *slog.Logger
+	// Admins are the principals who may change issues others hold and
+	// force a close (authz.go). None may be reserved.
+	Admins []string
 }
 
 // Store is the server-side issue store. It is safe for concurrent use.
@@ -77,6 +81,10 @@ func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	if !prefixPattern.MatchString(opts.Prefix) {
 		return nil, fmt.Errorf("%w: prefix %q", ErrInvalid, opts.Prefix)
 	}
+	if err := checkAdmins(opts.Admins); err != nil {
+		return nil, err
+	}
+	opts.Admins = slices.Clone(opts.Admins)
 	if opts.CommitInterval == 0 {
 		opts.CommitInterval = time.Second
 	}
@@ -202,8 +210,10 @@ type querier interface {
 
 // wtx is one attempt at a write transaction.
 type wtx struct {
-	tx      *sql.Tx
-	actor   Actor
+	tx    *sql.Tx
+	actor Actor
+	// admin is set when actor's principal is one of the store's admins.
+	admin   bool
 	now     time.Time
 	mutated bool
 	events  int
@@ -358,7 +368,7 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
-	w := &wtx{tx: tx, actor: actor, now: s.now()}
+	w := &wtx{tx: tx, actor: actor, admin: s.IsAdmin(actor.Principal), now: s.now()}
 	if err := fn(w); err != nil {
 		return errors.Join(err, rollback(tx))
 	}

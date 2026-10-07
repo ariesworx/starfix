@@ -120,9 +120,14 @@ func TestMCPAgentSession(t *testing.T) {
 		t.Fatalf("blocked: %+v", blocked)
 	}
 
-	// Take b: update without rev reads the current one.
-	if out := ag.ok("update", map[string]any{"id": b.ID, "status": "in_progress", "assignee": "alice"}); out != `{"id":"`+b.ID+`","rev":2}` {
-		t.Fatalf("update: %s", out)
+	// update cannot take b (only a claim holds an issue; its schema leaves
+	// in_progress out); start does.
+	out, isErr := ag.call("update", map[string]any{"id": b.ID, "status": "in_progress", "assignee": "alice"})
+	if !isErr || !strings.Contains(out, "in_progress does not equal any of") {
+		t.Fatalf("update status in_progress: %v %q", isErr, out)
+	}
+	if st := decode[mcpserver.Started](t, ag.ok("start", map[string]any{"id": b.ID})); st.ID != b.ID || st.Rev != 2 {
+		t.Fatalf("start: %+v", st)
 	}
 	p = decode[mcpserver.Prime](t, ag.ok("prime", nil))
 	if len(p.Working) != 1 || p.Working[0].ID != b.ID || p.Working[0].Status != "in_progress" {
@@ -166,7 +171,7 @@ func TestMCPAgentSession(t *testing.T) {
 
 	// Bob edits a; alice's stale rev is refused, with the next step.
 	bob.ok("update", a.ID, "--rev", "1", "-p", "0")
-	out, isErr := ag.call("update", map[string]any{"id": a.ID, "rev": 1, "title": "mine"})
+	out, isErr = ag.call("update", map[string]any{"id": a.ID, "rev": 1, "title": "mine"})
 	if !isErr || out != "conflict: "+a.ID+" changed since rev 1 (now rev 2 by bob)\nfix: call show for the current rev, then retry with that rev if your change still applies" {
 		t.Fatalf("conflict: %v %q", isErr, out)
 	}
@@ -210,7 +215,7 @@ func TestMCPAgentSession(t *testing.T) {
 			t.Fatalf("event by %s", e.By)
 		}
 	}
-	if got := strings.Join(ops, " "); got != "issue.create issue.update comment.add comment.add issue.close issue.reopen" {
+	if got := strings.Join(ops, " "); got != "issue.create claim.take issue.update comment.add comment.add issue.close issue.reopen" {
 		t.Fatalf("history: %s", got)
 	}
 	// The session id reached the server on every connection.
