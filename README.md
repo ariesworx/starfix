@@ -221,7 +221,8 @@ command's usage; `--json` prints one JSON document, errors included.
 | `prime` | A session's orientation: your in-progress issues, inbox, top ready work, version notices; `--hook[=AGENT]` for an agent's SessionStart hook (bare `--hook` is Claude Code's) |
 | `mcp` | The MCP server for agents, on stdin and stdout |
 | `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini`, `jetbrains`, `junie` or `vscode`: MCP config (with `STARFIX_HARNESS` in its env), instruction pointer, SessionStart hook |
-| `setup --all` | Set up every agent at once, one summary line each; a file two agents share is written once |
+| `setup claude-desktop` | Register this project with Claude Desktop (macOS, Windows) in its user-global config, one entry per project |
+| `setup --all` | Set up every agent at once (not `claude-desktop`), one summary line each; a file two agents share is written once |
 | `upgrade` | Replace `sfx` with the latest release after verifying its signature and checksum; `--check` prints one line and changes nothing; `--rollback` restores the binary the last upgrade replaced. Never runs by itself |
 | `version` | Print the version |
 
@@ -304,6 +305,30 @@ profile and AI Assistant in the IDE's settings, so `--global` is refused
 for `vscode` and `jetbrains`, and `--all --global` skips them with that
 fix. `--command PATH` sets how the agent runs `sfx` when it is not on PATH.
 
+Claude Desktop (macOS and Windows) has no project files, hooks or working
+directory, so `sfx setup claude-desktop`, run inside the repository, adds
+one entry per project to the app's own config:
+
+```sh
+sfx setup claude-desktop --write    # then quit and reopen Claude Desktop
+```
+
+| OS | Config |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+The entry is named `starfix-<directory name>` and runs
+`/absolute/path/to/sfx -C /path/to/repo mcp`, because the app starts
+servers without your shell's PATH: the path is sfx's entry on PATH (for
+example Homebrew's link, which survives upgrades) or, failing that, the
+running binary; `--command` must be absolute. Several projects coexist,
+and `--check` and `--remove` touch only this checkout's entry; a different
+checkout with the same directory name is refused, with a fix. The rest of
+the file keeps its keys and order. `--all` leaves Claude Desktop out, as
+its file is outside the repository. With no pointer or hook, the agent
+learns starfix from the MCP server's instructions.
+
 A session is two calls: `start` takes the top ready issue (or a named
 one) and returns it with its acceptance criteria, the last handoff and a
 branch name (`fix/sf-a1b2c3d4-fix-the-login-redirect`); `finish` closes it,
@@ -359,6 +384,7 @@ the agent's environment:
 |---|---|
 | Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
 | Codex, Gemini CLI, Cursor, VS Code, Junie, AI Assistant | none set; `sfx mcp` picks one per process (`m-…`) |
+| Claude Desktop | none set; each app launch is one `sfx mcp` process, so one session (`m-…`) |
 | a person's own `sfx` commands | `cli`, one per machine |
 | any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
 

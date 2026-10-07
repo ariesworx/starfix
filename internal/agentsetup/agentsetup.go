@@ -5,7 +5,8 @@
 // `sfx prime --hook=AGENT`. Where a harness keeps two parts in one file
 // (Gemini CLI's settings.json) or two harnesses share a file (AGENTS.md
 // for Codex and Junie), the caller applies each part to the output of
-// the last.
+// the last. A desktop app (Claude Desktop) has only its user-global MCP
+// config, with one entry per project (desktop.go).
 //
 // Edits are idempotent and minimal: an existing file keeps its other
 // servers, its other keys and their order, and an existing starfix entry
@@ -57,6 +58,14 @@ type Agent struct {
 	// Note is said after a project snippet: anything the person must do that a
 	// file edit cannot.
 	Note string
+	// Desktop marks a desktop app: one user-global MCP config at a
+	// per-platform path (ConfigPath), no pointer or hook, and no working
+	// directory, so each project gets its own entry (DesktopEntry). Its
+	// Targets are empty; DesktopTarget is its only one.
+	Desktop bool
+	// AppConfig is a desktop app's config file, slash-separated,
+	// relative to the platform's application data directory.
+	AppConfig string
 
 	format  format
 	pointer pointerStyle
@@ -65,7 +74,7 @@ type Agent struct {
 
 // ManualMCP reports whether the person registers the MCP server by hand,
 // in the harness's settings: it has no project file setup can edit.
-func (a Agent) ManualMCP() bool { return a.Project == "" }
+func (a Agent) ManualMCP() bool { return a.Project == "" && !a.Desktop }
 
 // Steps is what the person must do that a file edit cannot: the Note
 // and, where the MCP server is added by hand, the JSON to paste.
@@ -126,6 +135,11 @@ var Agents = map[string]Agent{
 		Pointer:  ".aiassistant/rules/starfix.md",
 		format:   jsonGemini, pointer: jetbrainsRule,
 		Note: "AI Assistant has no MCP file setup can edit. In the IDE open Settings › Tools › AI Assistant › Model Context Protocol (MCP), click Add, paste this JSON, and set the scope to Project:"},
+	// Claude Desktop reads no project files and starts its servers with
+	// no working directory and without the shell's PATH: see desktop.go.
+	"claude-desktop": {Name: "claude-desktop", Title: "Claude Desktop", Desktop: true,
+		AppConfig: "Claude/claude_desktop_config.json", format: jsonGemini,
+		Note: "Quit Claude Desktop completely and reopen it to start the server. Each launch is a new starfix session."},
 }
 
 // Names lists the supported agents, sorted.
@@ -142,6 +156,17 @@ func Names() []string {
 type Entry struct {
 	Command string
 	Args    []string
+	// Server is the name the entry is registered under; "" means
+	// ServerName. Only a desktop app's entry has its own (DesktopEntry),
+	// and only the JSON formats honor it.
+	Server string
+}
+
+func (e Entry) server() string {
+	if e.Server == "" {
+		return ServerName
+	}
+	return e.Server
 }
 
 // DefaultEntry runs `sfx mcp` from PATH. The harness starts it in the
@@ -191,7 +216,7 @@ func (a Agent) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	if err != nil {
 		return nil, Unchanged, err
 	}
-	if a.has(content) {
+	if a.has(content, e) {
 		return out, Updated, nil
 	}
 	return out, Added, nil
@@ -199,13 +224,18 @@ func (a Agent) Apply(content []byte, e Entry) ([]byte, Result, error) {
 
 // Remove takes the starfix registration out of content.
 func (a Agent) Remove(content []byte) ([]byte, Result, error) {
-	if !a.has(content) {
+	return a.remove(content, DefaultEntry)
+}
+
+// remove takes out the entry registered under e's name.
+func (a Agent) remove(content []byte, e Entry) ([]byte, Result, error) {
+	if !a.has(content, e) {
 		return content, Unchanged, nil
 	}
 	if a.format == tomlCodex {
 		return removeTOML(content), Removed, nil
 	}
-	out, err := removeJSON(content, a.format)
+	out, err := removeJSON(content, a.format, e.server())
 	if err != nil {
 		return nil, Unchanged, err
 	}
@@ -220,13 +250,14 @@ func (a Agent) Registered(content []byte, e Entry) bool {
 	return jsonRegistered(content, a.format, e, a.Name)
 }
 
-// has reports whether content has any starfix entry.
-func (a Agent) has(content []byte) bool {
+// has reports whether content has an entry under e's name, whatever
+// it holds.
+func (a Agent) has(content []byte, e Entry) bool {
 	if a.format == tomlCodex {
 		_, _, ok := tomlSection(strings.Split(string(content), "\n"))
 		return ok
 	}
-	_, ok := jsonEntry(content, a.format)
+	_, ok := jsonEntry(content, a.format, e.server())
 	return ok
 }
 
@@ -291,7 +322,7 @@ func (t Target) Remove(content []byte, e Entry) ([]byte, Result, error) {
 	case KindHook:
 		return t.agent.hook.remove(content, e, t.agent.Name)
 	}
-	return t.agent.Remove(content)
+	return t.agent.remove(content, e)
 }
 
 // Registered reports whether content already holds the target's part as

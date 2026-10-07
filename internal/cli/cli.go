@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/client"
@@ -34,6 +35,11 @@ type Env struct {
 	Hostname       func() (string, error)
 	// UserHomeDir is used only by `setup --global`. Default os.UserHomeDir.
 	UserHomeDir func() (string, error)
+	// GOOS and Executable are used only by `setup claude-desktop`: the
+	// platform, and the absolute path of this sfx. Defaults runtime.GOOS
+	// and sfxPath.
+	GOOS       string
+	Executable func() (string, error)
 	// Version is this binary's build version.
 	Version string
 	// Upgrader overrides what `upgrade` uses. Nil uses GitHub releases,
@@ -125,6 +131,12 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.UserHomeDir == nil {
 		env.UserHomeDir = os.UserHomeDir
+	}
+	if env.GOOS == "" {
+		env.GOOS = runtime.GOOS
+	}
+	if env.Executable == nil {
+		env.Executable = sfxPath
 	}
 	if env.Stdin == nil {
 		env.Stdin = strings.NewReader("")

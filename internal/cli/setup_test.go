@@ -265,7 +265,7 @@ func TestSetupRefusals(t *testing.T) {
 		code int
 		want string
 	}{
-		{[]string{"setup"}, ExitUsage, "setup needs one agent, or --all: claude-code, codex, cursor, gemini, jetbrains, junie, vscode"},
+		{[]string{"setup"}, ExitUsage, "setup needs one agent, or --all: claude-code, claude-desktop, codex, cursor, gemini, jetbrains, junie, vscode"},
 		{[]string{"setup", "aider"}, ExitUsage, `unknown agent "aider"`},
 		{[]string{"setup", "codex", "--all"}, ExitUsage, "--all takes no agent"},
 		{[]string{"setup", "vscode", "--global", "--write"}, ExitFailure, "fix: drop --global"},

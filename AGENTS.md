@@ -32,7 +32,7 @@ architecture. The README's status line says which stage is in progress.
 | `internal/client` | In-process SSH client with a pinned host key, `.starfix.yaml` discovery, session ids |
 | `internal/cli` | `sfx` commands; writes only to the `Env` it is given |
 | `internal/mcpserver` | MCP tools, `prime`, token budgets, agent-facing error rewording |
-| `internal/agentsetup` | `sfx setup AGENT` and `--all`: per harness, the MCP config, pointer block, SessionStart hook and the hook's output format |
+| `internal/agentsetup` | `sfx setup AGENT` and `--all`: per harness, the MCP config, pointer block, SessionStart hook and the hook's output format; per-project entries in a desktop app's config (`desktop.go`) |
 | `internal/gitx` | Branch names from issues, issue ids from branches and `Starfix:` trailers |
 | `internal/bdimport` | bd JSONL import and export |
 | `internal/release`, `internal/tools/releasekey` | Release download, signature and checksum checks, binary swap; the signing tool |
