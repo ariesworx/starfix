@@ -83,7 +83,7 @@ addresses.
 | 5 | **Safe merge train** | locks, gates, events | merges on red CI, force-push recovery |
 | 6 | **Structured handoff** | handoffs, scoped memory, prime | lost reasoning when a session ends |
 | 7 | **Budget and concurrency governor** | semaphores, cost tracking (starfix §12.1) | rate-limit exhaustion, runaway spend |
-| 8 | **MCP inbox instead of keystrokes** | inbox, SSE, `sf setup` | send-keys fragility, provider-specific hooks |
+| 8 | **MCP inbox instead of keystrokes** | inbox, SSE, `sfx setup` | send-keys fragility, provider-specific hooks |
 | 9 | **Dispatch policy** | ready, claims, labels | first-come dispatch, manual assignment |
 | 10 | **Formula runner** | molecules, idempotency keys, gates | duplicate workflow instances |
 | 11 | **Observability** | events, agents, digest | many stores, polling dashboards |
@@ -176,7 +176,7 @@ forking.
 ### 3.7.1 Accounting split
 
 starfix owns the accounting: token usage per issue, session and `account`, the
-price table, list-price and amortized cost, `sf cost`, `sf log` and
+price table, list-price and amortized cost, `sfx cost`, `sfx log` and
 the MCP `cost` tool (starfix §12.1). Bearings keeps no ledger. It does two
 things:
 
