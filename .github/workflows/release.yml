@@ -39,6 +39,15 @@ jobs:
             exit 1
           fi
 
+      - name: Verify modules
+        # Download checks each module against go.sum and the checksum
+        # database; verify checks the cache has not changed since.
+        run: go mod download && go mod verify
+
+      - name: govulncheck
+        # A release never ships with a known-vulnerable dependency.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
       - name: Build
         # A plain loop: eight static builds and an archive each. CGO off,
         # -trimpath, symbols and DWARF stripped, version stamped; VCS

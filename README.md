@@ -343,6 +343,23 @@ Branch with a type prefix (`feature/`, `fix/`, `docs/`, `maintenance/`,
 `refactor/`) and title pull requests the same way. `main` takes squash merges
 with green CI.
 
+### Security checks
+
+| Check | Runs |
+|---|---|
+| golangci-lint, with gosec, staticcheck, errcheck, govet and revive | Every pull request and push to `main` |
+| `govulncheck` against the Go vulnerability database | Every pull request and push, weekly on `main` (Mondays), and before every release build |
+| `go mod download && go mod verify` | Every pull request and push, and before every release build |
+| CodeQL, `security-extended` queries | Every pull request and push, and weekly |
+| Dependabot, for Go modules and GitHub Actions | Weekly; minor and patch updates grouped |
+
+Dependencies are not vendored. `go.sum` pins each module's content hash and
+the Go checksum database rejects a module that was changed after
+publication; `go mod verify` checks that the local module cache has not
+changed since download.
+The dependency list is kept small on purpose. Every action is pinned by
+commit SHA.
+
 ## Relationship to beads
 
 starfix is an independent project, inspired by and able to import from
