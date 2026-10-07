@@ -1,7 +1,13 @@
-// Package gitx is starfix's git awareness, on the client only (design §12
-// item 2): the branch name an issue suggests, the issue a branch or commit
-// names, and creating that branch or a worktree for it. It installs no
-// hooks. git runs with explicit arguments, never through a shell.
+// Package gitx is starfix's git awareness, on the client only: the branch
+// name an issue suggests ([Branch]), the issue a branch or commit message
+// names ([IDFromBranch], [IDFromMessage]), and creating that branch or a
+// worktree on it ([Switch], [AddWorktree]). The design is
+// docs/design/starfix.md §12 item 2, and the branch scheme is in §5, "As
+// built (stage 2, first slice)".
+//
+// It installs no hooks. Switch and AddWorktree run the git on PATH with
+// explicit arguments, never through a shell, and kill it if their context
+// ends first. Their errors name the git command that failed.
 package gitx
 
 import (
@@ -11,11 +17,13 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 )
 
-// branchTypes maps an issue type to its branch prefix. The prefixes are the
-// repository's own: feature/, fix/, maintenance/, docs/.
+// branchTypes maps an issue type to its branch prefix. The prefixes are
+// the starfix repository's own branch types: feature/, fix/, maintenance/
+// and docs/.
 var branchTypes = map[string]string{
 	"bug":     "fix",
 	"feature": "feature",
@@ -37,8 +45,8 @@ func BranchType(issueType string) string {
 const maxSlug = 40
 
 // Slug turns a title into lowercase ASCII letters and digits joined by
-// single hyphens, at most 40 characters, cut at a word boundary where
-// there is one.
+// single hyphens, at most 40 characters. A longer slug is cut to 40, then
+// back to its last word boundary if that keeps more than 20.
 func Slug(title string) string {
 	var b strings.Builder
 	gap := false
@@ -82,11 +90,13 @@ var (
 	// branchID is the ID at the start of a branch's last segment, with a
 	// one-word prefix: sf-a1b2 or sf-a1b2.1.
 	branchID = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z0-9]+(\.[0-9]+)*`)
-	trailer  = regexp.MustCompile(`^Starfix:[ \t]*(\S+)[ \t]*$`)
+	// trailer is a "Starfix: <id>" line, capturing the id.
+	trailer = regexp.MustCompile(`^Starfix:[ \t]*(\S+)[ \t]*$`)
 )
 
-// IDFromBranch returns the issue ID a branch made by Branch names. Branch
-// names cannot mark where a hyphenated prefix ends, so prefix names the
+// IDFromBranch returns the issue ID at the start of a branch's last
+// segment, as Branch writes it, and whether there is one. A branch name
+// cannot mark where a hyphenated ID prefix ends, so prefix names the
 // project's prefix when it has a hyphen ("" assumes it has none).
 func IDFromBranch(branch, prefix string) (string, bool) {
 	seg := branch[strings.LastIndexByte(branch, '/')+1:]
@@ -104,12 +114,13 @@ func IDFromBranch(branch, prefix string) (string, bool) {
 	return id, id != ""
 }
 
-// IDFromMessage returns the issue a commit message names in a
-// "Starfix: <id>" trailer; the last one wins.
+// IDFromMessage returns the issue ID a commit message names in a
+// "Starfix: <id>" trailer, and whether it names one. The last such line
+// wins; a value not shaped like an issue ID is skipped.
 func IDFromMessage(msg string) (string, bool) {
 	lines := strings.Split(strings.TrimRight(msg, "\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if m := trailer.FindStringSubmatch(strings.TrimRight(lines[i], "\r")); m != nil && idShape.MatchString(m[1]) {
+	for _, line := range slices.Backward(lines) {
+		if m := trailer.FindStringSubmatch(strings.TrimRight(line, "\r")); m != nil && idShape.MatchString(m[1]) {
 			return m[1], true
 		}
 	}
@@ -132,7 +143,8 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
-// hasBranch reports whether the local branch exists.
+// hasBranch reports whether the local branch exists. git exits 1 when it
+// does not; any other failure is an error.
 func hasBranch(ctx context.Context, dir, branch string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) //nolint:gosec // fixed binary, explicit argv, no shell
 	err := cmd.Run()
@@ -161,8 +173,10 @@ func Switch(ctx context.Context, dir, branch string) error {
 	return err
 }
 
-// AddWorktree creates a worktree at path on branch, creating the branch
-// from HEAD if it does not exist.
+// AddWorktree creates a worktree at path, for the repository at dir, on
+// branch, creating the branch from HEAD if it does not exist. A relative
+// path is relative to dir. git refuses a branch that another worktree has
+// checked out.
 func AddWorktree(ctx context.Context, dir, path, branch string) error {
 	if strings.HasPrefix(path, "-") {
 		path = "./" + path // never an option
