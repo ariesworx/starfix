@@ -107,6 +107,36 @@ type watchLine struct {
 // watchBuffer is how many pushed events `sfx watch` holds while printing.
 const watchBuffer = 256
 
+// watchQueue carries pushed events from the connection's reader goroutine
+// to sfx watch's printing loop. When printing falls behind, the pushes
+// that do not fit are dropped and a resync takes the place of the first,
+// so the loop says items were missed and watches again, as it does for
+// the server's own resync, which may be among those dropped.
+type watchQueue struct {
+	c chan proto.Push
+	// resync: the last event queued is a resync, which stands for any
+	// pushes dropped since. Only put touches it.
+	resync bool
+}
+
+func newWatchQueue(n int) *watchQueue { return &watchQueue{c: make(chan proto.Push, n)} }
+
+// put is the connection's OnPush, so it runs on the reader goroutine and
+// must not block, or the replies the loop waits for would never be read.
+// As the queue's only sender it can keep the last slot free for a
+// resync, and the sends below never wait.
+func (q *watchQueue) put(p proto.Push) {
+	if len(q.c) < cap(q.c)-1 {
+		q.c <- p
+		q.resync = p.Op == proto.EvResync
+		return
+	}
+	if !q.resync {
+		q.c <- proto.Push{Op: proto.EvResync}
+		q.resync = true
+	}
+}
+
 // cmdWatch prints each inbox item the server pushes, as it arrives, until
 // interrupted. With --json each event is one JSON object on its own line:
 // {"op":"inbox","item":{…}}, or {"op":"resync"} when items were missed
@@ -121,19 +151,8 @@ func cmdWatch(ctx context.Context, r *runner, args []string) error {
 	if len(pos) > 0 {
 		return usagef(usage, "watch takes no arguments")
 	}
-	events := make(chan proto.Push, watchBuffer)
-	// onPush runs on the connection's reader goroutine. It must not block,
-	// or the replies the loop below waits for would never be read.
-	r.onPush = func(p proto.Push) {
-		select {
-		case events <- p:
-		default: // printing fell behind: say so as the server would
-			select {
-			case events <- proto.Push{Op: proto.EvResync}:
-			default:
-			}
-		}
-	}
+	q := newWatchQueue(watchBuffer)
+	r.onPush = q.put
 	c, err := r.connect(ctx)
 	if err != nil {
 		return err
@@ -156,7 +175,7 @@ func cmdWatch(ctx context.Context, r *runner, args []string) error {
 				return err
 			}
 			return proto.Errf(proto.CodeUnavailable, "run `sfx watch` again", "the connection to the server ended")
-		case p := <-events:
+		case p := <-q.c:
 			switch {
 			case r.json:
 				r.emit(watchLine{Op: p.Op, Item: p.Item})
