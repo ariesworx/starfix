@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -62,6 +63,44 @@ func TestTouchAgentThrottles(t *testing.T) {
 	}
 	if a := ws[0]; a.Machine != "desktop" || a.Harness != "codex" || !a.Started.Equal(start) {
 		t.Errorf("Who()[0] = %+v, want machine desktop, harness codex, started %s", a, start)
+	}
+}
+
+// An empty harness keeps the one recorded when the write runs: a touch
+// retried after another writer changed it keeps the change, not what the
+// first attempt read.
+func TestTouchAgentRetryKeepsNewHarness(t *testing.T) {
+	clk := &clock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
+	dsn := newDSN(t)
+	s := openStore(t, dsn, Options{Now: clk.now})
+	other := openStore(t, dsn, Options{Now: clk.now})
+	ctx := t.Context()
+	if err := s.TouchAgent(ctx, alice, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	s.beforeCommit = func(ctx context.Context) error {
+		attempts++
+		if attempts > 1 {
+			return nil
+		}
+		if err := other.TouchAgent(ctx, alice, "codex"); err != nil {
+			return err
+		}
+		return errRetry
+	}
+	if err := s.TouchAgent(ctx, alice, ""); err != nil {
+		t.Fatalf("TouchAgent: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("TouchAgent made %d attempts, want 2", attempts)
+	}
+	ws, err := s.Who(ctx, 0)
+	if err != nil || len(ws) != 1 {
+		t.Fatalf("Who = %+v, %v; want one agent", ws, err)
+	}
+	if got := ws[0].Harness; got != "codex" {
+		t.Errorf("harness after a retried TouchAgent with none = %q, want codex, which the other writer recorded", got)
 	}
 }
 

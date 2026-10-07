@@ -76,10 +76,13 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 		if err != nil {
 			return fmt.Errorf("read agent %s/%s: %w", actor.Principal, actor.Session, err)
 		}
-		if harness == "" {
-			harness = known
+		// A local, not harness: a rerun must start from the argument,
+		// not from what this attempt read.
+		h := harness
+		if h == "" {
+			h = known
 		}
-		if machine == actor.Machine && harness == known && w.now.Sub(seen) < AgentTouchEvery {
+		if machine == actor.Machine && h == known && w.now.Sub(seen) < AgentTouchEvery {
 			return nil
 		}
 		wid, err := randomInt63()
@@ -88,7 +91,7 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 		}
 		n, err := w.exec(ctx, `UPDATE agents SET machine = ?, harness = ?, last_seen = ?, rev = rev + 1, write_id = ?
   WHERE principal = ? AND session = ? AND rev = ?`,
-			actor.Machine, harness, w.now, wid, actor.Principal, actor.Session, rev)
+			actor.Machine, h, w.now, wid, actor.Principal, actor.Session, rev)
 		if err != nil {
 			return fmt.Errorf("update agent %s/%s: %w", actor.Principal, actor.Session, err)
 		}
