@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -70,9 +69,7 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 			return usagef(usage, "unknown agent %q; supported: %s", name, strings.Join(agentsetup.Names(), ", "))
 		}
 		if agent.Desktop {
-			commandSet := false
-			fs.Visit(func(f *flag.Flag) { commandSet = commandSet || f.Name == "command" })
-			if commandSet {
+			if set(fs, "command") {
 				return r.setupDesktop(agent, entry.Command, mode)
 			}
 			return r.setupDesktop(agent, "", mode)
@@ -226,6 +223,8 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 // chose to set up.
 const globalHookNote = "This hook runs in every repository with a .starfix.yaml that you open with the agent, and connects to the server that file names. Turn it off before opening a repository you do not trust, or drop --global and set the hook up per project."
 
+// noGlobal is the message refusing --global for a, whose fix is
+// a.NoGlobal.
 func noGlobal(a agentsetup.Agent) string {
 	if a.ManualMCP() {
 		return a.Title + " keeps its MCP servers in the IDE's settings, not a file setup edits"
@@ -258,9 +257,13 @@ type diskFile struct {
 	// path is the file as setup names it; real is where it is read
 	// and written, once base has checked the way there.
 	path, real string
-	base       fileBase
-	orig, cur  []byte
-	mode       fs.FileMode
+	// base is how the file may be reached.
+	base fileBase
+	// orig is the file as read, empty if it does not exist; cur is orig
+	// with the edits so far.
+	orig, cur []byte
+	// mode is the file's permission bits, or a new file's.
+	mode fs.FileMode
 	// drop: the last edit emptied a file that held only starfix's part.
 	drop bool
 }
@@ -282,10 +285,14 @@ func (d *diskFile) read() error {
 type setupFile struct {
 	agentsetup.Target
 	disk *diskFile
-	rel  string
-	res  agentsetup.Result
+	// rel is the path printed for the file: relative to the repository
+	// root, or absolute for the person's own files.
+	rel string
+	// res is what the edit did to the target.
+	res agentsetup.Result
 }
 
+// result is fixed, if set, else what the edit did.
 func (f setupFile) result(fixed string) string {
 	if fixed != "" {
 		return fixed
@@ -357,6 +364,8 @@ func (r *runner) report(plans []setupPlan, all bool, fixed string) {
 	}
 }
 
+// printPlans prints the edits setup would make, as snippets a person can
+// also add by hand.
 func (r *runner) printPlans(plans []setupPlan, entry agentsetup.Entry, all, global bool) {
 	if r.json {
 		type snip struct {
@@ -396,6 +405,8 @@ func (r *runner) printPlans(plans []setupPlan, entry agentsetup.Entry, all, glob
 	}
 }
 
+// printSnippets prints one agent's snippets, each under a comment line
+// saying where it goes.
 func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, global bool) {
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(r.env.Stdout, format, a...) }
 	agent := plan.Agent
@@ -451,15 +462,13 @@ func (r *runner) setupRoot(global bool) (string, error) {
 	}
 	cfg, err := client.LoadConfig(r.dir)
 	if err != nil {
-		var pe *proto.Error
-		if errors.As(err, &pe) {
+		if _, ok := errors.AsType[*proto.Error](err); ok {
 			return "", err
 		}
 		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
 	}
 	// The agent can be set up regardless, but it will not connect.
-	var pe *proto.Error
-	if errors.As(cfg.CheckTransport(), &pe) {
+	if pe, ok := errors.AsType[*proto.Error](cfg.CheckTransport()); ok {
 		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\nfix: %s\n", esc(pe.Message), esc(pe.Fix))
 	}
 	return cfg.Root, nil

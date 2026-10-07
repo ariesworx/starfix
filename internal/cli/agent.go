@@ -54,8 +54,9 @@ func cmdPrime(ctx context.Context, r *runner, args []string) error {
 // timeout, so a slow server costs the session a note, not its start.
 const hookTimeout = 10 * time.Second
 
-// hookFlag is --hook's value: the agent whose hook prime runs as. Bare
-// --hook is Claude Code's, as it was before other harnesses had hooks.
+// hookFlag is --hook's value: the agent whose SessionStart hook prime
+// runs as. Bare --hook is Claude Code's, since setup writes Claude Code's
+// hook that way.
 type hookFlag struct{ agent string }
 
 func (h *hookFlag) String() string { return h.agent }
@@ -120,8 +121,7 @@ func (r *runner) primeHook(ctx context.Context, agent agentsetup.Agent) {
 // instruction (C-2, C-4).
 func hookFailure(err error) string {
 	msg, fix := err.Error(), ""
-	var pe *proto.Error
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*proto.Error](err); ok {
 		msg, fix = pe.Message, pe.Fix
 	}
 	text := "starfix: prime failed: " + strconv.Quote(msg)
@@ -131,6 +131,7 @@ func hookFailure(err error) string {
 	return text + "\n"
 }
 
+// primeText connects, builds prime and renders it as text.
 func (r *runner) primeText(ctx context.Context) (string, error) {
 	c, err := r.connect(ctx)
 	if err != nil {
@@ -184,7 +185,8 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 		opts.Session = client.NewSessionID()
 	}
 	// The server pushes inbox items on the connection's reader goroutine;
-	// srv counts them for the next tool result.
+	// srv counts them for the next tool result. srv is assigned before
+	// Serve can dial, so a push never finds it nil.
 	var srv *mcpserver.Server
 	opts.OnPush = func(p proto.Push) { srv.Push(p) }
 	srv = mcpserver.New(mcpserver.Options{Version: r.env.Version,
@@ -194,6 +196,8 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 	return srv.Serve(ctx, io.NopCloser(r.env.Stdin), nopWriteCloser{r.mcpOut()})
 }
 
+// nopWriteCloser gives sfx mcp's output the Close the SDK calls when the
+// session ends, without closing the caller's Stdout.
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }

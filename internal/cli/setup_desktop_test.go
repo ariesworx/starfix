@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -19,7 +18,7 @@ type desktopEnv struct {
 func (d desktopEnv) run(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := Run(context.Background(), args, Env{Stdout: &out, Stderr: &errb, Version: "v0.3.0", GOOS: d.goos,
+	code := Run(t.Context(), args, Env{Stdout: &out, Stderr: &errb, Version: "v0.3.0", GOOS: d.goos,
 		Getenv: func(k string) string {
 			if k == "APPDATA" {
 				return d.appdata

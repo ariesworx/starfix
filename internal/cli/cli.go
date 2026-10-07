@@ -1,5 +1,3 @@
-// Package cli is the starfix command line: issue CRUD for people, over the
-// client package. It writes only to the writers it is given.
 package cli
 
 import (
@@ -19,26 +17,40 @@ import (
 	"github.com/ariesworx/starfix/internal/safetext"
 )
 
-// Exit codes.
+// Exit codes, as [Run] returns them.
 const (
-	ExitOK      = 0
+	// ExitOK: the command succeeded.
+	ExitOK = 0
+	// ExitFailure: the command failed, or the server refused it.
 	ExitFailure = 1
-	ExitUsage   = 2
-	// ExitVersion: the server refused this client's protocol version.
+	// ExitUsage: a mistake on the command line. Bare sfx prints help and
+	// exits with it too.
+	ExitUsage = 2
+	// ExitVersion: this client's protocol version is outside the server's
+	// range.
 	ExitVersion = 3
 )
 
-// Env is the process environment Run works in.
+// Env is the process environment Run works in: everything the package
+// takes from the process. A field left nil or empty takes the default its
+// comment names; Stdout and Stderr must be set.
 type Env struct {
-	Stdin          io.Reader
+	// Stdin is read for a text given as "-", by prime --hook and by sfx
+	// mcp. Default empty.
+	Stdin io.Reader
+	// Stdout and Stderr receive all output.
 	Stdout, Stderr io.Writer
-	Getenv         func(string) string
-	Hostname       func() (string, error)
-	// UserHomeDir is used only by `setup --global`. Default os.UserHomeDir.
+	// Getenv reads an environment variable. Default os.Getenv.
+	Getenv func(string) string
+	// Hostname names this machine to the server. Default os.Hostname.
+	Hostname func() (string, error)
+	// UserHomeDir finds the home directory, for `setup --global` and a
+	// desktop app's config. Default os.UserHomeDir.
 	UserHomeDir func() (string, error)
 	// GOOS and Executable are used only by `setup claude-desktop`: the
-	// platform, and the absolute path of this sfx. Defaults runtime.GOOS
-	// and sfxPath.
+	// platform, and the absolute path of this sfx. Defaults runtime.GOOS,
+	// and sfx's entry on PATH when that is this program, else
+	// os.Executable.
 	GOOS       string
 	Executable func() (string, error)
 	// Version is this binary's build version.
@@ -48,15 +60,19 @@ type Env struct {
 	Upgrader *Upgrader
 }
 
-// usageError is a mistake on the command line.
+// usageError is a mistake on the command line. usage is the usage line
+// its fix shows; Run fills in the command's own when it is empty.
 type usageError struct{ msg, usage string }
 
 func (e *usageError) Error() string { return e.msg }
 
+// usagef returns a usageError with a formatted message.
 func usagef(usage, format string, a ...any) error {
 	return &usageError{msg: fmt.Sprintf(format, a...), usage: usage}
 }
 
+// command is one sfx command: its name, its usage line without "sfx ",
+// the summary help prints, and the function that runs it.
 type command struct {
 	name    string
 	usage   string
@@ -64,6 +80,7 @@ type command struct {
 	run     func(ctx context.Context, r *runner, args []string) error
 }
 
+// commands lists the commands in the order help prints them.
 var commands []command
 
 func init() {
@@ -98,6 +115,7 @@ func init() {
 	}
 }
 
+// lookup returns the command named name, or nil.
 func lookup(name string) *command {
 	for i := range commands {
 		if commands[i].name == name {
@@ -110,9 +128,16 @@ func lookup(name string) *command {
 // runner carries one invocation's settings and its lazily opened
 // connection.
 type runner struct {
-	env  Env
+	// env is Run's Env, with defaults filled in and, once wrapOutput has
+	// run, Stdout and Stderr escaped.
+	env Env
+	// json is --json, given before or after the command name.
 	json bool
-	dir  string
+	// dir is the directory commands run in, where the search for
+	// .starfix.yaml starts: -C's, else the hook input's cwd for prime
+	// --hook, else ".".
+	dir string
+	// conn is the connection connect opened, if any; Run closes it.
 	conn *mcpserver.RepoConn
 	// session overrides the environment's session id (prime --hook).
 	session string
@@ -167,8 +192,13 @@ func (r *runner) flush() {
 	}
 }
 
-// Run executes one starfix command line (without the program name) and
-// returns the exit code.
+// Run executes one sfx command line, without the program name, and
+// returns its exit code: [ExitUsage] for a mistake on the command line or
+// a bare sfx, which prints help; [ExitVersion] when this client's protocol
+// version is outside the server's range; [ExitFailure] for any other
+// failure. It prints a failure on Stderr as an `sfx:` line and, when the
+// error has one, a `fix:` line, or with --json as one JSON document on
+// Stdout. Run keeps no state between calls.
 func Run(ctx context.Context, args []string, env Env) int {
 	if env.Getenv == nil {
 		env.Getenv = os.Getenv
@@ -253,6 +283,7 @@ func (r *runner) globals(args []string) ([]string, error) {
 	return args, nil
 }
 
+// help prints the list of commands to w.
 func (r *runner) help(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: sfx [-C DIR] [--json] COMMAND [ARGS]")
 	_, _ = fmt.Fprintln(w)
@@ -263,8 +294,10 @@ func (r *runner) help(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "`sfx help COMMAND` shows a command's usage. --json prints one JSON document.")
 }
 
-// fail reports err and returns its exit code. Every failure ends with a
-// fix: line.
+// fail reports err and returns its exit code. A usage error's fix is the
+// command's usage line; a *proto.Error keeps its code, message and fix,
+// and prints no fix: line when the fix is empty; any other error is
+// reported as unavailable, with a fix to retry and check the config.
 func (r *runner) fail(err error) int {
 	code, exit := proto.CodeUnavailable, ExitFailure
 	msg, fix := err.Error(), "retry; if it persists, run with -C pointing at the repository and check "+client.ConfigFile
@@ -311,7 +344,8 @@ func (r *runner) emit(v any) {
 	_, _ = fmt.Fprintf(out, "%s\n", safetext.JSON(b))
 }
 
-// connect dials the server on first use.
+// connect dials the server on first use, and prints the server's version
+// warning, if it has one, on Stderr.
 func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 	if r.conn != nil {
 		return r.conn, nil
@@ -327,7 +361,9 @@ func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 	return c, nil
 }
 
-// clientOptions describe this machine and session to the server.
+// clientOptions describe this machine and session to the server. The
+// session id is r.session (prime --hook's), else the harness's from the
+// environment, else client.CLISession.
 func (r *runner) clientOptions() client.Options {
 	host, err := r.env.Hostname()
 	if err != nil || host == "" {

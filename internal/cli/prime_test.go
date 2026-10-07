@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,7 +15,7 @@ import (
 func primeHook(t *testing.T, stdin string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := Run(context.Background(), append(args, "prime", "--hook"), Env{Stdin: strings.NewReader(stdin),
+	code := Run(t.Context(), append(args, "prime", "--hook"), Env{Stdin: strings.NewReader(stdin),
 		Stdout: &out, Stderr: &errb, Getenv: func(string) string { return "" }, Version: "v0.3.0"})
 	return code, out.String(), errb.String()
 }
@@ -117,7 +116,7 @@ func TestPrimeHookFormats(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.flag, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			code := Run(context.Background(), []string{"-C", repo, "prime", tc.flag}, Env{Stdin: strings.NewReader(`{"sessionId": "vs-1"}`),
+			code := Run(t.Context(), []string{"-C", repo, "prime", tc.flag}, Env{Stdin: strings.NewReader(`{"sessionId": "vs-1"}`),
 				Stdout: &out, Stderr: &errb, Getenv: func(string) string { return "" }, Version: "v0.3.0"})
 			if code != ExitOK || errb.Len() != 0 {
 				t.Fatalf("exit %d, stderr %q", code, errb.String())

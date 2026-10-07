@@ -16,6 +16,8 @@ import (
 // maxStdin bounds text read from standard input with "-".
 const maxStdin = 1 << 20
 
+// text returns v or, when v is "-", standard input without its trailing
+// newlines. Input longer than maxStdin is a usage error.
 func (r *runner) text(v string) (string, error) {
 	if v != "-" {
 		return v, nil
@@ -35,6 +37,8 @@ type fields struct {
 	title, body, design, acceptance, notes, status, typ, assignee, owner, parent, prio string
 }
 
+// register adds the field flags to fs. withTitle adds --title, for
+// update; create takes its title as arguments.
 func (f *fields) register(fs *flag.FlagSet, withTitle bool) {
 	if withTitle {
 		fs.StringVar(&f.title, "title", "", "title")
@@ -156,6 +160,8 @@ func printItems(w io.Writer, items []proto.AcceptanceItem) {
 	}
 }
 
+// one returns the issue id that must be pos's only element; what names
+// the command in the usage error.
 func one(usage string, pos []string, what string) (string, error) {
 	if len(pos) != 1 {
 		return "", usagef(usage, "%s needs exactly one issue id", what)
@@ -193,8 +199,12 @@ func cmdShow(ctx context.Context, r *runner, args []string) error {
 	return nil
 }
 
+// when formats t for text output: UTC, to the minute.
 func when(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 
+// printIssue prints an issue's header lines, then its text. Single-line
+// fields go through esc; the multi-line text is printed as it is, so w
+// must escape it, as the runner's Stdout does.
 func printIssue(w io.Writer, s proto.ShowResult) {
 	is := s.Issue
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
@@ -256,6 +266,8 @@ func printIssue(w io.Writer, s proto.ShowResult) {
 	}
 }
 
+// printSummaries prints one aligned line per issue: id, priority, status
+// and title, then extra(i) for issues[i] when extra is set.
 func printSummaries(w io.Writer, issues []proto.Summary, extra func(i int) string) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for i, is := range issues {
@@ -318,6 +330,7 @@ func cmdList(ctx context.Context, r *runner, args []string) error {
 	return nil
 }
 
+// limitArgs parses the arguments of a command whose only flag is -n.
 func limitArgs(r *runner, name string, args []string) (proto.LimitArgs, error) {
 	usage := name + " [-n N]"
 	fs := r.newFlags(name)

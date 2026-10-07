@@ -36,7 +36,7 @@ func cmdDigest(ctx context.Context, r *runner, args []string) error {
 	return nil
 }
 
-// digestNoteLen is how much of a handoff note the terminal shows.
+// digestNoteLen is how many runes of a handoff note the terminal shows.
 const digestNoteLen = 60
 
 // printDigest renders a digest: a header line, then each section that has
