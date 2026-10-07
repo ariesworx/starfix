@@ -296,15 +296,15 @@ func TestErrorsNameTheNextStep(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"not found", proto.Errf(proto.CodeNotFound, "find the id with `starfix list`", "issue sf-x not found"),
+		{"not found", proto.Errf(proto.CodeNotFound, "find the id with `sfx list`", "issue sf-x not found"),
 			"not_found: issue sf-x not found\nfix: find the id with list or ready"},
-		{"conflict", proto.Errf(proto.CodeConflict, "re-read with `starfix show sf-x`", "sf-x changed since rev 1 (now rev 2 by bob)"),
+		{"conflict", proto.Errf(proto.CodeConflict, "re-read with `sfx show sf-x`", "sf-x changed since rev 1 (now rev 2 by bob)"),
 			"conflict: sf-x changed since rev 1 (now rev 2 by bob)\nfix: call show for the current rev, then retry with that rev if your change still applies"},
-		{"closed", proto.Errf(proto.CodeInvalid, "reopen it with `starfix reopen sf-x`", "issue sf-x is closed"),
+		{"closed", proto.Errf(proto.CodeInvalid, "reopen it with `sfx reopen sf-x`", "issue sf-x is closed"),
 			"invalid: issue sf-x is closed\nfix: call reopen first"},
-		{"cycle", proto.Errf(proto.CodeCycle, "remove an edge with `starfix dep rm`", "sf-a depends on sf-b, so this would make a cycle"),
+		{"cycle", proto.Errf(proto.CodeCycle, "remove an edge with `sfx dep rm`", "sf-a depends on sf-b, so this would make a cycle"),
 			"cycle: sf-a depends on sf-b, so this would make a cycle\nfix: remove an edge with dep (action rm), or choose another parent"},
-		{"invalid", proto.Errf(proto.CodeInvalid, "correct it and retry; `starfix update -h` lists the options", "title is empty"),
+		{"invalid", proto.Errf(proto.CodeInvalid, "correct it and retry; `sfx update -h` lists the options", "title is empty"),
 			"invalid: title is empty\nfix: correct the arguments and retry"},
 		{"dial", &dialError{err: proto.Errf(proto.CodeAuth, "send your public key to the starfix admin", "refused your SSH key")},
 			"auth: refused your SSH key\nfix: tell the user starfix cannot connect: send your public key to the starfix admin"},

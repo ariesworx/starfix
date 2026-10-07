@@ -10,7 +10,7 @@ import (
 
 // explain rephrases an error for an agent (design §12 item 5). The server's
 // code and message are kept; its fix, written for a person at a shell
-// (`starfix show …`), becomes the agent's next step in terms of tools.
+// (`sfx show …`), becomes the agent's next step in terms of tools.
 // Fixes only a person can carry out (keys, config, upgrades) are handed to
 // the user.
 func explain(err error) toolErr {

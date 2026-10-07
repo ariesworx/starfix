@@ -1,4 +1,4 @@
-// Package mcpserver is `starfix mcp`: the Model Context Protocol server
+// Package mcpserver is `sfx mcp`: the Model Context Protocol server
 // agents use, on stdin and stdout (design §5).
 //
 // It runs on the developer's machine as the developer, and talks to

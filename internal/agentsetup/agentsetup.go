@@ -1,5 +1,5 @@
-// Package agentsetup registers `starfix mcp` with an agent harness by
-// editing that harness's MCP configuration (design §5, `starfix setup`).
+// Package agentsetup registers `sfx mcp` with an agent harness by
+// editing that harness's MCP configuration (design §5, `sfx setup`).
 //
 // Edits are idempotent and minimal: an existing file keeps its other
 // servers, its other keys and their order, and an existing starfix entry
@@ -20,7 +20,7 @@ const ServerName = "starfix"
 
 // Agent is one supported harness.
 type Agent struct {
-	// Name is what `starfix setup` takes.
+	// Name is what `sfx setup` takes.
 	Name string
 	// Title is the harness's own name.
 	Title string
@@ -75,9 +75,9 @@ type Entry struct {
 	Args    []string
 }
 
-// DefaultEntry runs `starfix mcp` from PATH. The harness starts it in the
+// DefaultEntry runs `sfx mcp` from PATH. The harness starts it in the
 // project directory, where it finds .starfix.yaml.
-var DefaultEntry = Entry{Command: "starfix", Args: []string{"mcp"}}
+var DefaultEntry = Entry{Command: "sfx", Args: []string{"mcp"}}
 
 // Result says what Apply or Remove did.
 type Result int

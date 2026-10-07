@@ -20,31 +20,31 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	text := err.Error()
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return proto.Errf(proto.CodeNotFound, "find the id with `starfix list`",
+		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
 			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
 
 	case errors.Is(err, store.ErrConflict):
 		return s.conflict(ctx, id, rev)
 
 	case errors.Is(err, store.ErrExists):
-		return proto.Errf(proto.CodeExists, "omit --id to have one generated, or read it with `starfix show "+id+"`",
+		return proto.Errf(proto.CodeExists, "omit --id to have one generated, or read it with `sfx show "+id+"`",
 			strings.Replace(text, ": "+store.ErrExists.Error(), " already exists", 1))
 
 	case errors.Is(err, store.ErrCycle):
-		return proto.Errf(proto.CodeCycle, "remove an edge with `starfix dep rm`, or choose another parent",
+		return proto.Errf(proto.CodeCycle, "remove an edge with `sfx dep rm`, or choose another parent",
 			strings.TrimSuffix(text, ": "+store.ErrCycle.Error())+", so this would make a cycle")
 
 	case errors.Is(err, store.ErrInvalid):
 		switch {
 		case strings.HasSuffix(text, " is closed; reopen it first"):
-			return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `starfix reopen %s`", id),
+			return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `sfx reopen %s`", id),
 				strings.TrimSuffix(text, "; reopen it first"))
 		case strings.HasSuffix(text, " is already closed"):
 			return proto.Errf(proto.CodeInvalid, "nothing to do", text)
 		case strings.HasSuffix(text, " is not closed"):
 			return proto.Errf(proto.CodeInvalid, "nothing to do", text)
 		}
-		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("correct it and retry; `starfix %s -h` lists the options", command(op)), text)
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("correct it and retry; `sfx %s -h` lists the options", command(op)), text)
 
 	case errors.Is(err, store.ErrSchemaTooNew):
 		s.cfg.Logger.Error("schema too new", "op", op, "err", err)
@@ -63,7 +63,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 // conflict explains a failed compare-and-swap: who moved the issue to
 // which revision, or that concurrent writers kept winning.
 func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Error {
-	reread := fmt.Sprintf("re-read with `starfix show %s`", id)
+	reread := fmt.Sprintf("re-read with `sfx show %s`", id)
 	if id == "" || rev < 1 {
 		return proto.Errf(proto.CodeConflict, "retry", "the change lost to concurrent writes")
 	}

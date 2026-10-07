@@ -255,7 +255,7 @@ func cmdList(ctx context.Context, r *runner, args []string) error {
 	}
 	printSummaries(r.env.Stdout, out.Issues, nil)
 	if out.Next != "" {
-		_, _ = fmt.Fprintf(r.env.Stderr, "more: starfix list --cursor %s\n", out.Next)
+		_, _ = fmt.Fprintf(r.env.Stderr, "more: sfx list --cursor %s\n", out.Next)
 	}
 	return nil
 }
