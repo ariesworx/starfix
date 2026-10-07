@@ -227,7 +227,8 @@ func TestPushFanOut(t *testing.T) {
 // overflows, it is sent one resync and nothing more until it watches
 // again.
 func TestPushOverflowResyncs(t *testing.T) {
-	s := newServer(t)
+	// More notices than one sender may send a minute by default.
+	s := newServerWith(t, Limits{Limits: store.Limits{Notices: 4 * store.WatchQueue}})
 	b := dialPipe(t, s, bob)
 	b.until(b.send(proto.OpWatch, proto.WatchArgs{}))
 	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})

@@ -31,6 +31,9 @@ const (
 	// CodeAuth: SSH authentication failed, or the server's host key does
 	// not match the pinned one.
 	CodeAuth Code = "auth"
+	// CodeBusy: the caller reached one of the server's limits on
+	// connections or writes; the fix says how long to wait (protocol 2).
+	CodeBusy Code = "busy"
 )
 
 // Error is a typed, one-line error. Message names the cause; Fix names the

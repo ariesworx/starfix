@@ -24,8 +24,12 @@ const eventSelect = `SELECT seq, at, principal, session, machine, op, target,
   before_state, after_state, idem_key FROM events `
 
 func (s *Store) events(ctx context.Context, where string, args ...any) ([]Event, error) {
-	q := eventSelect + where //nolint:gosec // where is a constant from the callers above
-	rows, err := s.r.QueryContext(ctx, q, args...)
+	return queryEvents(ctx, s.r, where, args...)
+}
+
+func queryEvents(ctx context.Context, qr querier, where string, args ...any) ([]Event, error) {
+	q := eventSelect + where //nolint:gosec // where is a constant from the callers
+	rows, err := qr.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("events: %w", err)
 	}

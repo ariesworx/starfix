@@ -169,6 +169,9 @@ func show(ctx context.Context, s *Server, a store.Actor, in proto.ShowArgs) (any
 			}
 		}
 	}
+	if len(deps) > proto.MaxShowDeps {
+		deps, out.DepsMore = deps[:proto.MaxShowDeps], len(deps)-proto.MaxShowDeps
+	}
 	for _, d := range deps {
 		out.Deps = append(out.Deps, proto.Dep{From: string(d.From), To: string(d.To), Type: string(d.Type),
 			CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt.UTC()})
@@ -222,6 +225,9 @@ func blocked(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) 
 	out := proto.BlockedResult{Issues: []proto.BlockedIssue{}}
 	for _, b := range bs {
 		bi := proto.BlockedIssue{Summary: summary(b.Issue), Via: string(b.Via), BlockedBy: []string{}}
+		if len(b.BlockedBy) > proto.MaxBlockers {
+			b.BlockedBy, bi.More = b.BlockedBy[:proto.MaxBlockers], len(b.BlockedBy)-proto.MaxBlockers
+		}
 		for _, id := range b.BlockedBy {
 			bi.BlockedBy = append(bi.BlockedBy, string(id))
 		}
@@ -319,32 +325,32 @@ func comment(ctx context.Context, s *Server, a store.Actor, in proto.CommentArgs
 	return proto.CommentResult{ID: c.ID}, nil
 }
 
-func comments(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (any, *proto.Error) {
+func comments(ctx context.Context, s *Server, _ store.Actor, in proto.PageArgs) (any, *proto.Error) {
 	id := store.IssueID(in.ID)
-	cs, err := s.cfg.Store.Comments(ctx, id)
-	if err == nil && len(cs) == 0 {
+	page, err := s.cfg.Store.CommentsPage(ctx, id, store.Cursor(in.Before), in.Limit)
+	if err == nil && page.Total == 0 {
 		_, err = s.cfg.Store.GetIssue(ctx, id) // no comments, or no issue?
 	}
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpComments, in.ID, 0, err)
 	}
-	out := proto.CommentsResult{Comments: []proto.Comment{}}
-	for _, c := range cs {
+	out := proto.CommentsResult{Comments: []proto.Comment{}, Earlier: string(page.Earlier), Total: page.Total}
+	for _, c := range page.Comments {
 		out.Comments = append(out.Comments, wireComment(c))
 	}
 	return out, nil
 }
 
-func history(ctx context.Context, s *Server, a store.Actor, in proto.IDArgs) (any, *proto.Error) {
-	evs, err := s.cfg.Store.History(ctx, store.IssueID(in.ID))
-	if err == nil && len(evs) == 0 {
+func history(ctx context.Context, s *Server, a store.Actor, in proto.PageArgs) (any, *proto.Error) {
+	page, err := s.cfg.Store.HistoryPage(ctx, store.IssueID(in.ID), store.Cursor(in.Before), in.Limit)
+	if err == nil && page.Total == 0 {
 		_, err = s.cfg.Store.GetIssue(ctx, store.IssueID(in.ID))
 	}
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHistory, in.ID, 0, err)
 	}
-	out := proto.HistoryResult{Events: []proto.Event{}}
-	for _, e := range evs {
+	out := proto.HistoryResult{Events: []proto.Event{}, Earlier: string(page.Earlier), Total: page.Total}
+	for _, e := range page.Events {
 		out.Events = append(out.Events, proto.Event{Seq: e.Seq, At: e.At.UTC(), Principal: e.Actor.Principal,
 			Session: e.Actor.Session, Machine: e.Actor.Machine, Op: string(e.Op),
 			Before: eventState(e, e.Before, a), After: eventState(e, e.After, a)})

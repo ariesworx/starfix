@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 	"unicode"
 )
 
@@ -21,6 +24,65 @@ import (
 
 // SimilarScan bounds how many recently closed issues SimilarClosed reads.
 const SimilarScan = 2000
+
+// SimilarTTL is how long the closed titles SimilarClosed reads are
+// cached (S-13). A close, a reopen or a change to a closed issue made
+// through this store refreshes them at once; the TTL covers writes made
+// elsewhere, such as an import-bd run beside the daemon.
+const SimilarTTL = time.Minute
+
+// similarCache holds the tokenized titles of the SimilarScan most
+// recently closed issues, so show and create do not each read and
+// tokenize 2,000 rows. gen rises on every invalidation, without taking
+// mu, so a write never waits for a rebuild; a rebuild is kept only for
+// the generation it started in.
+type similarCache struct {
+	gen atomic.Uint64
+
+	mu    sync.Mutex
+	built uint64 // the gen the rows were read in, plus one; 0 is none
+	at    time.Time
+	rows  []closedTitle
+}
+
+type closedTitle struct {
+	SimilarIssue
+	tokens []string
+}
+
+func (c *similarCache) invalidate() { c.gen.Add(1) }
+
+// closedTitles returns the cached closed titles, reading them again when they
+// are stale.
+func (s *Store) closedTitles(ctx context.Context) ([]closedTitle, error) {
+	c := &s.similar
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	gen, now := c.gen.Load(), s.now()
+	if c.built == gen+1 && now.Sub(c.at) < SimilarTTL && !now.Before(c.at) {
+		return c.rows, nil
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT id, title, priority FROM issues
+  WHERE status = ? AND template = FALSE ORDER BY closed_at DESC LIMIT ?`, string(StatusClosed), SimilarScan)
+	if err != nil {
+		return nil, fmt.Errorf("similar issues: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []closedTitle
+	for rows.Next() {
+		var t closedTitle
+		if err := rows.Scan(&t.ID, &t.Title, &t.Priority); err != nil {
+			return nil, fmt.Errorf("similar issues: %w", err)
+		}
+		t.tokens = titleTokens(t.Title)
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("similar issues: %w", err)
+	}
+	c.rows, c.built, c.at = out, gen+1, now
+	return out, nil
+}
 
 // MaxSimilar is the most similar issues SimilarClosed returns.
 const MaxSimilar = 3
@@ -44,29 +106,21 @@ func (s *Store) SimilarClosed(ctx context.Context, title string, exclude IssueID
 	if len(want) == 0 {
 		return nil, nil
 	}
-	rows, err := s.r.QueryContext(ctx, `SELECT id, title, priority FROM issues
-  WHERE status = ? AND template = FALSE ORDER BY closed_at DESC LIMIT ?`, string(StatusClosed), SimilarScan)
+	closed, err := s.closedTitles(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("similar issues: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 	var out []SimilarIssue
-	for rows.Next() {
-		var is SimilarIssue
-		if err := rows.Scan(&is.ID, &is.Title, &is.Priority); err != nil {
-			return nil, fmt.Errorf("similar issues: %w", err)
-		}
-		if is.ID == exclude {
+	for _, t := range closed {
+		if t.ID == exclude {
 			continue
 		}
-		shared, union := overlap(want, titleTokens(is.Title))
+		is := t.SimilarIssue
+		shared, union := overlap(want, t.tokens)
 		is.Score = float64(shared) / float64(union)
 		if shared >= 2 || (shared == 1 && is.Score >= 0.5) {
 			out = append(out, is)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("similar issues: %w", err)
 	}
 	// Stable: equal scores keep the most recently closed first.
 	slices.SortStableFunc(out, func(a, b SimilarIssue) int { return cmp.Compare(b.Score, a.Score) })

@@ -33,6 +33,12 @@ func insertDep(ctx context.Context, w *wtx, from, to IssueID, typ DepType) error
 	if n > 0 {
 		return nil
 	}
+	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM deps WHERE from_id = ?`, string(from)).Scan(&n); err != nil {
+		return fmt.Errorf("count deps: %w", err)
+	}
+	if n >= w.lim.Deps {
+		return fmt.Errorf("%w: issue %s has %d dependencies; an issue has at most %d dependencies", ErrInvalid, from, n, w.lim.Deps)
+	}
 	if typ.Blocking() {
 		if err := checkEdge(ctx, w.tx, from, to); err != nil {
 			return err

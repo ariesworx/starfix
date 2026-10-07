@@ -16,10 +16,11 @@ import (
 const defaultWho = "5m"
 
 func cmdWho(ctx context.Context, r *runner, args []string) error {
-	const usage = "who [--since DURATION]"
+	const usage = "who [--since DURATION] [-n N]"
 	fs := r.newFlags("who")
 	var in proto.WhoArgs
 	fs.StringVar(&in.Since, "since", "", "how far back to look (default 5m, at most 7d)")
+	fs.IntVar(&in.Limit, "n", 0, "show at most N agents (default 100, at most 500)")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
 		return err
@@ -65,5 +66,8 @@ func printWho(w io.Writer, since string, res proto.WhoResult) {
 			line += ", holds " + strings.Join(escAll(a.Claims), " ")
 		}
 		_, _ = fmt.Fprintln(w, line)
+	}
+	if res.More > 0 {
+		_, _ = fmt.Fprintf(w, "and %d more; narrow --since, or raise -n\n", res.More)
 	}
 }

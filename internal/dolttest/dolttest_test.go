@@ -110,3 +110,38 @@ func TestStartPortTaken(t *testing.T) {
 		t.Fatalf("ping the second server's database: %v", err)
 	}
 }
+
+// TestLockedDown checks that the test server is configured as the README's
+// quick start says a production one must be: NewDatabase's DSN logs in as
+// User, not root, and secure_file_priv names a directory.
+func TestLockedDown(t *testing.T) {
+	s := startOrSkip(t)
+	dsn, err := s.NewDatabase(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var user string
+	var priv sql.NullString
+	if err := db.QueryRowContext(t.Context(), "SELECT CURRENT_USER(), @@secure_file_priv").Scan(&user, &priv); err != nil {
+		t.Fatal(err)
+	}
+	if user != User+"@localhost" {
+		t.Errorf("NewDatabase DSN logs in as %q, want %s@localhost", user, User)
+	}
+	if !priv.Valid || priv.String == "" {
+		t.Errorf("secure_file_priv = %q (valid %v), want a directory", priv.String, priv.Valid)
+	}
+	var n int
+	if err := db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM information_schema.USER_PRIVILEGES WHERE GRANTEE = ?",
+		"'"+User+"'@'localhost'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%s holds %d global privileges, want none", User, n)
+	}
+}

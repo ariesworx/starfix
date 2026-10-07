@@ -273,6 +273,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 					return err
 				}
 				b, a := diff(before, after)
+				w.closedChanged = true
 				if err := w.event(ctx, OpIssueImport, string(in.ID), b, a); err != nil {
 					return err
 				}
@@ -295,6 +296,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 			if err != nil {
 				return err
 			}
+			w.closedChanged = true
 			return w.event(ctx, OpIssueImport, string(in.ID), nil, after)
 		}
 		return nil

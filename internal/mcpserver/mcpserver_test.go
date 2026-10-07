@@ -363,6 +363,8 @@ func TestErrorsNameTheNextStep(t *testing.T) {
 		{"acceptance dropped", proto.Errf(proto.CodeAcceptance, "tick them with `sfx accept sf-x 2`, or waive each with `sfx accept sf-x N --waive REASON`, then edit the text",
 			"the new acceptance text of sf-x drops items neither ticked nor waived: 2"),
 			"acceptance: the new acceptance text of sf-x drops items neither ticked nor waived: 2\nfix: the edit drops open acceptance items: keep them in the text, or tell the user they must be ticked or waived first"},
+		{"busy writing", proto.Errf(proto.CodeBusy, "wait 3s and retry", "alice is over the write limit (10 a second, bursts of 100)"),
+			"busy: alice is over the write limit (10 a second, bursts of 100)\nfix: the server is limiting your requests: wait a few seconds, then retry once; if it is refused again, tell the user, quoting the server: \"wait 3s and retry\""},
 		{"nothing ready", proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue", "nothing is ready to start"),
 			"not_found: nothing is ready to start\nfix: nothing is ready: call blocked to see why, or create an issue"},
 		{"dial", &dialError{err: proto.Errf(proto.CodeAuth, "send your public key to the starfix admin", "refused your SSH key")},
@@ -776,5 +778,19 @@ func TestWho(t *testing.T) {
 				t.Errorf("who agent = %+v", first)
 			}
 		})
+	}
+}
+
+func TestOmitted(t *testing.T) {
+	tests := []struct{ n, total, keep, want int }{
+		{n: 10, total: 25, keep: 10, want: 15}, // a page of the newest 10
+		{n: 25, total: 0, keep: 10, want: 15},  // protocol 1: every entry, no total
+		{n: 3, total: 3, keep: 10, want: 0},
+		{n: 0, total: 0, keep: 10, want: 0},
+	}
+	for _, tc := range tests {
+		if got := omitted(tc.n, tc.total, tc.keep); got != tc.want {
+			t.Errorf("omitted(%d, %d, %d) = %d, want %d", tc.n, tc.total, tc.keep, got, tc.want)
+		}
 	}
 }

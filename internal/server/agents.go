@@ -36,11 +36,11 @@ func who(ctx context.Context, s *Server, _ store.Actor, in proto.WhoArgs) (any, 
 		since = d
 	}
 	now := s.cfg.Store.Now()
-	agents, err := s.cfg.Store.Who(ctx, since)
+	agents, more, err := s.cfg.Store.WhoPage(ctx, since, in.Limit)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpWho, "", 0, err)
 	}
-	out := proto.WhoResult{Now: now, Agents: []proto.Agent{}}
+	out := proto.WhoResult{Now: now, Agents: []proto.Agent{}, More: more}
 	for _, a := range agents {
 		w := proto.Agent{Principal: a.Principal, Session: a.Session, Machine: a.Machine, Harness: a.Harness,
 			Started: a.Started, LastSeen: a.LastSeen}

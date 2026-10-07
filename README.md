@@ -122,29 +122,89 @@ trade-off.
 
 ## Quick start
 
-On the server, as the Unix user starfixd runs as (here `starfix`), with a
-Dolt sql-server on loopback:
+First lock Dolt down. A `dolt sql-server` started without a config lets
+`root` in from localhost with no password, grants it `FILE`, and leaves
+`secure_file_priv` empty, so any user on the host could skip starfixd,
+rewrite the event log as anyone, and read or write files as Dolt's user.
+starfixd refuses to start on such an account (below). Run Dolt under its own
+Unix user, listening on loopback and a socket, with file access off:
 
 ```sh
-go install github.com/ariesworx/starfix/cmd/starfixd@latest
+cat > /var/lib/dolt/config.yaml <<'YAML'
+data_dir: /var/lib/dolt/data
+listener:
+  host: 127.0.0.1                  # loopback only
+  port: 3306
+  socket: /run/dolt/dolt.sock
+system_variables:
+  secure_file_priv: /var/lib/dolt/no-files   # a directory that does not exist
+YAML
+dolt sql-server --config /var/lib/dolt/config.yaml   # under systemd, as the user dolt
+```
+
+Then, once, as Dolt's `root`, create starfix's database and an account
+with rights on it alone, and close `root`:
+
+```sql
+CREATE DATABASE starfix;
+CREATE USER 'starfix'@'localhost' IDENTIFIED BY 'PASSWORD';
+GRANT ALL ON starfix.* TO 'starfix'@'localhost';
+ALTER USER 'root'@'localhost' IDENTIFIED BY 'A-LONG-RANDOM-PASSWORD';  -- or DROP USER it
+```
+
+On the server, as the Unix user starfixd runs as (here `starfix`):
+
+```sh
+go install github.com/ariesworx/starfix/cmd/starfixd@latest   # then install it as /usr/local/bin/starfixd
 cat > /etc/starfix/starfixd.yaml <<'YAML'   # chmod 600: it holds the DSN
-dsn: starfix:PASSWORD@tcp(127.0.0.1:3306)/starfix
+dsn: starfix:PASSWORD@unix(/run/dolt/dolt.sock)/starfix
 project: 6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f   # any UUID; uuidgen | tr A-Z a-z
 socket: /run/starfix/starfixd.sock
 # systemd_unit: starfixd.service   # lets `starfixd upgrade` restart and health-check it
 # log_level: info                  # debug adds a line per request; warn, error
 # log_format: text                 # or json, for a log shipper
 # admins: [alice]                  # may change issues others hold and force a close
+# limits: {write_rate: 10, write_burst: 100}   # see "Limits"
 YAML
 starfixd serve        # run it under systemd
 ```
 
+Every command that opens the store (`serve`, `import-bd`, `export-bd`,
+`upgrade`) checks the account first and refuses, with the SQL above as the
+fix, when it is `root`, holds any privilege on `*.*` or `GRANT OPTION`, or
+when `secure_file_priv` is empty. On a developer's own machine,
+`--dev --allow-unsafe-dolt` lets a default Dolt through with a warning;
+`--allow-unsafe-dolt` is refused without `--dev`, and no config file or
+environment variable can set it.
+
 Give each developer one line in `~starfix/.ssh/authorized_keys`. The forced
-command fixes who they are; the client cannot choose:
+command, with an absolute path, fixes who they are; the client cannot
+choose:
 
 ```text
-restrict,command="starfixd stdio --principal alice" ssh-ed25519 AAAA… alice@example.com
+restrict,command="/usr/local/bin/starfixd stdio --principal alice" ssh-ed25519 AAAA… alice@example.com
 ```
+
+Harden sshd for that account too (OpenSSH; adjust the account name):
+
+```text
+# /etc/ssh/sshd_config.d/starfix.conf
+Match User starfix
+    AuthenticationMethods publickey
+    DisableForwarding yes         # no tunnel to Dolt, even from a line missing restrict
+    PermitTTY no
+# globally:
+MaxStartups 10:30:60          # drop unauthenticated floods early
+PerSourcePenalties yes        # OpenSSH 9.8+: back off sources that fail or crash sessions
+```
+
+Lock the account's password (`passwd -l starfix`), and rate-limit new
+connections at the firewall (`ufw limit 22/tcp`). Do not add a
+`ForceCommand`: it would override each key's `command=` and so its
+principal; keep every key line in the `restrict,command=` form instead.
+For a team on known machines, a WireGuard tunnel in front of port 22 is a
+good optional layer: sshd then listens only on the tunnel's address, and
+nothing on the internet reaches it. starfix neither needs nor configures it.
 
 In the repository, commit a `.starfix.yaml`. It holds no secrets:
 
@@ -215,7 +275,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `inbox` | List your unread inbox, newest first: lost claims, handoffs to you, mentions, assignments (`--all` includes read ones, `-n N`); `--ack ID`, repeatable or comma-separated, or `--ack-all` marks them read |
 | `watch` | Print your inbox items as they happen, until interrupted (ctrl-c exits 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it fell behind and missed items (`sfx inbox` lists them) |
 | `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline. Only from your own terminal: the server refuses it from an agent's session (`STARFIX_SESSION` or a harness session id set) |
-| `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds. Every principal sees every machine name |
+| `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds; at most 100 (`-n N`, up to 500), then a count of the rest. Every principal sees every machine name |
 | `create` | Create an issue and print its id; similar closed issues, if any, go to stderr |
 | `show` | Show an issue, its dependencies, acceptance checklist and similar closed issues (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
@@ -225,8 +285,8 @@ command's usage; `--json` prints one JSON document, errors included.
 | `close`, `reopen` | Close or reopen an issue. Close is refused while an acceptance item is open; `--force`, for admins only, closes anyway and records the open items in the event |
 | `dep` | Add or remove a dependency: FROM depends on TO |
 | `label` | Add or remove labels |
-| `comment`, `comments` | Add a comment; list an issue's comments |
-| `history` | List an issue's changes |
+| `comment`, `comments` | Add a comment; list an issue's comments, all of them, read a page at a time (`-n N`: only the newest N) |
+| `history` | List an issue's changes, as `comments` (`-n N`) |
 | `digest` | Summarize a window (`--since 24h`, `7d`, a date or a time): closed, started, in progress, stalled, blocked, handed off, created and discovered; `--by P`, `--label L` filter it |
 | `prime` | A session's orientation: your in-progress issues, inbox, top ready work, version notices; `--hook[=AGENT]` for an agent's SessionStart hook (bare `--hook` is Claude Code's) |
 | `mcp` | The MCP server for agents, on stdin and stdout |
@@ -239,7 +299,8 @@ command's usage; `--json` prints one JSON document, errors included.
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
 refused. A refusal because someone else holds the issue, or because the
 change is for admins, exits 1 like any other; `--json` gives its code,
-`forbidden`.
+`forbidden`. So does one past the server's limits (`busy`, with how long to
+wait; see Limits).
 
 #### Untrusted text
 
@@ -266,7 +327,7 @@ keeps it from acting on a terminal or posing as its own output:
 
 | Command | Does |
 |---|---|
-| `serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]` | Run the daemon. Logs go to stderr (journald under systemd): connections and successful requests at `debug`, refusals, handshake failures and expired claims at `info`, internal errors at `error`. Also `$STARFIXD_LOG_LEVEL`, `$STARFIXD_LOG_FORMAT` |
+| `serve [--dev [--allow-unsafe-dolt]] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]` | Run the daemon. Logs go to stderr (journald under systemd): connections and successful requests at `debug`, refusals, handshake failures and expired claims at `info` (refusals at most `refusal_logs` a minute per principal, then one count), internal errors at `error`. Also `$STARFIXD_LOG_LEVEL`, `$STARFIXD_LOG_FORMAT` |
 | `stdio --principal NAME` | sshd forced command: bridge one session to the daemon |
 | `import-bd [--dry-run] [--json] FILE` | Import a bd `issues.jsonl` (`-` for stdin) |
 | `export-bd [-o FILE]` | Write the store in bd's JSONL format |
@@ -275,7 +336,49 @@ keeps it from acting on a terminal or posing as its own output:
 
 Settings come from flags, then `STARFIXD_*` environment variables, then
 `/etc/starfix/starfixd.yaml`, then defaults. A password is refused on the
-command line, and a config file that holds one must be mode 0600.
+command line, and a config file that holds one must be mode 0600. Each
+command that opens the store also takes `--dev --allow-unsafe-dolt`
+(Quick start).
+
+#### Limits
+
+`limits:` in the config file bounds what one request or one principal
+can make the daemon do. Leave a field out for its default:
+
+| Setting | Default | Bounds |
+|---|---|---|
+| `labels_per_issue` | 50 | Labels on one issue, and so in one `create` |
+| `acceptance_items` | 200 | Items in acceptance text, and item numbers in one `accept` or `finish` |
+| `deps_per_issue` | 200 | Edges out of one issue |
+| `sessions_per_principal` | 256 | A principal's rows in the `who` registry; a new session past it drops the least recently seen |
+| `agent_keep` | `7d` | How long a registry row not seen is kept; a principal's latest row is always kept, so it stays mentionable |
+| `inbox_unread` | 1000 | A principal's unread inbox items; past it the oldest are marked read (still under `inbox --all`) |
+| `notices_per_minute` | 10 | Mentions, assignments and handoffs one principal can send another a minute; the rest are not delivered. Lost claims always are |
+| `inbox_keep` | `30d` | How long a read inbox item is kept |
+| `conns` | 1024 | Connections past the handshake; twice it caps sockets still in it |
+| `conns_per_principal` | 32 | One principal's connections |
+| `idle_timeout` | `10m` | A connection that sends nothing this long is closed with a note, unless it watches its inbox (`sfx mcp` and `sfx watch` do) |
+| `write_rate`, `write_burst` | 10, 100 | Each principal's write token bucket: writes a second, and how many at once. Reads are not counted |
+| `refusal_logs` | 20 | Refusal log lines per principal a minute |
+
+A request past a per-request cap is refused with `invalid`; a connection
+or write past a rate or connection cap with `busy`, whose fix says how
+long to wait. Text fields were already capped (titles 500 bytes, names
+255, bodies and comments 64 KiB). Reads come a page at a time so no reply
+can pass the 4 MiB frame: `comments` and `history` return the newest page
+(up to 100 entries, 500 with a limit, about 1 MiB of text) and a cursor to
+the one before, which `sfx` follows (`-n N` shows only the newest N);
+`who` lists at most 100 agents and counts the rest; `show` lists at most
+200 edges and `blocked` 50 blockers an issue, each counting the rest.
+Similar-issue lookups read closed titles from a cache refreshed on close
+and reopen, or after a minute.
+
+The event log is never pruned: it is the history, and Dolt keeps every
+version of it. An event keeps a text over 8 KiB as its first 512 bytes,
+its length and its SHA-256, so an edit loop over long fields grows the log
+by about a kilobyte a write, not by the text. Watch the Dolt data
+directory's size, and run `dolt gc` in a quiet hour if it grows; the
+write rate limit bounds how fast one principal can grow it.
 
 Admins are principals listed under `admins:` in the config file, or in
 `$STARFIXD_ADMINS` (comma-separated); `serve` reads them when it starts.
