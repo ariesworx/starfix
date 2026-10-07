@@ -19,15 +19,20 @@ import (
 	"github.com/ariesworx/starfix/internal/version"
 )
 
+// releasesURL lists the releases, for fix lines.
 const releasesURL = "https://github.com/" + release.Repo + "/releases"
 
 // upgradeDeps is everything `starfixd upgrade` reaches outside the
 // process, so tests can replace each piece.
 type upgradeDeps struct {
-	current      string
+	// current is the running version.
+	current string
+	// goos and goarch are the platform whose build is fetched.
 	goos, goarch string
-	euid         func() int
-	releases     *release.Client
+	// euid is the effective user id; upgrade refuses root.
+	euid func() int
+	// releases finds, downloads and verifies releases.
+	releases *release.Client
 	// exe is the binary to replace; "" means this executable.
 	exe string
 	// check runs the staged binary and wants it to report tag.
@@ -43,6 +48,9 @@ type upgradeDeps struct {
 	healthWait, healthEvery time.Duration
 }
 
+// osUpgradeDeps are the real upgradeDeps: this build's version and
+// platform, GitHub's releases checked against the built-in keys,
+// systemctl, and the daemon's socket.
 func osUpgradeDeps() upgradeDeps {
 	return upgradeDeps{
 		current: version.Version, goos: runtime.GOOS, goarch: runtime.GOARCH, euid: os.Geteuid,
@@ -181,6 +189,8 @@ func upgradeCmd(ctx context.Context, env adminEnv, d upgradeDeps, args []string)
 		rel.Tag, herr, cur, unit, releasesURL)
 }
 
+// targetWord names the release --check compares with: the --to target, or
+// the latest.
 func targetWord(to string) string {
 	if to != "" {
 		return "target"
@@ -188,6 +198,8 @@ func targetWord(to string) string {
 	return "latest"
 }
 
+// upgradeRollback restores the binary the last upgrade replaced, then
+// restarts and health-checks unit when there is one.
 func upgradeRollback(ctx context.Context, env adminEnv, d upgradeDeps, s server.Settings, unit, exe string) error {
 	swap := release.Swap{Exe: exe, GOOS: d.goos}
 	if err := swap.Rollback(); err != nil {
@@ -255,8 +267,10 @@ func systemctlRestart(ctx context.Context, unit string) error {
 	return nil
 }
 
-// backupStore makes the Dolt tag starfix-<old version> on the daemon's
-// database, covering every write so far.
+// backupStore commits every write so far to the daemon's database and tags
+// the commit tag (starfix-<old version>). It returns the tag made: tag, or
+// tag-<UTC time> when tag already marks an older commit
+// (store.Store.BackupTag).
 func backupStore(ctx context.Context, env adminEnv, fl server.Settings, cfgPath, tag string) (string, error) {
 	st, err := openAdminStore(ctx, env, fl, cfgPath)
 	if err != nil {
@@ -266,6 +280,8 @@ func backupStore(ctx context.Context, env adminEnv, fl server.Settings, cfgPath,
 	return name, closeStore(err, st)
 }
 
+// fetchFailure explains a failed fetch of release tag, with a fix for each
+// kind of failure. Nothing has changed yet when it is called.
 func fetchFailure(tag string, err error) error {
 	switch {
 	case errors.Is(err, release.ErrNoKey):
@@ -278,6 +294,7 @@ func fetchFailure(tag string, err error) error {
 	return fmt.Errorf("download starfixd %s: %w; fix: nothing was changed; check the network (HTTPS_PROXY is honored) and retry", tag, err)
 }
 
+// swapFailure explains a failed install or rollback of exe.
 func swapFailure(exe string, err error) error {
 	if errors.Is(err, fs.ErrPermission) {
 		return fmt.Errorf("cannot replace %s: %w; fix: run as the user who owns %s (the user starfixd runs as)", exe, err, filepath.Dir(exe))

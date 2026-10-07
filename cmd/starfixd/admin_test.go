@@ -149,10 +149,9 @@ func TestImportBDFailures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := admin(t, dsn, tc.stdin, importBD, tc.args...)
-			var ue usageError
 			switch {
 			case tc.usage:
-				if !errors.As(r.err, &ue) {
+				if _, ok := errors.AsType[usageError](r.err); !ok {
 					t.Errorf("err = %v, want a usage error", r.err)
 				}
 			case tc.code:

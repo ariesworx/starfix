@@ -1,10 +1,10 @@
 // Command starfixd is the starfix server.
 //
-//	starfixd serve [--dev [--allow-unsafe-dolt]] [--config FILE] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
-//	starfixd stdio --principal NAME [--socket PATH]
-//	starfixd import-bd [--dry-run] [--json] FILE|-
-//	starfixd export-bd [-o FILE]
-//	starfixd upgrade [--check] [--to vX.Y.Z] [--rollback] [--restart]
+//	starfixd serve [--dev [--allow-unsafe-dolt]] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
+//	starfixd stdio --principal NAME [--config FILE] [--socket PATH]
+//	starfixd import-bd [--config FILE] [--dsn DSN] [--principal NAME] [--dry-run] [--json] FILE|-
+//	starfixd export-bd [--config FILE] [--dsn DSN] [-o FILE]
+//	starfixd upgrade [--check] [--to vX.Y.Z] [--rollback] [--restart] [--config FILE] [--dsn DSN] [--socket PATH]
 //	starfixd version
 //
 // serve is the long-running daemon: it owns the Dolt store and serves the
@@ -51,6 +51,8 @@ Every command that opens the store refuses a Dolt account that is root,
 holds rights beyond its database, or a server whose secure_file_priv is
 empty; --dev --allow-unsafe-dolt allows it on a developer's own machine.`
 
+// usageError is a mistake on the command line: main prints it with the
+// usage and exits 2.
 type usageError string
 
 func (e usageError) Error() string { return string(e) }
@@ -67,8 +69,7 @@ func main() {
 		os.Exit(int(code))
 	}
 	fmt.Fprintf(os.Stderr, "starfixd: %v\n", err)
-	var ue usageError
-	if errors.As(err, &ue) {
+	if _, ok := errors.AsType[usageError](err); ok {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
@@ -100,6 +101,8 @@ func run(ctx context.Context, args []string) error {
 	return usageError(fmt.Sprintf("unknown command %q", args[0]))
 }
 
+// flags parses serve's or stdio's flags: --config into cfg, --socket into
+// s, and those extra registers. Positional arguments are refused.
 func flags(name string, args []string, s *server.Settings, cfg *string, extra func(*flag.FlagSet)) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -115,6 +118,7 @@ func flags(name string, args []string, s *server.Settings, cfg *string, extra fu
 	return nil
 }
 
+// serve runs `starfixd serve`, the daemon, until ctx is done.
 func serve(ctx context.Context, args []string) error {
 	var fl server.Settings
 	var cfgPath string
@@ -168,6 +172,8 @@ func serve(ctx context.Context, args []string) error {
 	return errors.Join(err, st.Close())
 }
 
+// stdio runs `starfixd stdio`, the forced command: it bridges this
+// process's stdin and stdout to the daemon's socket.
 func stdio(ctx context.Context, args []string) error {
 	var fl server.Settings
 	var cfgPath, principal string
