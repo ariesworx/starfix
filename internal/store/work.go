@@ -132,7 +132,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if err := validIdem(f.IdempotencyKey); err != nil {
 		return Issue{}, nil, err
 	}
-	if err := f.Accept.validate(); err != nil {
+	if err := f.Accept.validate(s.opts.Limits.AcceptanceItems); err != nil {
 		return Issue{}, nil, err
 	}
 	if len(f.Discovered) > MaxDiscovered {

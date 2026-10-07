@@ -1,8 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-sql-driver/mysql"
 )
@@ -36,6 +40,15 @@ type Options struct {
 	// Admins are the principals who may change issues others hold and
 	// force a close (authz.go). None may be reserved.
 	Admins []string
+	// AllowUnsafeAccount opens the store even when the database account
+	// is root, holds rights beyond its database, or the server leaves
+	// secure_file_priv empty (account.go). Off, Open refuses such an
+	// account with an *UnsafeAccountError; starfixd turns it on only for
+	// --dev --allow-unsafe-dolt.
+	AllowUnsafeAccount bool
+	// Limits bound requests and per-principal rows (limits.go). Zero
+	// fields take DefaultLimits.
+	Limits Limits
 
 	// tick, when set by tests, replaces the committer's CommitInterval
 	// ticker, so a test decides when each commit happens.
@@ -56,6 +69,8 @@ type Store struct {
 	// watch holds the open inbox watches; publish feeds them after each
 	// commit that wrote inbox items.
 	watch watchers
+	// similar caches closed titles for SimilarClosed (similar.go).
+	similar similarCache
 
 	// beforeCommit, when set by tests, runs inside every write transaction
 	// just before COMMIT.
@@ -88,6 +103,10 @@ func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	if err := checkAdmins(opts.Admins); err != nil {
 		return nil, err
 	}
+	if err := opts.Limits.Validate(); err != nil {
+		return nil, err
+	}
+	opts.Limits = opts.Limits.withDefaults()
 	opts.Admins = slices.Clone(opts.Admins)
 	if opts.CommitInterval == 0 {
 		opts.CommitInterval = time.Second
@@ -120,6 +139,13 @@ func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	s.r.SetMaxOpenConns(opts.Readers)
 	s.r.SetMaxIdleConns(opts.Readers)
 
+	if err := checkAccount(ctx, s.w); err != nil {
+		var ua *UnsafeAccountError
+		if !opts.AllowUnsafeAccount || !errors.As(err, &ua) {
+			return nil, errors.Join(err, s.w.Close(), s.r.Close())
+		}
+		opts.Logger.Warn("dolt account is unsafe; allowed for development", "account", ua.User, "problems", strings.Join(ua.Problems, "; "))
+	}
 	n, err := migrate(ctx, s.w, s.now())
 	if err != nil {
 		return nil, errors.Join(err, s.w.Close(), s.r.Close())
@@ -233,6 +259,12 @@ type wtx struct {
 	pending []pendingEvent
 	// idem is the operation's idempotency stamp, when it has a key.
 	idem *idemStamp
+	// lim are the store's limits.
+	lim Limits
+	// closedChanged is set when the attempt closed or reopened an issue,
+	// or changed a closed one, so the similar-title cache is stale once
+	// it commits.
+	closedChanged bool
 }
 
 // exec runs a mutating statement. It refuses an UPDATE that does not set
@@ -342,7 +374,75 @@ func jsonOrNull(v any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode event state: %w", err)
 	}
+	if b, err = compactState(b); err != nil {
+		return nil, err
+	}
 	return string(b), nil
+}
+
+// Event text bounds (S-10). An event keeps the before and after of what
+// changed, and Dolt keeps every version, so an edit loop over four 64 KiB
+// fields grew the log by 256 KiB a write. A string longer than
+// EventTextMax is kept as its first EventTextKeep bytes, its length and
+// its SHA-256: enough to tell what changed and to check a copy, while the
+// text itself lives in the issue or comment row.
+const (
+	EventTextMax  = 8 << 10
+	EventTextKeep = 512
+)
+
+// compactState shortens every string in the JSON document b longer than
+// EventTextMax, keeping it a string so readers decode it as before.
+func compactState(b []byte) ([]byte, error) {
+	if len(b) <= EventTextMax {
+		return b, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, fmt.Errorf("compact event state: %w", err)
+	}
+	changed := false
+	var walk func(any) any
+	walk = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			if len(x) > EventTextMax {
+				changed = true
+				return elide(x)
+			}
+		case map[string]any:
+			for k, e := range x {
+				x[k] = walk(e)
+			}
+		case []any:
+			for i, e := range x {
+				x[i] = walk(e)
+			}
+		}
+		return v
+	}
+	v = walk(v)
+	if !changed {
+		return b, nil
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("compact event state: %w", err)
+	}
+	return out, nil
+}
+
+// elide is s's first EventTextKeep bytes, on a rune boundary, then its
+// length and SHA-256.
+func elide(s string) string {
+	n := EventTextKeep
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	sum := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%s… [%d bytes, sha256:%s]", s[:n], len(s), hex.EncodeToString(sum[:]))
 }
 
 // write runs fn in a transaction on the writer connection, retrying when a
@@ -376,7 +476,7 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
-	w := &wtx{tx: tx, actor: actor, admin: s.IsAdmin(actor.Principal), now: s.now()}
+	w := &wtx{tx: tx, actor: actor, admin: s.IsAdmin(actor.Principal), now: s.now(), lim: s.opts.Limits}
 	if err := fn(w); err != nil {
 		return errors.Join(err, rollback(tx))
 	}
@@ -396,6 +496,9 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	}
 	if w.mutated {
 		s.dirty.Store(true)
+	}
+	if w.closedChanged {
+		s.similar.invalidate()
 	}
 	if len(w.inbox) > 0 {
 		s.publish(w.inbox)

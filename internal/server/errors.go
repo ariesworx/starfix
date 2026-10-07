@@ -151,7 +151,8 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 	}
 	// Only issue.* events move rev; labels, deps and comments do not.
 	by := ""
-	if evs, err := s.cfg.Store.History(ctx, store.IssueID(id)); err == nil {
+	if page, err := s.cfg.Store.HistoryPage(ctx, store.IssueID(id), "", 50); err == nil {
+		evs := page.Events
 		for i := len(evs) - 1; i >= 0; i-- {
 			if strings.HasPrefix(string(evs[i].Op), "issue.") {
 				by = " by " + evs[i].Actor.Principal

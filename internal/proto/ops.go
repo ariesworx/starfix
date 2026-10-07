@@ -21,8 +21,8 @@ const (
 	OpLabelAdd = "label.add" // LabelArgs → Empty
 	OpLabelRm  = "label.rm"  // LabelArgs → Empty
 	OpComment  = "comment"   // CommentArgs → CommentResult
-	OpComments = "comments"  // IDArgs → CommentsResult
-	OpHistory  = "history"   // IDArgs → HistoryResult
+	OpComments = "comments"  // PageArgs → CommentsResult
+	OpHistory  = "history"   // PageArgs → HistoryResult
 	OpStart    = "start"     // StartArgs → StartResult
 	OpFinish   = "finish"    // FinishArgs → FinishResult
 	OpHandoff  = "handoff"   // HandoffArgs → WriteResult
@@ -33,9 +33,11 @@ const (
 )
 
 // WhoArgs selects the agents seen within Since, a duration such as 5m,
-// 2h or 1d (empty takes 5m, at most 7d).
+// 2h or 1d (empty takes 5m, at most 7d), at most Limit of them (0 takes
+// the server's default, 100; at most 500).
 type WhoArgs struct {
 	Since string `json:"since,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 // Agent is one session in the registry and the issues it holds.
@@ -50,10 +52,11 @@ type Agent struct {
 }
 
 // WhoResult lists agents, most recently seen first, as of the server's
-// Now.
+// Now. More counts the agents seen but left out by the limit.
 type WhoResult struct {
 	Now    time.Time `json:"now"`
 	Agents []Agent   `json:"agents"`
+	More   int       `json:"more,omitempty"`
 }
 
 // Issue is the full form of an issue, returned by show.
@@ -179,7 +182,17 @@ type ShowResult struct {
 	// Similar are up to three similar closed issues, best first
 	// (protocol 2).
 	Similar []Summary `json:"similar,omitempty"`
+	// DepsMore counts the edges left out of Deps, which holds at most
+	// MaxShowDeps (protocol 2).
+	DepsMore int `json:"deps_more,omitempty"`
 }
+
+// MaxShowDeps is the most edges show returns; MaxBlockers the most
+// blockers blocked lists for one issue.
+const (
+	MaxShowDeps = 200
+	MaxBlockers = 50
+)
 
 // AcceptanceItem is one acceptance criterion. State is empty while open,
 // "ticked" or "waived" (with Reason). By and At say who set it and when;
@@ -239,6 +252,9 @@ type BlockedIssue struct {
 	Summary
 	BlockedBy []string `json:"blocked_by"`
 	Via       string   `json:"via,omitempty"`
+	// More counts the blockers left out of BlockedBy, which holds at most
+	// MaxBlockers (protocol 2).
+	More int `json:"more,omitempty"`
 }
 
 // BlockedResult lists blocked issues.
@@ -312,14 +328,31 @@ type IDArgs struct {
 	ID string `json:"id"`
 }
 
-// CommentsResult lists comments, oldest first.
-type CommentsResult struct {
-	Comments []Comment `json:"comments"`
+// PageArgs reads an issue's comments or history a page at a time, newest
+// page first: at most Limit entries (0 takes the server's default, 100;
+// at most 500, and about 1 MiB of text) from before the cursor Before,
+// which is a result's Earlier; empty starts at the newest (protocol 2).
+type PageArgs struct {
+	ID     string `json:"id"`
+	Limit  int    `json:"limit,omitempty"`
+	Before string `json:"before,omitempty"`
 }
 
-// HistoryResult lists events, oldest first.
+// CommentsResult lists one page of comments, oldest first. Earlier is
+// the cursor of the page before it, empty when there is none; Total
+// counts all the issue's comments (protocol 2).
+type CommentsResult struct {
+	Comments []Comment `json:"comments"`
+	Earlier  string    `json:"earlier,omitempty"`
+	Total    int       `json:"total,omitempty"`
+}
+
+// HistoryResult lists one page of events, oldest first, as
+// CommentsResult.
 type HistoryResult struct {
-	Events []Event `json:"events"`
+	Events  []Event `json:"events"`
+	Earlier string  `json:"earlier,omitempty"`
+	Total   int     `json:"total,omitempty"`
 }
 
 // StartArgs takes an issue: the one named, or the top ready one. Lease is

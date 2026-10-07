@@ -48,6 +48,14 @@ type Settings struct {
 	// nothing over the protocol reads or changes them. None may be
 	// reserved (store.ReservedPrincipals).
 	Admins []string `yaml:"admins"`
+	// AllowUnsafeDolt opens the store even when its Dolt account is
+	// unsafe (store.Options.AllowUnsafeAccount, S-2). Only a command-line
+	// flag sets it, and only with --dev (decision D3); no config file or
+	// environment variable can.
+	AllowUnsafeDolt bool `yaml:"-"`
+	// Limits bound what one principal can make the server do (limits.go).
+	// Zero fields take the defaults.
+	Limits Limits `yaml:"limits"`
 }
 
 // UnitPattern is what a systemd unit name may look like. It cannot start
@@ -108,6 +116,8 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 			}
 		}
 	}
+	out.AllowUnsafeDolt = flags.AllowUnsafeDolt
+	out.Limits = file.Limits
 	out.Admins = file.Admins
 	if v := getenv(EnvAdmins); v != "" {
 		out.Admins = nil
@@ -122,6 +132,10 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 			return Settings{}, fmt.Errorf("admin %q is not a principal name, or is reserved for the server; fix: list the admins' principal names under admins: or in %s", a, EnvAdmins)
 		}
 	}
+	if err := out.Limits.Validate(); err != nil {
+		return Settings{}, err
+	}
+	out.Limits = out.Limits.WithDefaults()
 	if out.SystemdUnit != "" && !UnitPattern.MatchString(out.SystemdUnit) {
 		return Settings{}, fmt.Errorf("systemd_unit %q is not a unit name; fix: set it to the service's name, for example starfixd.service", out.SystemdUnit)
 	}

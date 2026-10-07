@@ -236,6 +236,9 @@ func printIssue(w io.Writer, s proto.ShowResult) {
 	if len(in) > 0 {
 		p("needed by: %s\n", strings.Join(in, ", "))
 	}
+	if s.DepsMore > 0 {
+		p("(%d more dependencies not shown)\n", s.DepsMore)
+	}
 	if is.Body != "" {
 		p("\n%s\n", is.Body)
 	}
@@ -370,6 +373,9 @@ func printBlocked(w io.Writer, issues []proto.BlockedIssue) {
 	printSummaries(w, sums, func(i int) string {
 		b := issues[i]
 		s := "\tblocked by " + strings.Join(escAll(b.BlockedBy), ", ")
+		if b.More > 0 {
+			s += fmt.Sprintf(" and %d more", b.More)
+		}
 		if b.Via != "" {
 			s += " (via " + esc(b.Via) + ")"
 		}
@@ -568,9 +574,44 @@ func cmdComment(ctx context.Context, r *runner, args []string) error {
 	return nil
 }
 
+// pageFlag registers -n, the newest entries to show (0: all).
+func pageFlag(r *runner, name string) (*flag.FlagSet, *int) {
+	fs := r.newFlags(name)
+	n := fs.Int("n", 0, "show only the newest N (default all)")
+	return fs, n
+}
+
+// pages reads an issue's comments or history newest page first, until it
+// has want entries (0: all), and returns them oldest first with how many
+// earlier ones it left out. page asks for one page before the cursor and
+// returns its entries, the cursor of the page before it and the total.
+func pages[T any](want int, page func(before string, limit int) ([]T, string, int, error)) ([]T, int, error) {
+	var all []T
+	before, total := "", 0
+	for {
+		limit := 0
+		if want > 0 {
+			limit = want - len(all)
+		}
+		got, earlier, n, err := page(before, limit)
+		if err != nil {
+			return nil, 0, err
+		}
+		all, total = append(got, all...), max(n, total)
+		if earlier == "" || (want > 0 && len(all) >= want) {
+			break
+		}
+		before = earlier
+	}
+	if want > 0 && len(all) > want {
+		all = all[len(all)-want:]
+	}
+	return all, max(total-len(all), 0), nil
+}
+
 func cmdComments(ctx context.Context, r *runner, args []string) error {
-	const usage = "comments ID"
-	fs := r.newFlags("comments")
+	const usage = "comments ID [-n N]"
+	fs, n := pageFlag(r, "comments")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
 		return err
@@ -579,15 +620,22 @@ func cmdComments(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	var out proto.CommentsResult
-	if err := r.call(ctx, proto.OpComments, proto.IDArgs{ID: id}, &out); err != nil {
+	cs, earlier, err := pages(*n, func(before string, limit int) ([]proto.Comment, string, int, error) {
+		var out proto.CommentsResult
+		err := r.call(ctx, proto.OpComments, proto.PageArgs{ID: id, Before: before, Limit: limit}, &out)
+		return out.Comments, out.Earlier, out.Total, err
+	})
+	if err != nil {
 		return err
 	}
 	if r.json {
-		r.emit(out)
+		r.emit(proto.CommentsResult{Comments: cs, Total: len(cs) + earlier})
 		return nil
 	}
-	printComments(r.env.Stdout, out.Comments)
+	if earlier > 0 {
+		_, _ = fmt.Fprintf(r.env.Stdout, "(%d earlier not shown; -n 0 shows all)\n\n", earlier)
+	}
+	printComments(r.env.Stdout, cs)
 	return nil
 }
 
@@ -607,8 +655,8 @@ func printComments(w io.Writer, cs []proto.Comment) {
 }
 
 func cmdHistory(ctx context.Context, r *runner, args []string) error {
-	const usage = "history ID"
-	fs := r.newFlags("history")
+	const usage = "history ID [-n N]"
+	fs, n := pageFlag(r, "history")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
 		return err
@@ -617,15 +665,22 @@ func cmdHistory(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	var out proto.HistoryResult
-	if err := r.call(ctx, proto.OpHistory, proto.IDArgs{ID: id}, &out); err != nil {
+	evs, earlier, err := pages(*n, func(before string, limit int) ([]proto.Event, string, int, error) {
+		var out proto.HistoryResult
+		err := r.call(ctx, proto.OpHistory, proto.PageArgs{ID: id, Before: before, Limit: limit}, &out)
+		return out.Events, out.Earlier, out.Total, err
+	})
+	if err != nil {
 		return err
 	}
 	if r.json {
-		r.emit(out)
+		r.emit(proto.HistoryResult{Events: evs, Total: len(evs) + earlier})
 		return nil
 	}
-	return printHistory(r.env.Stdout, out.Events)
+	if earlier > 0 {
+		_, _ = fmt.Fprintf(r.env.Stdout, "(%d earlier not shown; -n 0 shows all)\n", earlier)
+	}
+	return printHistory(r.env.Stdout, evs)
 }
 
 // printHistory prints one line per event.

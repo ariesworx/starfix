@@ -91,6 +91,8 @@ type daemonOpts struct {
 	now func() time.Time
 	// admins are the store's admins.
 	admins []string
+	// limits are the daemon's limits, the store's included.
+	limits server.Limits
 }
 
 func newWorld(t *testing.T, o daemonOpts) *world {
@@ -121,12 +123,13 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 			t.Fatal(err)
 		}
 		w.dsn = dsn
-		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now, Admins: o.admins})
+		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now, Admins: o.admins,
+			Limits: o.limits.Limits})
 		if err != nil {
 			t.Fatal(err)
 		}
 		srv, err := server.New(server.Config{Store: st, Project: project, Version: "v0.2.0",
-			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest, ReapInterval: reap})
+			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest, ReapInterval: reap, Limits: o.limits})
 		if err != nil {
 			t.Fatal(err)
 		}

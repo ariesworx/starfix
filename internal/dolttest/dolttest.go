@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -34,6 +33,12 @@ func required() bool {
 
 // Server is a running dolt sql-server on a loopback port. Connections go
 // through its unix socket, which only this server can have created.
+//
+// It is configured the way the README's quick start locks Dolt down:
+// secure_file_priv names a directory that does not exist, and NewDatabase
+// hands out the DSN of User, an account with rights on that database
+// only, never root's, so the tests run through the same account check
+// (store.Options.AllowUnsafeAccount) as a production server.
 type Server struct {
 	Port   int
 	socket string
@@ -119,13 +124,35 @@ func Start(ctx context.Context, dir string) (*Server, error) {
 	return nil, lastErr
 }
 
+// User is the least-privileged account NewDatabase's DSNs log in as.
+const User = "starfix"
+
+// config is the sql-server configuration: loopback and a unix socket,
+// and secure_file_priv set to a directory that does not exist, so
+// LOAD_FILE and INTO OUTFILE reach no file even for an account with FILE.
+const config = `log_level: info
+data_dir: %q
+cfg_dir: %q
+listener:
+  host: 127.0.0.1
+  port: %d
+  socket: %q
+system_variables:
+  secure_file_priv: %q
+`
+
 func launch(ctx context.Context, bin string, env []string, data string, port int, dir, socket string) (*Server, error) {
 	logf, err := os.Create(filepath.Join(dir, "server.log")) //nolint:gosec // test temp dir
 	if err != nil {
 		return nil, fmt.Errorf("dolttest: %w", err)
 	}
-	cmd := exec.Command(bin, "sql-server", "--host", "127.0.0.1", "--port", strconv.Itoa(port), //nolint:gosec // dolt from PATH
-		"--socket", socket, "--data-dir", data)
+	cfg := filepath.Join(dir, "config.yaml")
+	body := fmt.Sprintf(config, data, filepath.Join(dir, "doltcfg"), port, socket, filepath.Join(dir, "no-such-dir"))
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		_ = logf.Close()
+		return nil, fmt.Errorf("dolttest: %w", err)
+	}
+	cmd := exec.Command(bin, "sql-server", "--config", cfg) //nolint:gosec // dolt from PATH
 	cmd.Env = env
 	cmd.Stdout = logf
 	cmd.Stderr = logf
@@ -144,6 +171,9 @@ func launch(ctx context.Context, bin string, env []string, data string, port int
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if err := db.PingContext(ctx); err == nil {
+			if _, err := db.ExecContext(ctx, "CREATE USER IF NOT EXISTS '"+User+"'@'localhost'"); err != nil {
+				return nil, errors.Join(fmt.Errorf("dolttest: create user: %w", err), s.Stop())
+			}
 			return s, nil
 		}
 		select {
@@ -172,8 +202,14 @@ func (s *Server) rootDSN(db string) string {
 	return fmt.Sprintf("root@unix(%s)/%s", s.socket, db)
 }
 
-// NewDatabase creates an empty database with a unique name and returns its
-// DSN.
+// RootDSN is the DSN of root on database db (empty for none): Dolt's
+// default superuser, which tests use to show that an unsafe account is
+// refused.
+func (s *Server) RootDSN(db string) string { return s.rootDSN(db) }
+
+// NewDatabase creates an empty database with a unique name and returns the
+// DSN of User on it, who has every right on that database and none
+// elsewhere.
 func (s *Server) NewDatabase(ctx context.Context) (string, error) {
 	name := fmt.Sprintf("t%d", s.n.Add(1))
 	db, err := sql.Open("mysql", s.rootDSN(""))
@@ -184,7 +220,10 @@ func (s *Server) NewDatabase(ctx context.Context) (string, error) {
 	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
 		return "", fmt.Errorf("dolttest: create database: %w", err)
 	}
-	return s.rootDSN(name), nil
+	if _, err := db.ExecContext(ctx, "GRANT ALL ON "+name+".* TO '"+User+"'@'localhost'"); err != nil {
+		return "", fmt.Errorf("dolttest: grant: %w", err)
+	}
+	return fmt.Sprintf("%s@unix(%s)/%s", User, s.socket, name), nil
 }
 
 // Stop shuts the server down.

@@ -1,6 +1,6 @@
 // Command starfixd is the starfix server.
 //
-//	starfixd serve [--dev] [--config FILE] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
+//	starfixd serve [--dev [--allow-unsafe-dolt]] [--config FILE] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
 //	starfixd stdio --principal NAME [--socket PATH]
 //	starfixd import-bd [--dry-run] [--json] FILE|-
 //	starfixd export-bd [-o FILE]
@@ -34,7 +34,7 @@ import (
 )
 
 const usage = `usage:
-  starfixd serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
+  starfixd serve [--dev [--allow-unsafe-dolt]] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
   starfixd stdio --principal NAME [--config FILE] [--socket PATH]
   starfixd import-bd [--config FILE] [--dsn DSN] [--principal NAME] [--dry-run] [--json] FILE|-
   starfixd export-bd [--config FILE] [--dsn DSN] [-o FILE]
@@ -45,7 +45,11 @@ The database DSN comes from --dsn (no password allowed there), $STARFIXD_DSN,
 or dsn: in the config file (default /etc/starfix/starfixd.yaml, mode 0600).
 Admins, who may change issues others hold and force a close, are listed
 under admins: in the config file or in $STARFIXD_ADMINS (comma-separated);
-serve reads them at start.`
+serve reads them at start.
+
+Every command that opens the store refuses a Dolt account that is root,
+holds rights beyond its database, or a server whose secure_file_priv is
+empty; --dev --allow-unsafe-dolt allows it on a developer's own machine.`
 
 type usageError string
 
@@ -116,13 +120,16 @@ func serve(ctx context.Context, args []string) error {
 	var cfgPath string
 	var dev bool
 	if err := flags("serve", args, &fl, &cfgPath, func(fs *flag.FlagSet) {
-		fs.BoolVar(&dev, "dev", false, "allow serving off Linux, where socket peers are not checked")
+		devFlags(fs, &dev, &fl.AllowUnsafeDolt)
 		fs.StringVar(&fl.DSN, "dsn", "", "Dolt DSN (no password)")
 		fs.StringVar(&fl.Project, "project", "", "project UUID")
 		fs.StringVar(&fl.Prefix, "prefix", "", "issue-ID prefix")
 		fs.StringVar(&fl.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
 		fs.StringVar(&fl.LogFormat, "log-format", "", "text or json (default text)")
 	}); err != nil {
+		return err
+	}
+	if err := checkDev(dev, fl.AllowUnsafeDolt); err != nil {
 		return err
 	}
 	if err := server.RequirePeerCheck(dev); err != nil {
@@ -142,12 +149,13 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, Logger: log, Admins: s.Admins})
+	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, Logger: log, Admins: s.Admins,
+		AllowUnsafeAccount: s.AllowUnsafeDolt, Limits: s.Limits.Limits})
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
 	srv, err := server.New(server.Config{Store: st, Project: s.Project, Version: version.Version,
-		Latest: s.Latest, Logger: log})
+		Latest: s.Latest, Logger: log, Limits: s.Limits})
 	if err != nil {
 		return errors.Join(err, st.Close())
 	}

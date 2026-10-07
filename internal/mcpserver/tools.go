@@ -298,6 +298,8 @@ type Issue struct {
 	Items       []string `json:"items,omitempty"`
 	DependsOn   []string `json:"depends_on,omitempty"`
 	NeededBy    []string `json:"needed_by,omitempty"`
+	// DepsMore counts the edges the server left out.
+	DepsMore int `json:"deps_more,omitempty"`
 	// Similar names similar closed issues: "ID title; ID title".
 	Similar string `json:"similar,omitempty"`
 	// Truncated: long text was cut; full: true returns more.
@@ -489,7 +491,7 @@ func (s *Server) register() {
 			if err := c.Call(ctx, proto.OpWho, proto.WhoArgs{Since: in.Since}, &r); err != nil {
 				return Who{}, err
 			}
-			out := Who{Agents: []Agent{}}
+			out := Who{Agents: []Agent{}, More: r.More > 0}
 			for _, a := range r.Agents {
 				out.Agents = append(out.Agents, Agent{Principal: a.Principal, Session: a.Session, Machine: a.Machine,
 					Harness: a.Harness, Seen: proto.Span(max(r.Now.Sub(a.LastSeen), 0)), Claims: a.Claims})
@@ -643,7 +645,7 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	out := Issue{ID: is.ID, Title: is.Title, Status: is.Status, Priority: is.Priority, Type: is.Type, Rev: is.Rev,
 		Parent: is.ParentID, Assignee: is.Assignee, Owner: is.Owner, Labels: is.Labels, Body: is.Body,
 		Design: is.Design, Acceptance: is.Acceptance, Notes: is.Notes, CloseReason: is.CloseReason, Truncated: is.Truncated,
-		Items: itemLines(r.Items), Similar: similarLine(r.Similar)}
+		Items: itemLines(r.Items), Similar: similarLine(r.Similar), DepsMore: r.DepsMore}
 	if len(out.Items) > 0 {
 		out.Acceptance = ""
 	}
@@ -687,14 +689,19 @@ func update(ctx context.Context, c Conn, in UpdateIn) (proto.WriteResult, error)
 // maxCommentBody is how much of each comment a list shows.
 const maxCommentBody = 1000
 
+// omitted is how many of total a page of n left out, keeping the newest
+// keep: a protocol 1 server returns every entry and no total.
+func omitted(n, total, keep int) int { return max(n, total) - min(n, keep) }
+
 func comments(ctx context.Context, c Conn, in PageIn) (Comments, error) {
 	var r proto.CommentsResult
-	if err := c.Call(ctx, proto.OpComments, proto.IDArgs{ID: in.ID}, &r); err != nil {
+	limit := orDefault(in.Limit, DefaultLimit)
+	if err := c.Call(ctx, proto.OpComments, proto.PageArgs{ID: in.ID, Limit: limit}, &r); err != nil {
 		return Comments{}, err
 	}
 	all := r.Comments
-	keep := min(len(all), orDefault(in.Limit, DefaultLimit))
-	out := Comments{Comments: []Comment{}, Omitted: len(all) - keep}
+	keep := min(len(all), limit)
+	out := Comments{Comments: []Comment{}, Omitted: omitted(len(all), r.Total, keep)}
 	for _, cm := range all[len(all)-keep:] {
 		body, _ := cut(cm.Body, maxCommentBody)
 		out.Comments = append(out.Comments, Comment{Author: cm.Author, At: stamp(cm.CreatedAt), Kind: cm.Kind, Body: body})
@@ -707,12 +714,13 @@ func comments(ctx context.Context, c Conn, in PageIn) (Comments, error) {
 
 func history(ctx context.Context, c Conn, in PageIn) (History, error) {
 	var r proto.HistoryResult
-	if err := c.Call(ctx, proto.OpHistory, proto.IDArgs{ID: in.ID}, &r); err != nil {
+	limit := orDefault(in.Limit, DefaultLimit)
+	if err := c.Call(ctx, proto.OpHistory, proto.PageArgs{ID: in.ID, Limit: limit}, &r); err != nil {
 		return History{}, err
 	}
 	all := r.Events
-	keep := min(len(all), orDefault(in.Limit, DefaultLimit))
-	out := History{Events: []Event{}, Omitted: len(all) - keep}
+	keep := min(len(all), limit)
+	out := History{Events: []Event{}, Omitted: omitted(len(all), r.Total, keep)}
 	for _, e := range all[len(all)-keep:] {
 		changed, _ := cut(e.Changed(), 200)
 		out.Events = append(out.Events, Event{Seq: e.Seq, At: stamp(e.At), By: e.Principal, Op: e.Op, Changed: changed})

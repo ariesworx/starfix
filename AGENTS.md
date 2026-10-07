@@ -158,6 +158,12 @@ skip without it too.
     `RELEASING.md`, or the design doc. Where the build departs from the
     design, add to that section's dated **As built** note in
     `docs/design/starfix.md` rather than rewriting the plan.
+18. **Bound what a client can grow.** Anything a principal can add to
+    without limit (rows, items, connections, writes) gets a cap in
+    `store.Limits` or `server.Limits`, with a default, a `limits:`
+    setting, a table-driven test and a row in the README's Limits table.
+    A refusal past a cap is `invalid` or `busy` with a `Fix`. Tests run
+    against a locked-down Dolt account (`dolttest`), as `starfixd` does.
 
 ## Agent specifications
 

@@ -69,7 +69,7 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 				return fmt.Errorf("insert agent %s/%s: %w", actor.Principal, actor.Session, err)
 			}
 			w.quiet = true
-			return nil
+			return capSessions(ctx, w, actor.Principal)
 		}
 		if err != nil {
 			return fmt.Errorf("read agent %s/%s: %w", actor.Principal, actor.Session, err)
@@ -151,4 +151,40 @@ func (s *Store) Who(ctx context.Context, since time.Duration) ([]Agent, error) {
 		slices.Sort(out[i].Claims)
 	}
 	return out, nil
+}
+
+// capSessions deletes principal's least recently seen registry rows past
+// the Sessions limit (S-6): each handshake with a fresh session id adds a
+// row, and nothing else would bound them.
+func capSessions(ctx context.Context, w *wtx, principal string) error {
+	var n int
+	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agents WHERE principal = ?`, principal).Scan(&n); err != nil {
+		return fmt.Errorf("count sessions of %s: %w", principal, err)
+	}
+	if n <= w.lim.Sessions {
+		return nil
+	}
+	rows, err := w.tx.QueryContext(ctx, `SELECT session FROM agents WHERE principal = ?
+  ORDER BY last_seen, session LIMIT ?`, principal, n-w.lim.Sessions)
+	if err != nil {
+		return fmt.Errorf("oldest sessions of %s: %w", principal, err)
+	}
+	var old []string
+	for rows.Next() {
+		var sess string
+		if err := rows.Scan(&sess); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("oldest sessions of %s: %w", principal, err)
+		}
+		old = append(old, sess)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("oldest sessions of %s: %w", principal, err)
+	}
+	for _, sess := range old {
+		if _, err := w.exec(ctx, `DELETE FROM agents WHERE principal = ? AND session = ?`, principal, sess); err != nil {
+			return fmt.Errorf("drop session %s/%s: %w", principal, sess, err)
+		}
+	}
+	return nil
 }

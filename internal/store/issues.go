@@ -212,6 +212,19 @@ func (n *NewIssue) normalize() error {
 	return nil
 }
 
+// checkNew refuses a new issue past the store's limits: too many distinct
+// labels or acceptance items.
+func (s *Store) checkNew(in NewIssue) error {
+	distinct := map[string]bool{}
+	for _, l := range in.Labels {
+		distinct[l] = true
+	}
+	if len(distinct) > s.opts.Limits.Labels {
+		return fmt.Errorf("%w: an issue has at most %d labels, not %d", ErrInvalid, s.opts.Limits.Labels, len(distinct))
+	}
+	return checkItems(in.Acceptance, s.opts.Limits.AcceptanceItems)
+}
+
 // checkTitle refuses a blank title or one that is not a single line of up
 // to 500 bytes.
 func checkTitle(t string) error {
@@ -226,6 +239,9 @@ func checkTitle(t string) error {
 // nothing. An assignee other than the actor gets an inbox item.
 func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issue, error) {
 	if err := in.normalize(); err != nil {
+		return Issue{}, err
+	}
+	if err := s.checkNew(in); err != nil {
 		return Issue{}, err
 	}
 	meta, err := nullJSON(in.Metadata)
@@ -327,6 +343,11 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 	if err != nil {
 		return Issue{}, err
 	}
+	if patch.Acceptance != nil {
+		if err := checkItems(*patch.Acceptance, s.opts.Limits.AcceptanceItems); err != nil {
+			return Issue{}, err
+		}
+	}
 	var out Issue
 	err = s.write(ctx, actor, func(w *wtx) error {
 		before, err := loadIssue(ctx, w.tx, id)
@@ -411,7 +432,11 @@ func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []
 	if n != 1 {
 		return Issue{}, fmt.Errorf("issue %s changed during update: %w", before.ID, ErrConflict)
 	}
-	return loadIssue(ctx, w.tx, before.ID)
+	out, err := loadIssue(ctx, w.tx, before.ID)
+	if before.Status == StatusClosed || out.Status == StatusClosed {
+		w.closedChanged = true
+	}
+	return out, err
 }
 
 // columns turns the patch into SET clauses over a fixed column list.

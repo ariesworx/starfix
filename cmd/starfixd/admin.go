@@ -45,7 +45,12 @@ func openAdminStore(ctx context.Context, env adminEnv, fl server.Settings, cfgPa
 		return nil, errors.New("no database DSN; fix: set $STARFIXD_DSN or dsn: in the config file")
 	}
 	// No background committer: Close makes the one Dolt commit.
-	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, CommitInterval: -1})
+	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, CommitInterval: -1, AllowUnsafeAccount: s.AllowUnsafeDolt,
+		Limits: s.Limits.Limits})
+	var unsafe *store.UnsafeAccountError
+	if errors.As(err, &unsafe) {
+		return nil, fmt.Errorf("open store: %w", err) // it names its own fix
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w; fix: check the DSN and that dolt sql-server is running", err)
 	}
@@ -57,11 +62,28 @@ func adminFlags(name string, args []string, fl *server.Settings, cfgPath *string
 	fs.SetOutput(io.Discard)
 	fs.StringVar(cfgPath, "config", "", "config file")
 	fs.StringVar(&fl.DSN, "dsn", "", "Dolt DSN (no password)")
+	var dev bool
+	devFlags(fs, &dev, &fl.AllowUnsafeDolt)
 	extra(fs)
 	if err := fs.Parse(args); err != nil {
 		return nil, usageError(err.Error())
 	}
-	return fs, nil
+	return fs, checkDev(dev, fl.AllowUnsafeDolt)
+}
+
+// devFlags registers --dev and --allow-unsafe-dolt.
+func devFlags(fs *flag.FlagSet, dev, unsafe *bool) {
+	fs.BoolVar(dev, "dev", false, "development mode")
+	fs.BoolVar(unsafe, "allow-unsafe-dolt", false, "open the store even as root or with secure_file_priv empty (needs --dev)")
+}
+
+// checkDev refuses --allow-unsafe-dolt without --dev (decision D3): an
+// unsafe Dolt account is for a developer's own machine only.
+func checkDev(dev, unsafe bool) error {
+	if unsafe && !dev {
+		return usageError("--allow-unsafe-dolt is for development only and needs --dev; on a server, give starfixd a least-privileged Dolt account (README, quick start)")
+	}
+	return nil
 }
 
 // closeStore closes st, keeping err as it is when Close succeeds so that a

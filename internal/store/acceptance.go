@@ -67,12 +67,19 @@ type Acceptance struct {
 
 func (a Acceptance) empty() bool { return len(a.Tick) == 0 && len(a.Untick) == 0 && len(a.Waive) == 0 }
 
-// validate checks the numbers and reasons; each item may appear once.
-func (a Acceptance) validate() error {
+// validate checks the numbers and reasons; each item may appear once, and
+// no number may pass most, the most items an issue may have.
+func (a Acceptance) validate(most int) error {
+	if len(a.Tick)+len(a.Untick)+len(a.Waive) > most {
+		return fmt.Errorf("%w: an issue has at most %d acceptance items, so name at most that many", ErrInvalid, most)
+	}
 	seen := map[int]bool{}
 	check := func(n int) error {
 		if n < 1 {
 			return fmt.Errorf("%w: acceptance items are numbered from 1, not %d", ErrInvalid, n)
+		}
+		if n > most {
+			return fmt.Errorf("%w: an issue has at most %d acceptance items; there is no item %d", ErrInvalid, most, n)
 		}
 		if seen[n] {
 			return fmt.Errorf("%w: acceptance item %d is given twice", ErrInvalid, n)
@@ -305,7 +312,7 @@ func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptanc
 	if a.empty() {
 		return nil, fmt.Errorf("%w: name an acceptance item to tick, untick or waive", ErrInvalid)
 	}
-	if err := a.validate(); err != nil {
+	if err := a.validate(s.opts.Limits.AcceptanceItems); err != nil {
 		return nil, err
 	}
 	var out []AcceptanceItem
@@ -417,4 +424,12 @@ func mapKeys(m map[int]string) []int {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// checkItems refuses acceptance text with more than most items.
+func checkItems(text string, most int) error {
+	if n := len(parseAcceptance(text)); n > most {
+		return fmt.Errorf("%w: acceptance text has %d items; an issue has at most %d acceptance items", ErrInvalid, n, most)
+	}
+	return nil
 }

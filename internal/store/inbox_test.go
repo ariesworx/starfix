@@ -352,7 +352,9 @@ func TestInboxListAndAck(t *testing.T) {
 // A watch receives each new item for its principal and session as it is
 // committed; its bounded queue overflows instead of blocking the writer.
 func TestWatch(t *testing.T) {
-	s, _ := clockStore(t)
+	// More notices than one sender may send a minute by default, so the
+	// queue can overflow.
+	s := openStore(t, newDSN(t), Options{Limits: Limits{Notices: 2 * WatchQueue}})
 	ctx := t.Context()
 	register(t, s, bob)
 	wb := s.Watch("bob", "sess-b")

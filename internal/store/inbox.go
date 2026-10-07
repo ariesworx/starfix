@@ -86,6 +86,17 @@ func (w *wtx) notify(ctx context.Context, it InboxItem) error {
 	if it.To == w.actor.Principal && (it.Session == "" || it.Session == w.actor.Session) {
 		return nil
 	}
+	if it.Kind != InboxClaimLost {
+		var sent int
+		if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbox
+  WHERE to_principal = ? AND from_principal = ? AND kind <> ? AND at > ?`,
+			it.To, w.actor.Principal, string(InboxClaimLost), w.now.Add(-time.Minute)).Scan(&sent); err != nil {
+			return fmt.Errorf("count notices: %w", err)
+		}
+		if sent >= w.lim.Notices {
+			return nil // over the sender's allowance: not delivered (S-7)
+		}
+	}
 	id, err := lastKey(ctx, w.tx, `SELECT id FROM inbox ORDER BY id DESC LIMIT 1`)
 	if err != nil {
 		return fmt.Errorf("next inbox id: %w", err)
@@ -102,6 +113,29 @@ func (w *wtx) notify(ctx context.Context, it InboxItem) error {
 		return fmt.Errorf("insert inbox item: %w", err)
 	}
 	w.inbox = append(w.inbox, it)
+	return capUnread(ctx, w, it.To)
+}
+
+// capUnread marks principal's oldest unread items read past the
+// InboxUnread limit (S-7). They stay under `inbox --all` until Prune
+// purges read items.
+func capUnread(ctx context.Context, w *wtx, principal string) error {
+	var n int
+	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbox WHERE to_principal = ? AND read_at IS NULL`,
+		principal).Scan(&n); err != nil {
+		return fmt.Errorf("count unread: %w", err)
+	}
+	if n <= w.lim.InboxUnread {
+		return nil
+	}
+	wid, err := randomInt63()
+	if err != nil {
+		return err
+	}
+	if _, err := w.exec(ctx, `UPDATE inbox SET read_at = ?, write_id = ? WHERE to_principal = ? AND read_at IS NULL
+  ORDER BY id LIMIT ?`, w.now, wid, principal, n-w.lim.InboxUnread); err != nil {
+		return fmt.Errorf("cap unread: %w", err)
+	}
 	return nil
 }
 

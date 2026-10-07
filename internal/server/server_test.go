@@ -58,6 +58,12 @@ const project = "00000000-0000-4000-8000-000000000001"
 
 func newServer(t *testing.T) *Server {
 	t.Helper()
+	return newServerWith(t, Limits{})
+}
+
+// newServerWith is newServer with limits, the store's included.
+func newServerWith(t *testing.T, lim Limits) *Server {
+	t.Helper()
 	if errors.Is(doltErr, dolttest.ErrNoDolt) {
 		t.Skip("dolt is not on PATH: install dolt to run the server tests")
 	}
@@ -68,12 +74,14 @@ func newServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(t.Context(), dsn, store.Options{Prefix: "sf", CommitInterval: -1, Admins: []string{dana.Principal}})
+	st, err := store.Open(t.Context(), dsn, store.Options{Prefix: "sf", CommitInterval: -1, Admins: []string{dana.Principal},
+		Limits: lim.Limits})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s, err := New(Config{Store: st, Project: project, Version: "v0.2.0", PeerCheck: func(net.Conn) error { return nil }})
+	s, err := New(Config{Store: st, Project: project, Version: "v0.2.0", PeerCheck: func(net.Conn) error { return nil },
+		Limits: lim})
 	if err != nil {
 		t.Fatal(err)
 	}

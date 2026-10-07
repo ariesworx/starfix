@@ -60,8 +60,12 @@ type Config struct {
 	// RequestTimeout bounds one request. Default 60s.
 	RequestTimeout time.Duration
 	// ReapInterval is how often expired claims are ended. Default 30s;
-	// negative turns the reaper off (tests call Reap).
+	// negative turns the reaper off (tests call Reap and Prune).
 	ReapInterval time.Duration
+	// Limits bound connections, idling, writes and refusal logging per
+	// principal; zero fields take DefaultLimits. Its store limits are the
+	// store's to apply (store.Options.Limits), and only shown here.
+	Limits Limits
 }
 
 // Server serves the protocol. Create it with New.
@@ -71,6 +75,15 @@ type Server struct {
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
 	wg    sync.WaitGroup
+
+	// slots counts connections past the handshake (Limits.Conns and
+	// ConnsPerPrincipal); writes is each principal's write bucket;
+	// refusals samples refusal log lines.
+	slots    conns
+	writes   buckets
+	refusals sampler
+	// now is the clock for the limits above; tests replace it.
+	now func() time.Time
 }
 
 var (
@@ -114,7 +127,14 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ReapInterval == 0 {
 		cfg.ReapInterval = 30 * time.Second
 	}
-	return &Server{cfg: cfg, conns: map[net.Conn]struct{}{}}, nil
+	if err := cfg.Limits.Validate(); err != nil {
+		return nil, fmt.Errorf("server: %w", err)
+	}
+	cfg.Limits = cfg.Limits.WithDefaults()
+	s := &Server{cfg: cfg, conns: map[net.Conn]struct{}{}, now: time.Now}
+	s.writes = buckets{rate: cfg.Limits.WriteRate, burst: float64(cfg.Limits.WriteBurst)}
+	s.refusals = sampler{n: cfg.Limits.RefusalLogs}
+	return s, nil
 }
 
 // Serve accepts connections on l until ctx is done, then closes l and every
@@ -142,8 +162,18 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			return fmt.Errorf("accept: %w", err)
 		}
 		s.mu.Lock()
-		s.conns[c] = struct{}{}
+		full := len(s.conns) >= 2*s.cfg.Limits.Conns
+		if !full {
+			s.conns[c] = struct{}{}
+		}
 		s.mu.Unlock()
+		if full {
+			// Past twice the cap, sockets still in the handshake are
+			// closed unread; the cap itself is refused cleanly there.
+			s.refusals.log(s.cfg.Logger, "", s.now(), slog.LevelWarn, "refused connection", "reason", "connection limit")
+			_ = c.Close()
+			continue
+		}
 		s.wg.Go(func() {
 			defer func() {
 				s.mu.Lock()
@@ -156,17 +186,44 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	}
 }
 
-// reapLoop ends expired claims every ReapInterval until ctx is done.
+// pruneEvery is how often the reaper also prunes the registry and the
+// inbox.
+const pruneEvery = 10 * time.Minute
+
+// reapLoop ends expired claims every ReapInterval until ctx is done, and
+// prunes every pruneEvery.
 func (s *Server) reapLoop(ctx context.Context) {
 	t := time.NewTicker(s.cfg.ReapInterval)
 	defer t.Stop()
+	var pruned time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.Reap(ctx)
+			if time.Since(pruned) >= pruneEvery {
+				s.Prune(ctx)
+				pruned = time.Now()
+			}
 		}
+	}
+}
+
+// Prune deletes registry rows and read inbox items older than the limits
+// keep them (S-6, S-7), and logs what it removed.
+func (s *Server) Prune(ctx context.Context) {
+	pctx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+	defer cancel()
+	n, err := s.cfg.Store.Prune(pctx, time.Duration(s.cfg.Limits.AgentKeep), time.Duration(s.cfg.Limits.InboxKeep))
+	if err != nil {
+		if ctx.Err() == nil {
+			s.cfg.Logger.Error("prune", "err", err)
+		}
+		return
+	}
+	if n != (store.Pruned{}) {
+		s.cfg.Logger.Info("pruned", "agents", n.Agents, "inbox", n.Inbox)
 	}
 }
 
@@ -206,31 +263,66 @@ type session struct {
 	// loop's flush before each response.
 	push   *pusher
 	pushMu sync.Mutex
+	// slot is set when the session holds a connection slot (s.slots).
+	slot bool
+}
+
+// watching reports whether sess's watch is running, which exempts it
+// from the idle timeout.
+func (sess *session) watching() bool {
+	p := sess.push
+	if p == nil {
+		return false
+	}
+	sess.pushMu.Lock()
+	defer sess.pushMu.Unlock()
+	return !p.ended
 }
 
 func (s *Server) handle(ctx context.Context, c net.Conn) {
 	log := s.cfg.Logger
 	if err := s.cfg.PeerCheck(c); err != nil {
-		log.Warn("refused socket peer", "err", err)
+		s.refusals.log(log, "", s.now(), slog.LevelWarn, "refused socket peer", "err", err)
 		return
 	}
 	sess, err := s.handshake(c)
+	if sess != nil && sess.slot {
+		defer s.slots.release(sess.actor.Principal)
+	}
 	if err != nil {
-		log.Info("handshake failed", "err", err)
+		key := ""
+		if sess != nil {
+			key = sess.actor.Principal
+		}
+		s.refusals.log(log, key, s.now(), slog.LevelInfo, "handshake failed", "err", err)
 		return
 	}
-	log = log.With("principal", sess.actor.Principal, "session", sess.actor.Session, "machine", sess.actor.Machine)
+	principal := sess.actor.Principal
+	log = log.With("principal", principal, "session", sess.actor.Session, "machine", sess.actor.Machine)
 	log.Debug("connected")
 	defer func() {
 		_ = c.Close() // unblocks a pusher stuck writing to a client that stopped reading
 		s.unwatch(sess)
 	}()
 	s.touch(ctx, log, sess.actor, sess.harness)
+	idle := time.Duration(s.cfg.Limits.IdleTimeout)
 	for {
+		if sess.watching() {
+			_ = c.SetReadDeadline(time.Time{})
+		} else {
+			_ = c.SetReadDeadline(s.now().Add(idle))
+		}
 		f, err := sess.dec.Decode()
 		if err != nil {
-			if !errors.Is(err, io.EOF) && ctx.Err() == nil {
-				log.Info("read failed", "err", err)
+			var ne net.Error
+			switch {
+			case errors.Is(err, io.EOF) || ctx.Err() != nil:
+			case errors.As(err, &ne) && ne.Timeout():
+				log.Debug("idle connection closed", "after", idle)
+				_ = s.send(sess, 0, nil, proto.Errf(proto.CodeUnavailable, "reconnect; starfix does so on the next command",
+					fmt.Sprintf("connection closed after %s idle", proto.Span(idle))))
+			default:
+				s.refusals.log(log, principal, s.now(), slog.LevelInfo, "read failed", "err", err)
 				if errors.Is(err, proto.ErrFrameTooLarge) {
 					_ = s.send(sess, 0, nil, proto.Errf(proto.CodeInvalid, "send large text in smaller parts",
 						"request larger than 4 MiB"))
@@ -247,9 +339,16 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		rctx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 		var res any
 		var perr *proto.Error
-		if f.Op == proto.OpWatch {
+		ok, wait := true, time.Duration(0)
+		if !readOps[f.Op] {
+			ok, wait = s.writes.take(principal, s.now())
+		}
+		switch {
+		case !ok:
+			perr = s.busyWrites(principal, wait)
+		case f.Op == proto.OpWatch:
 			res, perr = s.watch(rctx, sess, f.Args)
-		} else {
+		default:
 			res, perr = s.Dispatch(rctx, sess.actor, f.Op, f.Args)
 		}
 		cancel()
@@ -258,9 +357,10 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		}
 		attrs := []any{"op", f.Op, "ms", time.Since(start).Milliseconds()}
 		if perr != nil {
-			// A refusal is worth seeing at the default level; a success is
-			// one line per request, so only at debug.
-			log.Info("request", append(attrs, "code", string(perr.Code))...)
+			// A refusal is worth seeing at the default level, sampled per
+			// principal (S-20); a success is one line per request, so only
+			// at debug.
+			s.refusals.log(log, principal, s.now(), slog.LevelInfo, "request", append(attrs, "code", string(perr.Code))...)
 		} else {
 			log.Debug("request", attrs...)
 		}
@@ -276,7 +376,22 @@ func (s *Server) send(sess *session, id uint64, res any, perr *proto.Error) erro
 	if err != nil {
 		f, _ = proto.Response(id, nil, proto.Errf(proto.CodeUnavailable, "retry; if it persists, report it", "server could not encode the result"))
 	}
-	return sess.enc.Encode(f)
+	err = sess.enc.Encode(f)
+	if errors.Is(err, proto.ErrFrameTooLarge) {
+		// Paged reads keep replies well under the limit; should one still
+		// pass it, refuse the request rather than drop the connection.
+		f, _ = proto.Response(id, nil, proto.Errf(proto.CodeInvalid, "ask for less: a smaller --limit, or page with --before",
+			"the result is larger than 4 MiB"))
+		err = sess.enc.Encode(f)
+	}
+	return err
+}
+
+// busyWrites refuses a write over principal's rate, saying when to retry.
+func (s *Server) busyWrites(principal string, wait time.Duration) *proto.Error {
+	l := s.cfg.Limits
+	return proto.Errf(proto.CodeBusy, fmt.Sprintf("wait %s and retry", wait),
+		fmt.Sprintf("%s is over the write limit (%g a second, bursts of %d)", principal, l.WriteRate, l.WriteBurst))
 }
 
 // handshake reads the bridge frame and the client's hello, and answers with
@@ -300,9 +415,11 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	w := &proto.Frame{T: proto.FrameWelcome, Version: s.cfg.Version, Min: s.cfg.ProtoMin, Max: s.cfg.ProtoMax, Latest: s.cfg.Latest}
+	// A refusal past the bridge frame returns sess, so the caller knows
+	// whose it is.
 	refuse := func(e *proto.Error) (*session, error) {
 		w.Err = e
-		return nil, errors.Join(e, sess.enc.Encode(w))
+		return sess, errors.Join(e, sess.enc.Encode(w))
 	}
 	if f.T != proto.FrameHello {
 		return refuse(proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
@@ -330,6 +447,10 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 			"session and machine must be 1-255 printable characters, without control or bidirectional characters"))
 	}
 	sess.harness = f.Harness
+	if ok, why := s.slots.acquire(sess.actor.Principal, s.cfg.Limits.Conns, s.cfg.Limits.ConnsPerPrincipal); !ok {
+		return refuse(proto.Errf(proto.CodeBusy, "close other starfix sessions, or wait for them to end, and retry", why))
+	}
+	sess.slot = true
 	w.Session = sess.actor.Session
 	w.Principal = sess.actor.Principal
 	if err := sess.enc.Encode(w); err != nil {

@@ -16,6 +16,14 @@ func (s *Store) AddLabel(ctx context.Context, actor Actor, id IssueID, label str
 		if err := mustExist(ctx, w.tx, id); err != nil {
 			return err
 		}
+		var has, total int
+		if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(label = ?), 0) FROM labels WHERE issue_id = ?`,
+			label, string(id)).Scan(&total, &has); err != nil {
+			return fmt.Errorf("count labels: %w", err)
+		}
+		if has == 0 && total >= w.lim.Labels {
+			return fmt.Errorf("%w: issue %s has %d labels; an issue has at most %d labels", ErrInvalid, id, total, w.lim.Labels)
+		}
 		n, err := w.exec(ctx, `INSERT IGNORE INTO labels (issue_id, label, created_at) VALUES (?, ?, ?)`,
 			string(id), label, w.now)
 		if err != nil {
@@ -153,8 +161,12 @@ func (s *Store) AllComments(ctx context.Context) ([]Comment, error) {
 }
 
 func (s *Store) comments(ctx context.Context, rest string, args ...any) ([]Comment, error) {
-	q := `SELECT id, issue_id, author, session, kind, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers above
-	rows, err := s.r.QueryContext(ctx, q, args...)
+	return queryComments(ctx, s.r, rest, args...)
+}
+
+func queryComments(ctx context.Context, qr querier, rest string, args ...any) ([]Comment, error) {
+	q := `SELECT id, issue_id, author, session, kind, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers
+	rows, err := qr.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("comments: %w", err)
 	}
