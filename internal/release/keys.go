@@ -5,7 +5,6 @@ package release
 // them. A signature by any one is accepted, so a rotation ships the new
 // key beside the old one for at least one release before the old one is
 // removed (RELEASING.md).
-//
-// Empty until the maintainer generates the first key: until then every
-// verification fails closed with ErrNoKey.
-var releaseKeys = []string{}
+var releaseKeys = []string{
+	"Lsz75EL8k/kqkFSEtvkCB6bVC8BKiuI3zzux00wv/Gs=", // first key, 2026-10-07
+}
