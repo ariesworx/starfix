@@ -190,8 +190,10 @@ const (
 
 type session struct {
 	actor store.Actor
-	enc   *proto.Encoder
-	dec   *proto.Decoder
+	// harness is what the hello said the client runs under, unchecked.
+	harness string
+	enc     *proto.Encoder
+	dec     *proto.Decoder
 }
 
 func (s *Server) handle(ctx context.Context, c net.Conn) {
@@ -207,6 +209,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	}
 	log = log.With("principal", sess.actor.Principal, "session", sess.actor.Session, "machine", sess.actor.Machine)
 	log.Info("connected")
+	s.touch(ctx, log, sess.actor, sess.harness)
 	for {
 		f, err := sess.dec.Decode()
 		if err != nil {
@@ -298,6 +301,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 		return refuse(proto.Errf(proto.CodeInvalid, "set STARFIX_SESSION to 1-255 printable characters",
 			"session and machine must be 1-255 printable characters"))
 	}
+	sess.harness = f.Harness
 	w.Session = sess.actor.Session
 	w.Principal = sess.actor.Principal
 	if err := sess.enc.Encode(w); err != nil {

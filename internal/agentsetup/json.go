@@ -134,7 +134,7 @@ func serversKey(f format) string {
 	return "mcpServers"
 }
 
-func applyJSON(content []byte, f format, e Entry) ([]byte, error) {
+func applyJSON(content []byte, f format, e Entry, harness string) ([]byte, error) {
 	root, err := parseObject(content)
 	if err != nil {
 		return nil, err
@@ -155,6 +155,13 @@ func applyJSON(content []byte, f format, e Entry) ([]byte, error) {
 	for _, m := range owned(f, e) {
 		entry = entry.set(m.key, m.val)
 	}
+	env := object{}
+	if raw, ok := entry.get("env"); ok {
+		if env, err = parseObject(raw); err != nil {
+			return nil, fmt.Errorf("%s.%s.env: %w", key, ServerName, err)
+		}
+	}
+	entry = entry.set("env", env.set(HarnessEnv, mustJSON(harness)).marshal())
 	servers = servers.set(ServerName, entry.marshal())
 	root = root.set(key, servers.marshal())
 	return indent(root.marshal())
@@ -197,7 +204,7 @@ func jsonEntry(content []byte, f format) (object, bool) {
 	return entry, err == nil
 }
 
-func jsonRegistered(content []byte, f format, e Entry) bool {
+func jsonRegistered(content []byte, f format, e Entry, harness string) bool {
 	entry, ok := jsonEntry(content, f)
 	if !ok {
 		return false
@@ -208,7 +215,13 @@ func jsonRegistered(content []byte, f format, e Entry) bool {
 			return false
 		}
 	}
-	return true
+	raw, _ := entry.get("env")
+	env, err := parseObject(raw)
+	if err != nil || len(raw) == 0 {
+		return false
+	}
+	got, ok := env.get(HarnessEnv)
+	return ok && sameJSON(got, mustJSON(harness))
 }
 
 func sameJSON(a, b json.RawMessage) bool {

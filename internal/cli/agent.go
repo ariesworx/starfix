@@ -62,9 +62,8 @@ type hookInput struct {
 // is a one-line note saying what failed and the fix.
 //
 // The session id comes from STARFIX_SESSION, else the hook input's
-// session_id, else the environment, so the connection prime opens is
-// recorded under the harness's session. Stage 3's agents registry will
-// make that a registration; until then the server records it per event.
+// session_id, else the environment, so the connection prime opens
+// registers the harness's session in the agents registry (`sfx who`).
 func (r *runner) primeHook(ctx context.Context) {
 	in := readHookInput(r.env.Stdin)
 	if in.SessionID != "" && r.env.Getenv("STARFIX_SESSION") == "" {

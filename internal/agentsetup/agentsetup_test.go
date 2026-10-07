@@ -19,7 +19,10 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "claude-code"
+      }
     }
   }
 }
@@ -38,7 +41,10 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "claude-code"
+      }
     }
   },
   "a": true
@@ -51,7 +57,8 @@ func TestApply(t *testing.T) {
     "starfix": {
       "command": "C:\\tools\\starfix.exe",
       "env": {
-        "STARFIX_SESSION": "x"
+        "STARFIX_SESSION": "x",
+        "STARFIX_HARNESS": "claude-code"
       },
       "args": [
         "mcp"
@@ -67,7 +74,10 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "gemini"
+      }
     }
   }
 }
@@ -79,7 +89,10 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "vscode"
+      }
     }
   }
 }
@@ -103,7 +116,10 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "vscode"
+      }
     }
   }
 }
@@ -114,19 +130,46 @@ func TestApply(t *testing.T) {
       "command": "sfx",
       "args": [
         "mcp"
-      ]
+      ],
+      "env": {
+        "STARFIX_HARNESS": "cursor"
+      }
     }
   }
 }
 `},
 		{name: "codex new file", agent: "codex", result: Added,
-			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n"},
+			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[mcp_servers.starfix.env]\nSTARFIX_HARNESS = \"codex\"\n"},
 		{name: "codex appends after other tables", agent: "codex", result: Added,
 			in:   "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n",
-			want: "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n\n[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n"},
+			want: "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n\n[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[mcp_servers.starfix.env]\nSTARFIX_HARNESS = \"codex\"\n"},
 		{name: "codex updates in place, keeping comments and keys", agent: "codex", result: Updated, entry: custom,
 			in:   "# top\n[mcp_servers.\"starfix\"] # ours\nargs = [\n  \"serve\",\n]\nstartup_timeout_sec = 20\n\n[mcp_servers.starfix.env]\nA = \"b\"\n",
-			want: "# top\n[mcp_servers.\"starfix\"] # ours\ncommand = \"C:\\\\tools\\\\starfix.exe\"\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\n\n[mcp_servers.starfix.env]\nA = \"b\"\n"},
+			want: "# top\n[mcp_servers.\"starfix\"] # ours\ncommand = \"C:\\\\tools\\\\starfix.exe\"\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\n\n[mcp_servers.starfix.env]\nSTARFIX_HARNESS = \"codex\"\nA = \"b\"\n"},
+		{name: "codex adds the env table after its own, before the next", agent: "codex", result: Updated,
+			in:   "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[other]\ny = 2\n",
+			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[mcp_servers.starfix.env]\nSTARFIX_HARNESS = \"codex\"\n\n[other]\ny = 2\n"},
+		{name: "codex corrects a wrong harness", agent: "codex", result: Updated,
+			in:   "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[mcp_servers.starfix.env]\nA = \"b\"\nSTARFIX_HARNESS = \"gemini\"\n",
+			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n\n[mcp_servers.starfix.env]\nA = \"b\"\nSTARFIX_HARNESS = \"codex\"\n"},
+		{name: "claude adds the harness to an env it keeps", agent: "claude-code", result: Updated,
+			in: `{"mcpServers": {"starfix": {"type": "stdio", "command": "sfx", "args": ["mcp"], "env": {"STARFIX_HARNESS": "codex", "A": "b"}}}}`,
+			want: `{
+  "mcpServers": {
+    "starfix": {
+      "type": "stdio",
+      "command": "sfx",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "STARFIX_HARNESS": "claude-code",
+        "A": "b"
+      }
+    }
+  }
+}
+`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,7 +200,7 @@ func TestApply(t *testing.T) {
 // An already-registered file is left exactly as it is, even when its
 // formatting is not ours.
 func TestApplyLeavesRegisteredFileAlone(t *testing.T) {
-	in := `{"mcpServers":{"starfix":{"args":["mcp"],"command":"sfx","type":"stdio"}}}`
+	in := `{"mcpServers":{"starfix":{"env":{"STARFIX_HARNESS":"claude-code"},"args":["mcp"],"command":"sfx","type":"stdio"}}}`
 	out, res, err := Agents["claude-code"].Apply([]byte(in), DefaultEntry)
 	if err != nil || res != Unchanged || string(out) != in {
 		t.Fatalf("%s %v %s", res, err, out)
@@ -184,10 +227,20 @@ func TestRemove(t *testing.T) {
 }
 
 func TestApplyRefusesBadJSON(t *testing.T) {
-	for _, in := range []string{"[1]", "{", `{"mcpServers": []}`, "{} {}"} {
+	for _, in := range []string{"[1]", "{", `{"mcpServers": []}`, "{} {}", `{"mcpServers": {"starfix": {"env": []}}}`} {
 		if _, _, err := Agents["gemini"].Apply([]byte(in), DefaultEntry); err == nil {
 			t.Errorf("%q accepted", in)
 		}
+	}
+}
+
+// Codex's env as an inline table cannot take a [mcp_servers.starfix.env]
+// table beside it; setup says so rather than write invalid TOML.
+func TestApplyRefusesInlineCodexEnv(t *testing.T) {
+	in := "[mcp_servers.starfix]\ncommand = \"sfx\"\nenv = { A = \"b\" }\n"
+	out, _, err := Agents["codex"].Apply([]byte(in), DefaultEntry)
+	if err == nil || !strings.Contains(err.Error(), "[mcp_servers.starfix.env]") {
+		t.Fatalf("Apply(inline env) = %q, %v; want an error naming the env table", out, err)
 	}
 }
 

@@ -159,7 +159,7 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ro := []string{"blocked", "comments", "digest", "history", "list", "prime", "ready", "show"}
+	ro := []string{"blocked", "comments", "digest", "history", "list", "prime", "ready", "show", "who"}
 	var names []string
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
@@ -179,12 +179,12 @@ func TestTools(t *testing.T) {
 	}
 	slices.Sort(names)
 	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "digest", "finish", "handoff", "history", "label",
-		"list", "prime", "ready", "reopen", "show", "start", "update"}
+		"list", "prime", "ready", "reopen", "show", "start", "update", "who"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v\nwant    %v", names, want)
 	}
-	// Design §5 aims for about 2k tokens for the whole verb set. These 18
-	// tools are about 6.4 KiB, some 1.6k real tokens; the budget below is
+	// Design §5 aims for about 2k tokens for the whole verb set. These 19
+	// tools are about 6.6 KiB, some 1.7k real tokens; the budget below is
 	// in Tokens' deliberately high estimate. Counted is what a model reads:
 	// names, descriptions and input schemas; annotations steer the
 	// harness's approval prompts.
@@ -680,9 +680,9 @@ func TestClaimsFollowTheSession(t *testing.T) {
 	}
 	callTool(t, cs, "finish", map[string]any{"id": "sf-1"})
 	callTool(t, cs, "handoff", map[string]any{"id": "sf-2", "note": "n", "release": true})
-	s.Renew(ctx) // nothing held again
+	s.Renew(ctx) // nothing held, but connected: renew keeps the session in who
 
-	want := []string{"start", "start", "renew", "renew", "list", "ready", "finish", "handoff"}
+	want := []string{"start", "start", "renew", "renew", "list", "ready", "finish", "handoff", "renew"}
 	if got := f.ops(); !slices.Equal(got, want) {
 		t.Fatalf("ops %v, want %v", got, want)
 	}
@@ -694,5 +694,60 @@ func TestClaimsFollowTheSession(t *testing.T) {
 	}
 	if a := f.calls[7].args.(proto.HandoffArgs); a.Epoch != 0 {
 		t.Errorf("release of a lost claim sent epoch %d", a.Epoch)
+	}
+}
+
+// who lists the agents seen recently, terse, and drops the least recently
+// seen to fit the budget.
+func TestWho(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		in     map[string]any
+		agents int
+		since  string
+		shown  int
+		more   bool
+	}{
+		{name: "default window", in: nil, agents: 2, since: "", shown: 2},
+		{name: "a wider window", in: map[string]any{"since": "2h"}, agents: 2, since: "2h", shown: 2},
+		{name: "cut to the budget", in: nil, agents: 200, shown: -1, more: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var agents []proto.Agent
+			for i := range tc.agents {
+				agents = append(agents, proto.Agent{Principal: "alice", Session: fmt.Sprintf("s-%03d-%s", i, strings.Repeat("x", 40)),
+					Machine: "laptop-a", Harness: "claude-code", Started: now.Add(-time.Hour),
+					LastSeen: now.Add(-time.Duration(i+2) * time.Minute), Claims: []string{"sf-a1"}})
+			}
+			f := &fakeConn{reply: func(string, any) (any, error) {
+				return proto.WhoResult{Now: now, Agents: agents}, nil
+			}}
+			cs, _ := connect(t, f)
+			res := callTool(t, cs, "who", tc.in)
+			if res.IsError {
+				t.Fatalf("who: %s", text(t, res))
+			}
+			body := text(t, res)
+			if Tokens([]byte(body)) > MaxResultTokens {
+				t.Fatalf("who result costs ~%d tokens, over %d", Tokens([]byte(body)), MaxResultTokens)
+			}
+			var w Who
+			if err := json.Unmarshal([]byte(body), &w); err != nil {
+				t.Fatal(err)
+			}
+			if a := f.calls[0].args.(proto.WhoArgs); a.Since != tc.since {
+				t.Errorf("who sent since %q, want %q", a.Since, tc.since)
+			}
+			if tc.shown >= 0 && len(w.Agents) != tc.shown || w.More != tc.more {
+				t.Fatalf("who = %d agents, more %v; want %d, %v", len(w.Agents), w.More, tc.shown, tc.more)
+			}
+			first := w.Agents[0]
+			if first.Principal != "alice" || first.Machine != "laptop-a" || first.Harness != "claude-code" ||
+				first.Seen != "2m" || !slices.Equal(first.Claims, []string{"sf-a1"}) {
+				t.Errorf("who agent = %+v", first)
+			}
+		})
 	}
 }

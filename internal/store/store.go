@@ -182,6 +182,9 @@ func (s *Store) commit(ctx context.Context) error {
 	return nil
 }
 
+// Now reads the server clock (Options.Now), in UTC to the microsecond.
+func (s *Store) Now() time.Time { return s.now() }
+
 func (s *Store) now() time.Time {
 	return s.opts.Now().UTC().Truncate(time.Microsecond)
 }

@@ -27,6 +27,8 @@ type Options struct {
 	Session string
 	// Machine is this machine's name.
 	Machine string
+	// Harness names the agent harness, or is empty (HarnessFromEnv).
+	Harness string
 	// Getenv reads SSH_AUTH_SOCK. Default os.Getenv.
 	Getenv func(string) string
 	// Timeout bounds connecting and the handshake. Default 15s.
@@ -151,7 +153,7 @@ func start(ctx context.Context, client *ssh.Client, cfg *Config, opts Options) (
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stop()
 	if err := c.enc.Encode(&proto.Frame{T: proto.FrameHello, Version: opts.Version, Proto: proto.Proto,
-		Project: cfg.Project, Session: opts.Session, Machine: opts.Machine}); err != nil {
+		Project: cfg.Project, Session: opts.Session, Machine: opts.Machine, Harness: opts.Harness}); err != nil {
 		// The bridge may have refused and closed before reading the hello;
 		// its refusal is still waiting to be read.
 		if w, rerr := c.next(); rerr == nil && w.T == proto.FrameWelcome && w.Err != nil {

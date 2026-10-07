@@ -79,6 +79,7 @@ func init() {
 		{"handoff", "handoff ID NOTE...|- [--release] [--epoch N]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
 		{"away", "away DURATION", "extend all your claims, e.g. before going offline (1m to 7d)", cmdAway},
 		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
+		{"who", "who [--since DURATION]", "list the agents at work and the issues each holds (seen in the last 5m)", cmdWho},
 		{"prime", "prime [--hook]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"setup", "setup claude-code|codex|cursor|gemini|vscode [--write|--check|--remove] [--global] [--command PATH]", "set an agent up: MCP config, instruction pointer, session hook", cmdSetup},
@@ -266,7 +267,7 @@ func (r *runner) clientOptions() client.Options {
 		session = client.CLISession
 	}
 	return client.Options{Version: r.env.Version, Session: session,
-		Machine: host, Getenv: r.env.Getenv}
+		Machine: host, Harness: client.HarnessFromEnv(r.env.Getenv), Getenv: r.env.Getenv}
 }
 
 // call runs one operation.

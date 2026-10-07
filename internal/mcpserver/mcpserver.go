@@ -71,7 +71,7 @@ const Instructions = "Issue tracker shared by every agent and person on this pro
 	"it claims the issue while this session runs and returns it, its last handoff and a branch name. Comment as you go. " +
 	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
 	"To stop without closing, call handoff (release lets another start it). " +
-	"For a standup or status report, call digest and write the narrative from it. " +
+	"For a standup or status report, call digest and write the narrative from it; who lists the agents at work. " +
 	"Writes return {id, rev}; pass rev to update or close to refuse a stale edit. " +
 	"On an error, follow its fix line."
 
@@ -193,10 +193,12 @@ func (s *Server) renewLoop(ctx context.Context) {
 }
 
 // Renew extends the claims this session holds, if any, and notes the ones
-// it no longer holds. A failure is left for the next tick: the lease is
-// many ticks long.
+// it no longer holds. It also keeps the session in the server's agents
+// registry, so it renews while connected even holding nothing; it does
+// not dial just for that. A failure is left for the next tick: the lease
+// is many ticks long.
 func (s *Server) Renew(ctx context.Context) {
-	if !s.claims.any() {
+	if !s.claims.any() && !s.link.connected() {
 		return
 	}
 	var r proto.ClaimsResult
@@ -270,6 +272,13 @@ func (l *link) with(ctx context.Context, retry bool, fn func(Conn) error) error 
 			return &lostError{err: err, retried: retry && attempt > 0}
 		}
 	}
+}
+
+// connected reports whether a connection is open and not known lost.
+func (l *link) connected() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.conn != nil && l.conn.Err() == nil
 }
 
 func (l *link) close() error {

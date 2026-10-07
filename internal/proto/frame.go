@@ -44,6 +44,9 @@ type Frame struct {
 	Session string `json:"s,omitempty"`
 	Machine string `json:"m,omitempty"`
 	Latest  string `json:"latest,omitempty"`
+	// Harness names the agent harness a hello comes from (an `sfx setup`
+	// agent name), or is empty. Servers that predate it ignore it.
+	Harness string `json:"h,omitempty"`
 
 	Principal string `json:"pr,omitempty"`
 }

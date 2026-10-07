@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -618,4 +620,60 @@ func TestDispatchClaims(t *testing.T) {
 		t.Fatalf("claim after finish: %+v", show.Claim)
 	}
 	s.Reap(t.Context()) // nothing expired: a no-op
+}
+
+// A welcomed connection registers its session, with the hello's harness;
+// a harness the store would refuse is dropped, not fatal.
+func TestHandshakeRegistersAgent(t *testing.T) {
+	s := newServer(t)
+	bridge := func(p string) *proto.Frame { return &proto.Frame{T: proto.FrameBridge, Principal: p} }
+	hello := func(session, harness string) *proto.Frame {
+		return &proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: session, Machine: "laptop-a", Harness: harness}
+	}
+	for _, fs := range [][]*proto.Frame{
+		{bridge("alice"), hello("s-1", "claude-code")},
+		{bridge("bob"), hello("s-2", "Not A Harness")},
+	} {
+		if f, err := handshake(t, s, fs...); err != nil || f.Err != nil {
+			t.Fatalf("handshake: %v %+v", err, f)
+		}
+	}
+	who := mustCall[proto.WhoResult](t, s, alice, proto.OpWho, proto.WhoArgs{})
+	got := map[string]string{}
+	for _, a := range who.Agents {
+		got[a.Principal+"/"+a.Session+" on "+a.Machine] = a.Harness
+	}
+	want := map[string]string{"alice/s-1 on laptop-a": "claude-code", "bob/s-2 on laptop-a": ""}
+	if !maps.Equal(got, want) {
+		t.Fatalf("who after handshakes = %v, want %v", got, want)
+	}
+}
+
+func TestDispatchWho(t *testing.T) {
+	s := newServer(t)
+	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: a.ID})
+	// renew keeps a session present, holding claims or not.
+	mustCall[proto.ClaimsResult](t, s, alice, proto.OpRenew, proto.RenewArgs{})
+	mustCall[proto.ClaimsResult](t, s, bob, proto.OpRenew, proto.RenewArgs{})
+
+	who := mustCall[proto.WhoResult](t, s, bob, proto.OpWho, proto.WhoArgs{Since: "1h"})
+	if len(who.Agents) != 2 || who.Now.IsZero() {
+		t.Fatalf("who = %+v, want two agents and the server's now", who)
+	}
+	for _, ag := range who.Agents {
+		var want []string
+		if ag.Principal == "alice" {
+			want = []string{a.ID}
+		}
+		if !slices.Equal(ag.Claims, want) || ag.LastSeen.IsZero() || ag.Started.IsZero() {
+			t.Errorf("who agent %+v, want claims %v and times", ag, want)
+		}
+	}
+	for _, since := range []string{"soon", "8d", "-1h"} {
+		_, perr := call[proto.WhoResult](t, s, bob, proto.OpWho, proto.WhoArgs{Since: since})
+		if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "7d") {
+			t.Errorf("who since %q = %+v, want invalid with a fix naming 7d", since, perr)
+		}
+	}
 }
