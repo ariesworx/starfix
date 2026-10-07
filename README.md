@@ -68,6 +68,32 @@ the full name.
 which user connects to its socket. `--dev` overrides that on a single-user
 machine.
 
+## Install
+
+Each [release](https://github.com/ariesworx/starfix/releases) carries `sfx`
+for Linux, macOS and Windows and `starfixd` for Linux, on amd64 and arm64,
+as `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), with
+`checksums.txt` and its Ed25519 signature `checksums.txt.sig`. Unpack the
+binary onto your `PATH`; from then on `sfx upgrade` and `starfixd upgrade`
+fetch, verify and install new releases (Commands). `go install …@latest`
+(Quick start) builds the same code from source, unsigned. No release has
+been published yet.
+
+To verify a download by hand, work from a checkout of the release's tag, so
+the public keys come from the repository rather than the download:
+
+```sh
+git clone --branch v0.3.0 https://github.com/ariesworx/starfix && cd starfix
+gh release download v0.3.0 -p checksums.txt -p checksums.txt.sig -p 'sfx_0.3.0_linux_amd64.tar.gz'
+go run ./internal/tools/releasekey verify checksums.txt   # the signature, against internal/release/keys.go
+sha256sum --ignore-missing -c checksums.txt               # the archive; shasum -a 256 -c on macOS
+gh attestation verify sfx_0.3.0_linux_amd64.tar.gz --repo ariesworx/starfix   # build provenance
+```
+
+Releases are signed in CI with a key only the maintainer's approved
+release runs can use; [RELEASING.md](RELEASING.md) has the details and the
+trade-off.
+
 ## Quick start
 
 On the server, as the Unix user starfixd runs as (here `starfix`), with a
@@ -79,6 +105,7 @@ cat > /etc/starfix/starfixd.yaml <<'YAML'   # chmod 600: it holds the DSN
 dsn: starfix:PASSWORD@tcp(127.0.0.1:3306)/starfix
 project: 6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f   # any UUID; uuidgen | tr A-Z a-z
 socket: /run/starfix/starfixd.sock
+# systemd_unit: starfixd.service   # lets `starfixd upgrade` restart and health-check it
 YAML
 starfixd serve        # run it under systemd
 ```
@@ -161,6 +188,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook` for a SessionStart hook |
 | `mcp` | The MCP server for agents, on stdin and stdout |
 | `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini` or `vscode`: MCP config, instruction pointer, SessionStart hook |
+| `upgrade` | Replace `sfx` with the latest release after verifying its signature and checksum; `--check` prints one line and changes nothing; `--rollback` restores the binary the last upgrade replaced. Never runs by itself |
 | `version` | Print the version |
 
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
@@ -174,11 +202,20 @@ refused.
 | `stdio --principal NAME` | sshd forced command: bridge one session to the daemon |
 | `import-bd [--dry-run] [--json] FILE` | Import a bd `issues.jsonl` (`-` for stdin) |
 | `export-bd [-o FILE]` | Write the store in bd's JSONL format |
+| `upgrade [--check] [--to vX.Y.Z] [--rollback] [--restart]` | Replace this binary with a verified release, after tagging the database `starfix-<old version>`. With `systemd_unit:` set or `--restart`, restart the unit through `sudo -n systemctl restart` and health-check the daemon over its socket; if the new version is not healthy, restore the old binary and restart it. Run as the user starfixd runs as, not root |
 | `version` | Print the version |
 
 Settings come from flags, then `STARFIXD_*` environment variables, then
 `/etc/starfix/starfixd.yaml`, then defaults. A password is refused on the
 command line, and a config file that holds one must be mode 0600.
+
+`starfixd upgrade` restarts the unit as the daemon's user through `sudo -n`,
+so give that user exactly this rule (`visudo -f /etc/sudoers.d/starfix`,
+with your unit name):
+
+```text
+starfix ALL=(root) NOPASSWD: /usr/bin/systemctl restart starfixd.service
+```
 
 ## Agents
 
@@ -256,7 +293,7 @@ connection, and other writes report that they may have applied.
 |---|---|---|
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
-| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish`, `digest` built) |
+| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish`, `digest`, `upgrade` built) |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
@@ -296,6 +333,7 @@ GOOS=windows go build ./cmd/...   # the client must build on every developer OS
 | `internal/client`, `internal/cli` | SSH client, config discovery, CLI commands |
 | `internal/gitx` | Branch names from issues, issue IDs from branches and `Starfix:` trailers, branch and worktree creation |
 | `internal/bdimport` | bd JSONL import and export |
+| `internal/release`, `internal/tools/releasekey` | Release download, signature and checksum verification, binary swap; the release-key tool ([RELEASING.md](RELEASING.md)) |
 | `internal/mcpserver`, `internal/agentsetup` | MCP tools and `prime`; agent registration |
 | `internal/e2e` | End-to-end tests through an in-process SSH server |
 | `spike/dolt` | Stage 0 experiments (not built into the binaries) |

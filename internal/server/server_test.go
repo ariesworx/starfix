@@ -440,6 +440,8 @@ func TestResolveSettings(t *testing.T) {
 	loose := write("loose.yaml", "dsn: starfix:pw@tcp(127.0.0.1:3306)/sf\n", 0o644)
 	nopw := write("nopw.yaml", "dsn: starfix@tcp(127.0.0.1:3306)/sf\n", 0o644)
 	unknown := write("unknown.yaml", "dns: typo\n", 0o600)
+	unit := write("unit.yaml", "systemd_unit: starfixd.service\n", 0o600)
+	badUnit := write("badunit.yaml", "systemd_unit: --no-block\n", 0o600)
 	env := map[string]string{}
 	getenv := func(k string) string { return env[k] }
 
@@ -464,6 +466,8 @@ func TestResolveSettings(t *testing.T) {
 		{name: "password in a loose file refused", path: loose, err: "chmod 600"},
 		{name: "loose file without password", path: nopw, check: func(s Settings) bool { return s.DSN != "" }},
 		{name: "unknown key refused", path: unknown, err: "dns"},
+		{name: "systemd unit", path: unit, check: func(s Settings) bool { return s.SystemdUnit == "starfixd.service" }},
+		{name: "option-like unit refused", path: badUnit, err: "is not a unit name"},
 		{name: "named file must exist", path: filepath.Join(dir, "missing.yaml"), err: "no such file"},
 	}
 	for _, tc := range tests {

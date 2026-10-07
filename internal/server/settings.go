@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"regexp"
 
 	"github.com/go-sql-driver/mysql"
 	"go.yaml.in/yaml/v3"
@@ -28,7 +29,15 @@ type Settings struct {
 	Prefix string `yaml:"prefix"`
 	// Latest is the latest release, set by hand on air-gapped servers.
 	Latest string `yaml:"latest"`
+	// SystemdUnit is the unit `starfixd upgrade` restarts. Empty means
+	// upgrade installs the binary and leaves the restart to the admin,
+	// unless --restart is given.
+	SystemdUnit string `yaml:"systemd_unit"`
 }
+
+// UnitPattern is what a systemd unit name may look like. It cannot start
+// with "-", so it never reaches systemctl as an option.
+var UnitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@._:-]{0,127}$`)
 
 // Environment variables read by ResolveSettings.
 const (
@@ -70,12 +79,15 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 			v   string
 		}{
 			{&out.DSN, s.DSN}, {&out.Socket, s.Socket}, {&out.Project, s.Project},
-			{&out.Prefix, s.Prefix}, {&out.Latest, s.Latest},
+			{&out.Prefix, s.Prefix}, {&out.Latest, s.Latest}, {&out.SystemdUnit, s.SystemdUnit},
 		} {
 			if f.v != "" {
 				*f.dst = f.v
 			}
 		}
+	}
+	if out.SystemdUnit != "" && !UnitPattern.MatchString(out.SystemdUnit) {
+		return Settings{}, fmt.Errorf("systemd_unit %q is not a unit name; fix: set it to the service's name, for example starfixd.service", out.SystemdUnit)
 	}
 	return out, nil
 }

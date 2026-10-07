@@ -4,6 +4,7 @@
 //	starfixd stdio --principal NAME [--socket PATH]
 //	starfixd import-bd [--dry-run] [--json] FILE|-
 //	starfixd export-bd [-o FILE]
+//	starfixd upgrade [--check] [--to vX.Y.Z] [--rollback] [--restart]
 //	starfixd version
 //
 // serve is the long-running daemon: it owns the Dolt store and serves the
@@ -11,7 +12,9 @@
 // key's authorized_keys line; it bridges the SSH session to that socket.
 // import-bd and export-bd are admin commands run on the server: they open
 // the store directly with the daemon's DSN settings and move a backlog in
-// and out as bd's JSONL.
+// and out as bd's JSONL. upgrade replaces this binary with a verified
+// release, after tagging the database, and restarts and health-checks the
+// daemon when a systemd unit is configured or --restart is given.
 package main
 
 import (
@@ -36,6 +39,7 @@ const usage = `usage:
   starfixd stdio --principal NAME [--config FILE] [--socket PATH]
   starfixd import-bd [--config FILE] [--dsn DSN] [--principal NAME] [--dry-run] [--json] FILE|-
   starfixd export-bd [--config FILE] [--dsn DSN] [-o FILE]
+  starfixd upgrade [--check] [--to vX.Y.Z] [--rollback] [--restart] [--config FILE] [--dsn DSN] [--socket PATH]
   starfixd version
 
 The database DSN comes from --dsn (no password allowed there), $STARFIXD_DSN,
@@ -78,6 +82,8 @@ func run(ctx context.Context, args []string) error {
 		return importBD(ctx, osEnv(), args[1:])
 	case "export-bd":
 		return exportBD(ctx, osEnv(), args[1:])
+	case "upgrade":
+		return upgradeCmd(ctx, osEnv(), osUpgradeDeps(), args[1:])
 	case "version", "--version":
 		fmt.Printf("starfixd %s (protocol %d-%d)\n", version.Version, proto.ProtoMin, proto.ProtoMax)
 		return nil

@@ -36,6 +36,9 @@ type Env struct {
 	UserHomeDir func() (string, error)
 	// Version is this binary's build version.
 	Version string
+	// Upgrader overrides what `upgrade` uses. Nil uses GitHub releases,
+	// the built-in release keys and this executable.
+	Upgrader *Upgrader
 }
 
 // usageError is a mistake on the command line.
@@ -78,6 +81,7 @@ func init() {
 		{"prime", "prime [--hook]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"setup", "setup claude-code|codex|cursor|gemini|vscode [--write|--check|--remove] [--global] [--command PATH]", "set an agent up: MCP config, instruction pointer, session hook", cmdSetup},
+		{"upgrade", "upgrade [--check] [--rollback]", "replace sfx with the latest verified release; --rollback undoes it", cmdUpgrade},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
 }
