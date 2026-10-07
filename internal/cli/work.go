@@ -16,9 +16,14 @@ type started struct {
 	Branch string `json:"branch"`
 }
 
+// cliLease is how long a claim taken from a terminal lasts: nothing renews
+// it, so it covers a working day. `sfx away` extends it.
+const cliLease = "8h"
+
 func cmdStart(ctx context.Context, r *runner, args []string) error {
-	const usage = "start [ID] [--branch | --worktree DIR]"
+	const usage = "start [ID] [--for DURATION] [--branch | --worktree DIR]"
 	fs := r.newFlags("start")
+	lease := fs.String("for", cliLease, "how long the claim lasts (1m to 7d); `sfx away` extends it")
 	branch := fs.Bool("branch", false, "create or switch to the issue's branch here")
 	worktree := fs.String("worktree", "", "create a worktree at DIR on the issue's branch")
 	pos, err := parse(fs, args, usage)
@@ -31,7 +36,7 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 	if *branch && *worktree != "" {
 		return usagef(usage, "give --branch or --worktree, not both")
 	}
-	var in proto.StartArgs
+	in := proto.StartArgs{Lease: *lease}
 	if len(pos) == 1 {
 		in.ID = pos[0]
 	}
@@ -59,7 +64,7 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	printIssue(r.env.Stdout, proto.ShowResult{Issue: is})
+	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim})
 	if h := out.Handoff; h != nil {
 		_, _ = fmt.Fprintf(r.env.Stdout, "\nhandoff from %s, %s:\n%s\n", h.Author, when(h.CreatedAt), h.Body)
 	}
@@ -78,10 +83,11 @@ func (l *repeated) Set(v string) error {
 }
 
 func cmdFinish(ctx context.Context, r *runner, args []string) error {
-	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]..."
+	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]... [--epoch N]"
 	fs := r.newFlags("finish")
 	var in proto.FinishArgs
 	var found repeated
+	fs.Int64Var(&in.Epoch, "epoch", 0, "refuse unless this is still the claim's epoch")
 	fs.StringVar(&in.Reason, "reason", "", "what was done")
 	fs.StringVar(&in.Handoff, "handoff", "", "a note for whoever comes next, or - for standard input")
 	fs.Var(&found, "discovered", "title of new work found on the way, filed as a task (repeatable)")
@@ -114,9 +120,10 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 }
 
 func cmdHandoff(ctx context.Context, r *runner, args []string) error {
-	const usage = "handoff ID NOTE...|- [--release]"
+	const usage = "handoff ID NOTE...|- [--release] [--epoch N]"
 	fs := r.newFlags("handoff")
 	var in proto.HandoffArgs
+	fs.Int64Var(&in.Epoch, "epoch", 0, "refuse unless this is still the claim's epoch")
 	fs.BoolVar(&in.Release, "release", false, "also let the issue go: back to open, unassigned")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
@@ -130,4 +137,36 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 		return err
 	}
 	return r.write(ctx, proto.OpHandoff, in)
+}
+
+func cmdAway(ctx context.Context, r *runner, args []string) error {
+	const usage = "away DURATION"
+	fs := r.newFlags("away")
+	pos, err := parse(fs, args, usage)
+	if err != nil {
+		return err
+	}
+	d, err := one(usage, pos, "away")
+	if err != nil {
+		return err
+	}
+	if _, err := proto.ParseDuration(d); err != nil {
+		return usagef(usage, "%q: %v", d, err)
+	}
+	var out proto.ClaimsResult
+	if err := r.call(ctx, proto.OpRenew, proto.RenewArgs{Lease: d, All: true}, &out); err != nil {
+		return err
+	}
+	if r.json {
+		r.emit(out)
+		return nil
+	}
+	if len(out.Claims) == 0 {
+		_, _ = fmt.Fprintln(r.env.Stdout, "you hold no claims")
+		return nil
+	}
+	for _, c := range out.Claims {
+		_, _ = fmt.Fprintf(r.env.Stdout, "%s held until %s (%s)\n", c.ID, when(c.ExpiresAt), c.Session)
+	}
+	return nil
 }

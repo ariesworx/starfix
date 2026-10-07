@@ -10,7 +10,7 @@ import (
 // MCP config; CLAUDE_CODE_SESSION_ID is set by Claude Code for the
 // processes it starts; CLAUDE_SESSION_ID is the older spelling. Codex and
 // Gemini CLI set no session variable that starfix knows of: the CLI then
-// lets the server assign an id, and `sfx mcp` picks one per process.
+// uses CLISession, and `sfx mcp` picks one per process.
 var SessionEnv = []string{"STARFIX_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"}
 
 // SessionFromEnv returns the first non-empty variable of SessionEnv, or ""
@@ -23,6 +23,11 @@ func SessionFromEnv(getenv func(string) string) string {
 	}
 	return ""
 }
+
+// CLISession is the session of a person's own `sfx` commands: one per
+// principal and machine, so a claim taken in one command is the same
+// session's in the next.
+const CLISession = "cli"
 
 // NewSessionID returns a random session id, "m-" and 16 hex digits, for a
 // process that runs without a harness session id.

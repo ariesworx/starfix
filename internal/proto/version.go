@@ -9,10 +9,14 @@ import (
 // Protocol versions. A client speaks Proto; a server accepts any client in
 // [ProtoMin, ProtoMax]. Principle 9 keeps the range one version back and
 // one forward once there is more than one.
+//
+// Protocol 2 adds claims: start's lease and claim, the epoch on finish and
+// handoff, show's claim, and renew. A protocol 1 client sends none of
+// them and gets the default lease.
 const (
-	Proto    = 1
+	Proto    = 2
 	ProtoMin = 1
-	ProtoMax = 1
+	ProtoMax = 2
 )
 
 // CheckProto refuses a client protocol version p outside [lo, hi]. The

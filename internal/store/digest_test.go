@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-// clock is a settable server clock for a store under test.
-type clock struct{ t time.Time }
-
-func (c *clock) now() time.Time { return c.t }
-
 // ids lists a section's issue ids, then its total: "a b /3".
 func ids(sec DigestSection) string {
 	var out []string
@@ -48,7 +43,7 @@ func TestDigest(t *testing.T) {
 	old := create(alice, "old", P2)
 	stale := create(alice, "stale", P2)
 	clk.t = t0.Add(24 * time.Hour)
-	_, err := s.StartIssue(ctx, alice, stale)
+	_, _, err := s.StartIssue(ctx, alice, stale, 0)
 	must(err)
 	clk.t = t0.Add(8 * 24 * time.Hour)
 	closedEarly := create(bob, "closed early", P2)
@@ -62,16 +57,16 @@ func TestDigest(t *testing.T) {
 	// Inside the window.
 	clk.t = t0.Add(9*24*time.Hour + 12*time.Hour)
 	a := create(bob, "a", P1, "ui")
-	_, err = s.StartIssue(ctx, bob, a)
+	_, _, err = s.StartIssue(ctx, bob, a, 0)
 	must(err)
-	_, found, err := s.FinishIssue(ctx, bob, a, Finish{Reason: "done", Handoff: strings.Repeat("n", 300),
+	_, found, err := s.FinishIssue(ctx, bob, a, 0, Finish{Reason: "done", Handoff: strings.Repeat("n", 300),
 		Discovered: []NewIssue{{Title: "found"}}})
 	must(err)
 	b := create(carol, "b", P0, "ui")
 	must(s.AddDep(ctx, carol, b, old, DepBlocks))
 	fresh := create(alice, "fresh", P3)
 	clk.t = t0.Add(9*24*time.Hour + 23*time.Hour)
-	_, err = s.StartIssue(ctx, alice, fresh)
+	_, _, err = s.StartIssue(ctx, alice, fresh, 0)
 	must(err)
 
 	clk.t = t0.Add(10 * 24 * time.Hour)
@@ -178,7 +173,7 @@ func TestDigestCaps(t *testing.T) {
 	ctx := t.Context()
 	for i := range 12 {
 		is := mustCreate(t, s, NewIssue{Title: fmt.Sprintf("i%02d", i), Priority: prio(Priority(4 - i%5))})
-		if _, err := s.StartIssue(ctx, alice, is.ID); err != nil {
+		if _, _, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

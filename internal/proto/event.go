@@ -38,6 +38,11 @@ func (e Event) Changed() string {
 		return fmt.Sprintf("%v %v", pick["type"], pick["to"])
 	case "issue.create":
 		return fmt.Sprintf("%q", pick["title"])
+	case "claim.take", "claim.expire":
+		if h, ok := pick["holder"].(map[string]any); ok {
+			return fmt.Sprintf("epoch %v, %v/%v", pick["epoch"], h["principal"], h["session"])
+		}
+		return fmt.Sprintf("epoch %v", pick["epoch"])
 	}
 	return ""
 }

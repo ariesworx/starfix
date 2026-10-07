@@ -74,9 +74,10 @@ func init() {
 		{"comment", "comment ID TEXT...|-", "add a comment", cmdComment},
 		{"comments", "comments ID", "list an issue's comments", cmdComments},
 		{"history", "history ID", "list an issue's changes", cmdHistory},
-		{"start", "start [ID] [--branch | --worktree DIR]", "take an issue (the top ready one without ID) and show it", cmdStart},
-		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]...", "close your issue with a handoff note and discovered work", cmdFinish},
-		{"handoff", "handoff ID NOTE...|- [--release]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
+		{"start", "start [ID] [--for DURATION] [--branch | --worktree DIR]", "claim an issue (the top ready one without ID) and show it", cmdStart},
+		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]... [--epoch N]", "close your issue with a handoff note and discovered work", cmdFinish},
+		{"handoff", "handoff ID NOTE...|- [--release] [--epoch N]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
+		{"away", "away DURATION", "extend all your claims, e.g. before going offline (1m to 7d)", cmdAway},
 		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
 		{"prime", "prime [--hook]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
@@ -260,6 +261,9 @@ func (r *runner) clientOptions() client.Options {
 	session := r.session
 	if session == "" {
 		session = client.SessionFromEnv(r.env.Getenv)
+	}
+	if session == "" {
+		session = client.CLISession
 	}
 	return client.Options{Version: r.env.Version, Session: session,
 		Machine: host, Getenv: r.env.Getenv}

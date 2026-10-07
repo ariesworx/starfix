@@ -58,6 +58,9 @@ type Config struct {
 	PeerCheck func(net.Conn) error
 	// RequestTimeout bounds one request. Default 60s.
 	RequestTimeout time.Duration
+	// ReapInterval is how often expired claims are ended. Default 30s;
+	// negative turns the reaper off (tests call Reap).
+	ReapInterval time.Duration
 }
 
 // Server serves the protocol. Create it with New.
@@ -102,6 +105,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 60 * time.Second
 	}
+	if cfg.ReapInterval == 0 {
+		cfg.ReapInterval = 30 * time.Second
+	}
 	return &Server{cfg: cfg, conns: map[net.Conn]struct{}{}}, nil
 }
 
@@ -118,6 +124,9 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	})
 	defer stop()
 	defer s.wg.Wait()
+	if s.cfg.ReapInterval > 0 {
+		s.wg.Go(func() { s.reapLoop(ctx) })
+	}
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -138,6 +147,37 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			}()
 			s.handle(ctx, c)
 		})
+	}
+}
+
+// reapLoop ends expired claims every ReapInterval until ctx is done.
+func (s *Server) reapLoop(ctx context.Context) {
+	t := time.NewTicker(s.cfg.ReapInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Reap(ctx)
+		}
+	}
+}
+
+// Reap ends expired claims now and logs each.
+func (s *Server) Reap(ctx context.Context) {
+	rctx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
+	defer cancel()
+	cs, err := s.cfg.Store.ReapClaims(rctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.cfg.Logger.Error("reap claims", "err", err)
+		}
+		return
+	}
+	for _, c := range cs {
+		s.cfg.Logger.Info("claim expired", "issue", c.Issue, "principal", c.Holder.Principal,
+			"session", c.Holder.Session, "epoch", c.Epoch)
 	}
 }
 
