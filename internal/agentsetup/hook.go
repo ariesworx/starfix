@@ -9,9 +9,10 @@ import (
 	"strings"
 )
 
-// The SessionStart hook runs `sfx prime --hook=AGENT` when a session
-// starts, so the agent begins oriented. Claude Code's form, which Codex
-// and Junie share, nests the hook in a group:
+// The SessionStart hook runs `sfx prime --hook=AGENT` (bare --hook for
+// Claude Code) when a session starts, so the agent begins oriented.
+// Claude Code's form, which Codex and Junie share, nests the hook in a
+// group:
 //
 //	{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "sfx prime --hook"}]}]}}
 //
@@ -54,11 +55,17 @@ var (
 	// geminiHook: Gemini's matcher is an exact source, and its timeout is
 	// in milliseconds.
 	geminiHook = hookStyle{event: "SessionStart", matchers: []string{"startup", "resume", "clear"}, timeout: 15000}
+	// cursorHook: Cursor's hooks are flat and untyped, under
+	// sessionStart, in a file with a version.
 	cursorHook = hookStyle{event: "sessionStart", flat: true, matchers: []string{""}, untyped: true, timeout: 30, version: 1}
+	// vscodeHook: VS Code's hooks are flat, in a file of starfix's own
+	// (.github/hooks/starfix.json).
 	vscodeHook = hookStyle{event: "SessionStart", flat: true, matchers: []string{""}, timeout: 15, own: true}
 )
 
 var (
+	// shellSafe matches a word the shell reads as itself, which
+	// shellQuote leaves bare.
 	shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
 	// hookCmd splits a prime hook's command into its program, one word
 	// as shellQuote writes it, and the rest.
@@ -73,8 +80,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// HookCommand is the command the harness's hook runs. Claude Code's is
-// the bare --hook, as before other harnesses had one.
+// HookCommand is the command the harness's hook runs: e's program,
+// quoted for the shell, then prime --hook=harness, or bare --hook for
+// Claude Code, which sfx prime reads as claude-code.
 func HookCommand(e Entry, harness string) string {
 	if harness == "claude-code" {
 		return shellQuote(e.Command) + " prime --hook"
@@ -131,6 +139,9 @@ func hookParts(h object) (cmd string, ok bool) {
 	return cmd, true
 }
 
+// ourHook reports whether h is starfix's: it runs exactly HookCommand(e,
+// harness), or one program word as shellQuote writes it, naming sfx or
+// e's program, then prime --hook with or without =AGENT.
 func ourHook(h object, e Entry, harness string) bool {
 	cmd, ok := hookParts(h)
 	if !ok {
@@ -149,6 +160,8 @@ func exactHook(h object, e Entry, harness string) bool {
 	return ok && cmd == HookCommand(e, harness)
 }
 
+// parseArray reads a JSON array, keeping each element as written; empty
+// input is an empty array.
 func parseArray(raw json.RawMessage) ([]json.RawMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -163,6 +176,7 @@ func parseArray(raw json.RawMessage) ([]json.RawMessage, error) {
 	return a, nil
 }
 
+// marshalArray writes a compactly, each element as it was.
 func marshalArray(a []json.RawMessage) json.RawMessage {
 	var b bytes.Buffer
 	b.WriteByte('[')
@@ -184,6 +198,8 @@ type hookDoc struct {
 	list        []json.RawMessage
 }
 
+// open reads content down to the style's event list. A missing level is
+// empty; a level of the wrong type is an error naming its path.
 func (s hookStyle) open(content []byte) (*hookDoc, error) {
 	d := &hookDoc{style: s, hooks: object{}}
 	var err error
@@ -253,6 +269,9 @@ func (s hookStyle) slot(matcher string) int {
 	return slices.Index(s.matchers, matcher)
 }
 
+// marshal writes the list back into the document, dropping the levels
+// it leaves empty, and formats it. A file of starfix's own that is left
+// empty comes back nil, to be deleted.
 func (d *hookDoc) marshal() ([]byte, error) {
 	if len(d.list) > 0 {
 		d.hooks = d.hooks.set(d.style.event, marshalArray(d.list))
@@ -270,6 +289,7 @@ func (d *hookDoc) marshal() ([]byte, error) {
 	return indent(d.root.marshal())
 }
 
+// entry is a new hook for e, in the style's shape.
 func (s hookStyle) entry(e Entry, harness string) json.RawMessage {
 	o := object{}
 	if !s.untyped {
@@ -282,6 +302,7 @@ func (s hookStyle) entry(e Entry, harness string) json.RawMessage {
 	return o.marshal()
 }
 
+// group is a new group holding a new hook, with matcher if it is set.
 func (s hookStyle) group(matcher string, e Entry, harness string) json.RawMessage {
 	g := object{}
 	if matcher != "" {
@@ -342,6 +363,8 @@ func (s hookStyle) apply(content []byte, e Entry, harness string) ([]byte, Resul
 	return out, res, err
 }
 
+// remove takes out every starfix hook, keeping the person's hooks and
+// dropping the groups it empties.
 func (s hookStyle) remove(content []byte, e Entry, harness string) ([]byte, Result, error) {
 	d, err := s.open(content)
 	if err != nil {
@@ -387,6 +410,7 @@ func (s hookStyle) registered(content []byte, e Entry, harness string) bool {
 	return !slices.Contains(filled, false)
 }
 
+// snippet is the hook alone, as a new file holding it, to paste by hand.
 func (s hookStyle) snippet(e Entry, harness string) string {
 	b, _, err := s.apply(nil, e, harness)
 	if err != nil {
