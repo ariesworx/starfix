@@ -1,8 +1,14 @@
-// Package e2e runs the starfix CLI against starfixd through a real SSH
-// handshake: an in-process SSH server that authenticates keys, maps each to
-// a principal and enforces forced-command semantics by running the stdio
-// bridge whatever the client asks for, in front of a daemon on a temporary
-// unix socket and a real Dolt store.
+// Package e2e runs the starfix CLI and MCP server against starfixd through
+// a real SSH handshake: an in-process SSH server that authenticates keys,
+// maps each to a principal and enforces forced-command semantics by running
+// the stdio bridge whatever the client asks for, in front of a daemon on a
+// temporary unix socket and a real Dolt store.
+//
+// A world is one daemon and its SSH server, and a user is a developer with
+// a key and a repository whose .starfix.yaml points at them. Each test
+// makes its own world, whose cleanup stops both and waits for their
+// goroutines. TestMain starts one Dolt server for every test; without dolt
+// on PATH the tests skip, unless STARFIX_REQUIRE_DOLT is set.
 package e2e
 
 import (
@@ -68,12 +74,12 @@ type world struct {
 	socket  string
 	addr    *net.TCPAddr
 	hostFpr string
+	keysMu  sync.Mutex        // guards keys
 	keys    map[string]string // authorized key fingerprint → principal
-	keysMu  sync.Mutex
 
 	// fixedClock says the store runs on the test's clock (daemonOpts.now).
 	fixedClock bool
-	connsMu    sync.Mutex
+	connsMu    sync.Mutex            // guards conns and dropOp
 	conns      map[net.Conn]struct{} // open SSH connections
 	// dsn is the store's database, for tests that plant rows the store
 	// would refuse (data from before a validation, or a hostile writer).
@@ -84,10 +90,15 @@ type world struct {
 	dropOp string
 }
 
+// daemonOpts configures a world's daemon; the zero value takes the
+// defaults.
 type daemonOpts struct {
+	// protoMin and protoMax are the protocol versions the server accepts.
 	protoMin, protoMax int
-	noDaemon           bool
-	latest             string
+	// noDaemon starts only the SSH server, so the bridge finds no daemon.
+	noDaemon bool
+	// latest is the newest release the server knows of.
+	latest string
 	// now, if set, is the store's clock. The reaper and the agents'
 	// renewals are then off, so claims expire only when the test says.
 	now func() time.Time
@@ -97,6 +108,8 @@ type daemonOpts struct {
 	limits server.Limits
 }
 
+// newWorld starts a daemon on a new database, unless o.noDaemon, and the
+// SSH server in front of it, and stops both when t ends.
 func newWorld(t *testing.T, o daemonOpts) *world {
 	t.Helper()
 	if errors.Is(doltErr, dolttest.ErrNoDolt) {
@@ -159,6 +172,7 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 // or shell request, ignoring the command the client sent.
 func (w *world) startSSH(ctx context.Context) {
 	t := w.t
+	t.Helper()
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +228,7 @@ type tap struct {
 	nc   net.Conn
 	in   io.Reader
 	out  io.Writer
-	mu   sync.Mutex
+	mu   sync.Mutex // guards drop, rbuf and wbuf
 	drop map[uint64]bool
 	rbuf []byte // partial request line
 	wbuf []byte // partial response line
@@ -275,6 +289,9 @@ func (w *world) dropAll() {
 	}
 }
 
+// serveSSH serves one SSH connection until it closes, then waits for its
+// sessions. A session runs the bridge on its first exec or shell request;
+// other channel types and requests are refused.
 func (w *world) serveSSH(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
 	w.connsMu.Lock()
 	w.conns[nc] = struct{}{}
@@ -333,10 +350,12 @@ type user struct {
 	env  map[string]string
 }
 
-// newUser makes a key; authorized maps it to principal ("" leaves it
-// unknown to the server). hostFpr overrides the pinned host key.
+// newUser makes a user with a new key, which the server maps to principal
+// ("" leaves the key unknown to it). The user's .starfix.yaml pins the
+// server's host key, or hostFpr if it is set.
 func (w *world) newUser(principal, hostFpr string) *user {
 	t := w.t
+	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +388,7 @@ func (w *world) newUser(principal, hostFpr string) *user {
 	return &user{w: w, repo: repo, env: map[string]string{}}
 }
 
+// result is one CLI run's exit code and output.
 type result struct {
 	code           int
 	stdout, stderr string
@@ -404,6 +424,8 @@ func (u *user) runTo(ctx context.Context, stdout, stderr io.Writer, version stri
 	})
 }
 
+// ok runs the CLI as client v0.2.0 and returns its standard output,
+// failing the test unless it exits 0.
 func (u *user) ok(args ...string) string {
 	u.w.t.Helper()
 	r := u.run("v0.2.0", args...)
@@ -413,6 +435,7 @@ func (u *user) ok(args ...string) string {
 	return r.stdout
 }
 
+// decode unmarshals s as a T, failing the test if it cannot.
 func decode[T any](t *testing.T, s string) T {
 	t.Helper()
 	var v T

@@ -27,7 +27,7 @@ type rawSession struct {
 	nc    net.Conn
 }
 
-// rawDial connects as u and completes the handshake.
+// rawDial connects as u, in session, and completes the handshake.
 func (u *user) rawDial(session string) *rawSession {
 	t := u.w.t
 	t.Helper()
@@ -97,6 +97,7 @@ func (r *rawSession) next() *proto.Frame {
 	return f
 }
 
+// nextErr is next for a read that may fail: it returns the error.
 func (r *rawSession) nextErr() (*proto.Frame, error) {
 	_ = r.nc.SetReadDeadline(time.Now().Add(30 * time.Second))
 	defer func() { _ = r.nc.SetReadDeadline(time.Time{}) }()
