@@ -2,7 +2,10 @@
 // §5, `sfx setup`). It maintains up to three files per harness: the MCP
 // configuration, a marker-delimited pointer in the agent's instruction
 // file, and, where the harness has one, a SessionStart hook that runs
-// `sfx prime --hook`.
+// `sfx prime --hook=AGENT`. Where a harness keeps two parts in one file
+// (Gemini CLI's settings.json) or two harnesses share a file (AGENTS.md
+// for Codex and Junie), the caller applies each part to the output of
+// the last.
 //
 // Edits are idempotent and minimal: an existing file keeps its other
 // servers, its other keys and their order, and an existing starfix entry
@@ -57,6 +60,20 @@ type Agent struct {
 
 	format  format
 	pointer pointerStyle
+	hook    hookStyle
+}
+
+// ManualMCP reports whether the person registers the MCP server by hand,
+// in the harness's settings: it has no project file setup can edit.
+func (a Agent) ManualMCP() bool { return a.Project == "" }
+
+// Steps is what the person must do that a file edit cannot: the Note
+// and, where the MCP server is added by hand, the JSON to paste.
+func (a Agent) Steps(e Entry) string {
+	if a.ManualMCP() {
+		return a.Note + "\n" + a.Snippet(e)
+	}
+	return a.Note
 }
 
 type format int
@@ -69,28 +86,46 @@ const (
 )
 
 // Agents are the supported harnesses, by name: every path setup writes
-// is in this table. Hooks are written only for Claude Code; the others
-// either have none or none whose format is settled enough to write.
+// is in this table, and each hook's format is in hook.go. The hook
+// formats follow each harness's documentation as of 7 Oct 2026 (design
+// §5, As built).
 var Agents = map[string]Agent{
 	"claude-code": {Name: "claude-code", Title: "Claude Code", Project: ".mcp.json", Global: ".claude.json",
 		Pointer: "CLAUDE.md", GlobalPointer: ".claude/CLAUDE.md",
 		Hook: ".claude/settings.json", GlobalHook: ".claude/settings.json",
-		SessionEnv: "CLAUDE_CODE_SESSION_ID", format: jsonClaude,
+		SessionEnv: "CLAUDE_CODE_SESSION_ID", format: jsonClaude, hook: claudeHook,
 		Note: "Claude Code asks each person to approve a project's .mcp.json servers the first time it opens the project."},
 	"codex": {Name: "codex", Title: "Codex", Project: ".codex/config.toml", Global: ".codex/config.toml",
 		Pointer: "AGENTS.md", GlobalPointer: ".codex/AGENTS.md",
-		format: tomlCodex,
-		Note:   "Codex reads a project's .codex/config.toml only once the project is trusted."},
+		Hook: ".codex/hooks.json", GlobalHook: ".codex/hooks.json",
+		format: tomlCodex, hook: codexHook,
+		Note: "Codex reads a project's .codex/config.toml only once the project is trusted, and runs its .codex/hooks.json only once you trust the hooks with /hooks."},
 	"gemini": {Name: "gemini", Title: "Gemini CLI", Project: ".gemini/settings.json", Global: ".gemini/settings.json",
 		Pointer: "GEMINI.md", GlobalPointer: ".gemini/GEMINI.md",
-		format: jsonGemini},
+		Hook: ".gemini/settings.json", GlobalHook: ".gemini/settings.json",
+		format: jsonGemini, hook: geminiHook,
+		Note: "Gemini CLI loads a project's .gemini/settings.json, its MCP server and hooks included, only in a trusted folder: trust the folder when Gemini CLI asks."},
 	"cursor": {Name: "cursor", Title: "Cursor", Project: ".cursor/mcp.json", Global: ".cursor/mcp.json",
 		Pointer: ".cursor/rules/starfix.mdc", // user rules live in Cursor's settings, not a file
-		format:  jsonGemini, pointer: ruleFile},
+		Hook:    ".cursor/hooks.json", GlobalHook: ".cursor/hooks.json",
+		format: jsonGemini, pointer: cursorRule, hook: cursorHook,
+		Note: "Cursor starts a project's .cursor/mcp.json servers only once enabled: turn starfix on in Cursor Settings › MCP."},
 	"vscode": {Name: "vscode", Title: "VS Code", Project: ".vscode/mcp.json",
 		NoGlobal: "drop --global and commit .vscode/mcp.json, or run `MCP: Add Server` in VS Code and choose Global",
 		Pointer:  ".github/copilot-instructions.md",
-		format:   jsonVSCode},
+		Hook:     ".github/hooks/starfix.json",
+		format:   jsonVSCode, hook: vscodeHook,
+		Note: "VS Code asks you to trust the starfix server in .vscode/mcp.json before it starts it. Agent hooks are a Preview feature: .github/hooks/starfix.json runs only where VS Code has them enabled."},
+	"junie": {Name: "junie", Title: "Junie", Project: ".junie/mcp/mcp.json", Global: ".junie/mcp/mcp.json",
+		Pointer: "AGENTS.md", GlobalPointer: ".junie/AGENTS.md",
+		GlobalHook: ".junie/config.json", // Junie ignores hooks in a project's config
+		format:     jsonGemini, hook: claudeHook,
+		Note: "Junie runs hooks only from ~/.junie/config.json, never a project's: run `sfx setup junie --global --write` for the SessionStart hook."},
+	"jetbrains": {Name: "jetbrains", Title: "JetBrains AI Assistant",
+		NoGlobal: "drop --global: AI Assistant keeps its MCP servers in the IDE's settings, so add starfix there with scope Global",
+		Pointer:  ".aiassistant/rules/starfix.md",
+		format:   jsonGemini, pointer: jetbrainsRule,
+		Note: "AI Assistant has no MCP file setup can edit. In the IDE open Settings › Tools › AI Assistant › Model Context Protocol (MCP), click Add, paste this JSON, and set the scope to Project:"},
 }
 
 // Names lists the supported agents, sorted.
@@ -241,19 +276,20 @@ func (t Target) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	case KindPointer:
 		return applyPointer(content, t.agent.pointer)
 	case KindHook:
-		return applyHook(content, e)
+		return t.agent.hook.apply(content, e, t.agent.Name)
 	}
 	return t.agent.Apply(content, e)
 }
 
-// Remove takes the target's part out of content. Empty output for a
-// pointer means the file held nothing else and may be deleted.
+// Remove takes the target's part out of content. Empty output means the
+// file held nothing else and may be deleted: a pointer file, or a hook
+// file that is starfix's own.
 func (t Target) Remove(content []byte, e Entry) ([]byte, Result, error) {
 	switch t.Kind {
 	case KindPointer:
 		return removePointer(content, t.agent.pointer)
 	case KindHook:
-		return removeHook(content, e)
+		return t.agent.hook.remove(content, e, t.agent.Name)
 	}
 	return t.agent.Remove(content)
 }
@@ -265,7 +301,7 @@ func (t Target) Registered(content []byte, e Entry) bool {
 	case KindPointer:
 		return pointerRegistered(content, t.agent.pointer)
 	case KindHook:
-		return hookRegistered(content, e)
+		return t.agent.hook.registered(content, e, t.agent.Name)
 	}
 	return t.agent.Registered(content, e)
 }
@@ -276,7 +312,7 @@ func (t Target) Snippet(e Entry) string {
 	case KindPointer:
 		return pointerSnippet(t.agent.pointer)
 	case KindHook:
-		return hookSnippet(e)
+		return t.agent.hook.snippet(e, t.agent.Name)
 	}
 	return t.agent.Snippet(e)
 }

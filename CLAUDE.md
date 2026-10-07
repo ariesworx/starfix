@@ -10,7 +10,8 @@
   finds none here (it also searches parent directories) and refuses. Try
   setup changes in a scratch repository that has one, with
   `sfx -C DIR setup claude-code`; it only prints unless given `--write`.
-- `sfx prime --hook` is Claude Code's SessionStart hook. It always exits 0,
-  prints nothing outside a starfix repository, and otherwise prints one
-  `hookSpecificOutput` JSON document, turning any error into a one-line
-  note. Keep it that way (`internal/cli/agent.go`).
+- `sfx prime --hook` is Claude Code's SessionStart hook, and
+  `--hook=AGENT` the other harnesses'. It always exits 0, prints nothing
+  outside a starfix repository, and otherwise prints one JSON document in
+  the harness's format (`Agent.HookOutput`), turning any error into a
+  one-line note. Keep it that way (`internal/cli/agent.go`).

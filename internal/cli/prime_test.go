@@ -80,7 +80,85 @@ func TestPrimeHookNeverFails(t *testing.T) {
 }
 
 func TestPrimeRefusesArguments(t *testing.T) {
-	if code, _, errb := runCLI(t, "prime", "--hook", "extra"); code != ExitUsage || !strings.Contains(errb, "usage: sfx prime [--hook]") {
-		t.Fatalf("exit %d %s", code, errb)
+	tests := []struct{ args []string }{
+		{[]string{"prime", "--hook", "extra"}},
+		{[]string{"prime", "--hook=jetbrains"}}, // AI Assistant has no hooks
+		{[]string{"prime", "--hook=aider"}},
+	}
+	for _, tc := range tests {
+		if code, _, errb := runCLI(t, tc.args...); code != ExitUsage || !strings.Contains(errb, "usage: sfx prime [--hook[=AGENT]]") {
+			t.Errorf("%v: exit %d %s", tc.args, code, errb)
+		}
+	}
+}
+
+// Each harness gets prime in its own hook output format; bare --hook is
+// Claude Code's, and an empty context still says what failed.
+func TestPrimeHookFormats(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, ".starfix.yaml"), []byte(testConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		flag string
+		// cursor is Cursor's flat {"additional_context"} shape.
+		cursor bool
+	}{
+		{flag: "--hook"},
+		{flag: "--hook=claude-code"},
+		{flag: "--hook=codex"},
+		{flag: "--hook=gemini"},
+		{flag: "--hook=junie"},
+		{flag: "--hook=vscode"},
+		{flag: "--hook=cursor", cursor: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.flag, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code := Run(context.Background(), []string{"-C", repo, "prime", tc.flag}, Env{Stdin: strings.NewReader(`{"sessionId": "vs-1"}`),
+				Stdout: &out, Stderr: &errb, Getenv: func(string) string { return "" }, Version: "v0.3.0"})
+			if code != ExitOK || errb.Len() != 0 {
+				t.Fatalf("exit %d, stderr %q", code, errb.String())
+			}
+			var doc struct {
+				Out *struct {
+					Event   string `json:"hookEventName"`
+					Context string `json:"additionalContext"`
+				} `json:"hookSpecificOutput"`
+				Context *string `json:"additional_context"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+				t.Fatalf("not JSON: %q %v", out.String(), err)
+			}
+			var context string
+			switch {
+			case tc.cursor && doc.Context != nil && doc.Out == nil:
+				context = *doc.Context
+			case !tc.cursor && doc.Out != nil && doc.Context == nil && doc.Out.Event == "SessionStart":
+				context = doc.Out.Context
+			default:
+				t.Fatalf("wrong shape for %s: %s", tc.flag, out.String())
+			}
+			if !strings.HasPrefix(context, "starfix: prime failed: ") {
+				t.Fatalf("context %q", context)
+			}
+		})
+	}
+}
+
+// Harnesses name the session field session_id, VS Code sometimes
+// sessionId: either is the session.
+func TestReadHookInput(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{`{"session_id": "a"}`, "a"},
+		{`{"sessionId": "b"}`, "b"},
+		{`{"session_id": "a", "sessionId": "b"}`, "a"},
+		{`{"cwd": "/x"}`, ""},
+		{`not json`, ""},
+	}
+	for _, tc := range tests {
+		if got := readHookInput(strings.NewReader(tc.in)).SessionID; got != tc.want {
+			t.Errorf("readHookInput(%s).SessionID = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

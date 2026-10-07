@@ -213,9 +213,10 @@ command's usage; `--json` prints one JSON document, errors included.
 | `comment`, `comments` | Add a comment; list an issue's comments |
 | `history` | List an issue's changes |
 | `digest` | Summarize a window (`--since 24h`, `7d`, a date or a time): closed, started, in progress, stalled, blocked, handed off, created and discovered; `--by P`, `--label L` filter it |
-| `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook` for a SessionStart hook |
+| `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook[=AGENT]` for an agent's SessionStart hook (bare `--hook` is Claude Code's) |
 | `mcp` | The MCP server for agents, on stdin and stdout |
-| `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini` or `vscode`: MCP config (with `STARFIX_HARNESS` in its env), instruction pointer, SessionStart hook |
+| `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini`, `jetbrains`, `junie` or `vscode`: MCP config (with `STARFIX_HARNESS` in its env), instruction pointer, SessionStart hook |
+| `setup --all` | Set up every agent at once, one summary line each; a file two agents share is written once |
 | `upgrade` | Replace `sfx` with the latest release after verifying its signature and checksum; `--check` prints one line and changes nothing; `--rollback` restores the binary the last upgrade replaced. Never runs by itself |
 | `version` | Print the version |
 
@@ -251,38 +252,52 @@ Agents use starfix through MCP; they never need a shell. Set each agent
 up once per repository and commit the files it writes:
 
 ```sh
+sfx setup --all --write         # every agent below; safe to rerun
 sfx setup claude-code           # print what it would write, and where
 sfx setup claude-code --write   # write them; safe to rerun
 sfx setup codex --check         # fails, with a fix, if anything is missing
 sfx setup codex --remove        # take starfix out again
 ```
 
-| Agent | MCP config | Pointer | SessionStart hook |
-|---|---|---|---|
-| `claude-code` | `.mcp.json` | `CLAUDE.md` | `.claude/settings.json` |
-| `codex` | `.codex/config.toml` | `AGENTS.md` | none |
-| `gemini` | `.gemini/settings.json` | `GEMINI.md` | none |
-| `cursor` | `.cursor/mcp.json` | `.cursor/rules/starfix.mdc` | none |
-| `vscode` | `.vscode/mcp.json` | `.github/copilot-instructions.md` | none |
+| Agent | MCP config | Pointer | SessionStart hook | You still |
+|---|---|---|---|---|
+| `claude-code` | `.mcp.json` | `CLAUDE.md` | `.claude/settings.json` | approve the project's MCP server when Claude Code asks |
+| `codex` | `.codex/config.toml` | `AGENTS.md` | `.codex/hooks.json` | trust the project, and the hooks with `/hooks` |
+| `gemini` | `.gemini/settings.json` | `GEMINI.md` | `.gemini/settings.json` | trust the folder when Gemini CLI asks |
+| `cursor` | `.cursor/mcp.json` | `.cursor/rules/starfix.mdc` | `.cursor/hooks.json` | turn starfix on in Cursor Settings › MCP |
+| `vscode` | `.vscode/mcp.json` | `.github/copilot-instructions.md` | `.github/hooks/starfix.json` (Preview) | trust the server; hooks run only where VS Code's Preview hooks are on |
+| `junie` | `.junie/mcp/mcp.json` | `AGENTS.md` | `~/.junie/config.json`, with `--global` only | run `sfx setup junie --global --write` for the hook |
+| `jetbrains` | none: added in the IDE | `.aiassistant/rules/starfix.md` | none | add the printed JSON under Settings › Tools › AI Assistant › Model Context Protocol (MCP), scope Project |
 
-The pointer is a short block between `<!-- starfix:begin -->` and
-`<!-- starfix:end -->` telling the agent to use the starfix tools and to
-`prime`, `start` and `finish`; the rest of the file is left alone. Cursor's
-is a rule file of starfix's own. `--remove` takes the block out, and
-deletes the file if nothing else is left in it. The Claude Code hook runs
-`sfx prime --hook` when a session starts, resumes, clears or compacts: it
-adds prime to the session's context under the hook's session id, prints
-nothing outside a starfix repository, and on any error adds a one-line
-note instead of failing the session. Existing files keep their other
-keys, their order and their mode; a second run changes nothing.
+Setup prints the "you still" step after it adds a part. The pointer is a
+short block between `<!-- starfix:begin -->` and `<!-- starfix:end -->`
+telling the agent to use the starfix tools and to `prime`, `start` and
+`finish`; the rest of the file is left alone. Cursor's and AI Assistant's
+are rule files of starfix's own. `--remove` takes the block out, and
+deletes the file if nothing else is left in it; VS Code's hook file is
+starfix's own too. Codex and Junie share `AGENTS.md`, so `setup --all`
+writes its block once, and removing either agent takes it out.
+
+Each hook runs `sfx prime --hook=AGENT` (Claude Code's runs bare
+`--hook`) when a session starts, in the harness's own format: Gemini CLI
+matches sources exactly, so it gets one entry each for `startup`, `resume`
+and `clear`; Codex's matcher is `startup|resume|clear|compact`. Prime reads
+the session id from the hook's input (`session_id`, or VS Code's
+`sessionId`), adds prime to the session's context, prints nothing outside
+a starfix repository, and on any error adds a one-line note instead of
+failing the session. A hook is starfix's when its command runs
+`prime --hook` through `sfx` (or `--command`); other hooks are never
+touched. Existing files keep their other keys, their order and their mode;
+a second run changes nothing.
 
 `--global` edits the files in your home directory instead (for Claude Code
 `~/.claude.json`, `~/.claude/CLAUDE.md` and `~/.claude/settings.json`; for
-Codex and Gemini CLI their `~/.codex/` and `~/.gemini/` files; for Cursor
-the MCP config only); nothing outside the repository is touched without
-it. VS Code keeps its user MCP config in a per-platform profile, so
-`--global` is refused for `vscode`. `--command PATH` sets how the agent
-runs `sfx` when it is not on PATH.
+Codex, Gemini CLI and Junie their `~/.codex/`, `~/.gemini/` and `~/.junie/`
+files; for Cursor the MCP config and hook); nothing outside the repository
+is touched without it. VS Code keeps its user MCP config in a per-platform
+profile and AI Assistant in the IDE's settings, so `--global` is refused
+for `vscode` and `jetbrains`, and `--all --global` skips them with that
+fix. `--command PATH` sets how the agent runs `sfx` when it is not on PATH.
 
 A session is two calls: `start` takes the top ready issue (or a named
 one) and returns it with its acceptance criteria, the last handoff and a
@@ -327,9 +342,15 @@ the agent's environment:
 | Agent | Session id |
 |---|---|
 | Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
-| Codex, Gemini CLI, Cursor, VS Code | none set; `sfx mcp` picks one per process (`m-…`) |
+| Codex, Gemini CLI, Cursor, VS Code, Junie, AI Assistant | none set; `sfx mcp` picks one per process (`m-…`) |
 | a person's own `sfx` commands | `cli`, one per machine |
 | any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
+
+A limitation for every harness but Claude Code: the SessionStart hook
+learns the harness's session id from its input, but `sfx mcp` cannot, so
+it picks its own. The hook's prime and the agent's tool calls then appear
+as two sessions in `sfx who`, and the hook's session holds no lease. Claude
+Code avoids this because it sets `CLAUDE_CODE_SESSION_ID` for both.
 
 One SSH connection serves an MCP session. It opens on the first tool call
 and is redialed if it drops; reads and creates are retried on the new
