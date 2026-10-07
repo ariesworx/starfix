@@ -370,6 +370,9 @@ Branch with a type prefix (`feature/`, `fix/`, `docs/`, `maintenance/`,
 `refactor/`) and title pull requests the same way. `main` takes squash merges
 with green CI.
 
+**Contributing with an AI agent:** [AGENTS.md](AGENTS.md) holds the rules and
+the full CI gate for any coding agent; `CLAUDE.md` and `GEMINI.md` import it.
+
 ## Relationship to beads
 
 starfix is an independent project, inspired by and able to import from
