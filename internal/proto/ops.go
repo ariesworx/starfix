@@ -163,6 +163,8 @@ type ShowResult struct {
 	Deps  []Dep `json:"deps,omitempty"`
 	// Claim is the issue's active claim, if any (protocol 2).
 	Claim *Claim `json:"claim,omitempty"`
+	// Handoff is the issue's latest handoff note and its fields, if any.
+	Handoff *Handoff `json:"handoff,omitempty"`
 }
 
 // ListArgs filters issues. Empty fields match everything; all Labels must
@@ -282,11 +284,11 @@ type StartArgs struct {
 	Lease string `json:"lease,omitempty"`
 }
 
-// StartResult is the issue taken, in full, its latest handoff note, and
-// the claim (protocol 2).
+// StartResult is the issue taken, in full, its latest handoff note with
+// its fields, and the claim (protocol 2).
 type StartResult struct {
 	Issue   Issue    `json:"issue"`
-	Handoff *Comment `json:"handoff,omitempty"`
+	Handoff *Handoff `json:"handoff,omitempty"`
 	Claim   *Claim   `json:"claim,omitempty"`
 }
 
@@ -323,7 +325,8 @@ type Discovered struct {
 }
 
 // FinishArgs closes an issue with an optional handoff note and the work
-// discovered while doing it, in one transaction.
+// discovered while doing it, in one transaction. The handoff's fields
+// need its note; To also puts it in that principal's inbox.
 type FinishArgs struct {
 	ID string `json:"id"`
 	// Epoch, if set, must be the issue's current claim epoch.
@@ -331,6 +334,7 @@ type FinishArgs struct {
 	Reason     string       `json:"reason,omitempty"`
 	Handoff    string       `json:"handoff,omitempty"`
 	Discovered []Discovered `json:"discovered,omitempty"`
+	HandoffFields
 }
 
 // FinishResult is the closed issue's revision and the discovered issues'
@@ -341,14 +345,16 @@ type FinishResult struct {
 	Created []string `json:"created,omitempty"`
 }
 
-// HandoffArgs records a handoff note. Release also lets the issue go, so
-// another can start it.
+// HandoffArgs records a handoff note and its fields. Release also lets
+// the issue go, so another can start it; To also puts it in that
+// principal's inbox.
 type HandoffArgs struct {
 	ID string `json:"id"`
 	// Epoch, if set, must be the issue's current claim epoch.
 	Epoch   int64  `json:"epoch,omitempty"`
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty"`
+	HandoffFields
 }
 
 // DigestArgs selects a digest. Since is an RFC 3339 time, a date

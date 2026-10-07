@@ -18,13 +18,15 @@ import (
 )
 
 // fakeConn answers calls with reply. A reply returning errLost breaks the
-// connection, as a dropped SSH session does.
+// connection, as a dropped SSH session does. watch, which the server sends
+// on every new connection, is answered here and counted apart from calls.
 type fakeConn struct {
-	reply func(op string, args any) (any, error)
-	mu    sync.Mutex
-	calls []call
-	lost  error
-	who   string
+	reply   func(op string, args any) (any, error)
+	mu      sync.Mutex
+	calls   []call
+	watches int
+	lost    error
+	who     string
 }
 
 type call struct {
@@ -39,6 +41,10 @@ func (f *fakeConn) Call(_ context.Context, op string, args, result any) error {
 	defer f.mu.Unlock()
 	if f.lost != nil {
 		return f.lost
+	}
+	if op == proto.OpWatch {
+		f.watches++
+		return nil
 	}
 	f.calls = append(f.calls, call{op, args})
 	res, err := f.reply(op, args)
@@ -178,14 +184,15 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "digest", "finish", "handoff", "history", "label",
-		"list", "prime", "ready", "reopen", "show", "start", "update", "who"}
+	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "digest", "finish", "handoff", "history", "inbox",
+		"label", "list", "prime", "ready", "reopen", "show", "start", "update", "who"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v\nwant    %v", names, want)
 	}
-	// Design §5 aims for about 2k tokens for the whole verb set. These 19
-	// tools are about 6.6 KiB, some 1.7k real tokens; the budget below is
-	// in Tokens' deliberately high estimate. Counted is what a model reads:
+	// Design §5 aims for about 2k tokens for the whole verb set. These 20
+	// tools are about 7 KiB, some 1.8k real tokens; the budget below is
+	// in Tokens' deliberately high estimate, raised from 2,200 to 2,400
+	// for the inbox and the structured handoff. Counted is what a model reads:
 	// names, descriptions and input schemas; annotations steer the
 	// harness's approval prompts.
 	type seen struct {
@@ -204,7 +211,8 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, budget := Tokens(b), 2200; got > budget {
+	t.Logf("tool schemas cost ~%d tokens (%d bytes)", Tokens(b), len(b))
+	if got, budget := Tokens(b), 2400; got > budget {
 		t.Errorf("tool schemas cost ~%d tokens (%d bytes), budget %d", got, len(b), budget)
 	}
 }
@@ -250,6 +258,9 @@ func TestSchemaRejects(t *testing.T) {
 		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "x", "priority": 9}}}},
 		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"type": "bug"}}}},
 		{"handoff", map[string]any{"id": "sf-1"}},
+		{"handoff", map[string]any{"id": "sf-1", "note": "n", "state": "finished"}},
+		{"finish", map[string]any{"id": "sf-1", "state": "maybe"}},
+		{"inbox", map[string]any{"ack": []any{"one"}}},
 		{"digest", map[string]any{"since": "7d", "extra": true}},
 	} {
 		if res := callTool(t, cs, tc.tool, tc.args); !res.IsError {
@@ -285,9 +296,10 @@ func TestWritesAreCompact(t *testing.T) {
 		{"dep", map[string]any{"action": "add", "id": "sf-1", "depends_on": "sf-2"}, `{"id":"sf-1"}`},
 		{"label", map[string]any{"action": "rm", "id": "sf-1", "labels": []any{"a", "b"}}, `{"id":"sf-1"}`},
 		{"comment", map[string]any{"id": "sf-1", "body": "hi"}, `{"id":"c-1"}`},
-		{"handoff", map[string]any{"id": "sf-1", "note": "next: tests", "release": true}, `{"id":"sf-1","rev":5}`},
-		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "more", "type": "bug", "priority": 1}}},
-			`{"id":"sf-1","rev":5,"created":["sf-2"]}`},
+		{"handoff", map[string]any{"id": "sf-1", "note": "next: tests", "release": true, "state": "partial", "next": "tests",
+			"branch": "fix/sf-1-x", "to": "bob"}, `{"id":"sf-1","rev":5}`},
+		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "more", "type": "bug", "priority": 1}},
+			"handoff": "shipped", "state": "done", "to": "bob"}, `{"id":"sf-1","rev":5,"created":["sf-2"]}`},
 	} {
 		res := callTool(t, cs, tc.tool, tc.args)
 		if res.IsError || text(t, res) != tc.want {
@@ -299,11 +311,13 @@ func TestWritesAreCompact(t *testing.T) {
 	if got := f.ops(); !slices.Equal(got, want) {
 		t.Errorf("ops %v, want %v", got, want)
 	}
-	if got, ok := f.calls[8].args.(proto.HandoffArgs); !ok || got.Note != "next: tests" || !got.Release {
+	if got, ok := f.calls[8].args.(proto.HandoffArgs); !ok || got.Note != "next: tests" || !got.Release ||
+		got.HandoffFields != (proto.HandoffFields{State: "partial", Next: "tests", Branch: "fix/sf-1-x", To: "bob"}) {
 		t.Errorf("handoff args %#v", f.calls[8].args)
 	}
 	got, ok := f.calls[9].args.(proto.FinishArgs)
-	if !ok || len(got.Discovered) != 1 || got.Discovered[0].Type != "bug" || *got.Discovered[0].Priority != 1 {
+	if !ok || len(got.Discovered) != 1 || got.Discovered[0].Type != "bug" || *got.Discovered[0].Priority != 1 ||
+		got.Handoff != "shipped" || got.HandoffFields != (proto.HandoffFields{State: "done", To: "bob"}) {
 		t.Errorf("finish args %#v", f.calls[9].args)
 	}
 	if got := f.calls[2].args.(proto.UpdateArgs); got.Rev != 4 || *got.Title != "y" || got.Status != nil {
@@ -483,9 +497,9 @@ func TestPrime(t *testing.T) {
 		n, title int
 		wantOps  []string
 	}{
-		{"typical", "alice", 3, 60, []string{"list", "ready"}},
-		{"worst case", "alice", 5, 500, []string{"list", "ready"}},
-		{"old server, no principal", "", 5, 500, []string{"ready"}},
+		{"typical", "alice", 3, 60, []string{"list", "ready", "inbox"}},
+		{"worst case", "alice", 5, 500, []string{"list", "ready", "inbox"}},
+		{"old server, no principal", "", 5, 500, []string{"ready", "inbox"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -539,7 +553,8 @@ func TestStart(t *testing.T) {
 		return proto.StartResult{
 			Issue: proto.Issue{ID: "sf-a1b2", Rev: 3, Title: "Fix the login redirect", Type: "bug", Priority: 1,
 				Status: "in_progress", Body: strings.Repeat("b", 20000), Acceptance: "redirects to /home"},
-			Handoff: &proto.Comment{Author: "bob", Kind: "handoff", Body: "tried the cookie path", CreatedAt: at},
+			Handoff: &proto.Handoff{Comment: proto.Comment{Author: "bob", Kind: "handoff", Body: "tried the cookie path", CreatedAt: at},
+				HandoffFields: proto.HandoffFields{State: "partial", Next: "try the header", Branch: "fix/sf-a1b2-x", To: "alice"}},
 		}, nil
 	}}
 	cs, _ := connect(t, f)
@@ -552,7 +567,8 @@ func TestStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Branch != "fix/sf-a1b2-fix-the-login-redirect" || got.Rev != 3 || got.Acceptance != "redirects to /home" ||
-		got.Handoff == nil || *got.Handoff != (Handoff{By: "bob", At: "2026-10-07T09:30Z", Note: "tried the cookie path"}) {
+		got.Handoff == nil || *got.Handoff != (Handoff{By: "bob", At: "2026-10-07T09:30Z", Note: "tried the cookie path",
+		State: "partial", Next: "try the header", Branch: "fix/sf-a1b2-x", To: "alice"}) {
 		t.Fatalf("start: %+v", got)
 	}
 	if !got.Truncated || Tokens([]byte(text(t, res))) > MaxResultTokens {
@@ -631,7 +647,7 @@ func TestDigest(t *testing.T) {
 
 // start claims for Lease and remembers the epoch: finish and a releasing
 // handoff pass it, and the renewer keeps it alive until the server says
-// the claim is gone, which the next prime reports.
+// the claim is gone (the inbox reports that: TestPrimeInbox).
 func TestClaimsFollowTheSession(t *testing.T) {
 	var mu sync.Mutex
 	held := []proto.Claim{{ID: "sf-1", Epoch: 3}, {ID: "sf-2", Epoch: 1}}
@@ -668,31 +684,21 @@ func TestClaimsFollowTheSession(t *testing.T) {
 	held = held[:1]
 	mu.Unlock()
 	s.Renew(ctx)
-	var p Prime
-	if err := json.Unmarshal([]byte(text(t, callTool(t, cs, "prime", nil))), &p); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(p.Lost, []string{"sf-2"}) {
-		t.Fatalf("lost: %v", p.Lost)
-	}
-	if !strings.Contains(p.Text(), "lost claim (stop work on it): sf-2") {
-		t.Fatalf("prime text:\n%s", p.Text())
-	}
 	callTool(t, cs, "finish", map[string]any{"id": "sf-1"})
 	callTool(t, cs, "handoff", map[string]any{"id": "sf-2", "note": "n", "release": true})
 	s.Renew(ctx) // nothing held, but connected: renew keeps the session in who
 
-	want := []string{"start", "start", "renew", "renew", "list", "ready", "finish", "handoff", "renew"}
+	want := []string{"start", "start", "renew", "renew", "finish", "handoff", "renew"}
 	if got := f.ops(); !slices.Equal(got, want) {
 		t.Fatalf("ops %v, want %v", got, want)
 	}
 	if a := f.calls[0].args.(proto.StartArgs); a.Lease != Lease {
 		t.Errorf("start lease %q", a.Lease)
 	}
-	if a := f.calls[6].args.(proto.FinishArgs); a.Epoch != 3 {
+	if a := f.calls[4].args.(proto.FinishArgs); a.Epoch != 3 {
 		t.Errorf("finish epoch %d, want 3", a.Epoch)
 	}
-	if a := f.calls[7].args.(proto.HandoffArgs); a.Epoch != 0 {
+	if a := f.calls[5].args.(proto.HandoffArgs); a.Epoch != 0 {
 		t.Errorf("release of a lost claim sent epoch %d", a.Epoch)
 	}
 }

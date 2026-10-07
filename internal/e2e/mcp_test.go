@@ -33,8 +33,13 @@ func (u *user) mcp(version string) *agent {
 	t.Helper()
 	a := &agent{t: t, version: version}
 	opts := client.Options{Version: version, Session: client.SessionFromEnv(func(k string) string { return u.env[k] }),
-		Machine: "laptop-test", Getenv: func(k string) string { return u.env[k] }}
-	a.srv = mcpserver.New(mcpserver.Options{Version: version, Dial: func(ctx context.Context) (mcpserver.Conn, error) {
+		Machine: "laptop-test", Getenv: func(k string) string { return u.env[k] },
+		OnPush: func(p proto.Push) { a.srv.Push(p) }}
+	var renew time.Duration
+	if u.w.fixedClock {
+		renew = -1 // renewals would not move the test's clock
+	}
+	a.srv = mcpserver.New(mcpserver.Options{Version: version, RenewEvery: renew, Dial: func(ctx context.Context) (mcpserver.Conn, error) {
 		a.dials++
 		return mcpserver.DialRepo(ctx, u.repo, opts)
 	}})
@@ -85,7 +90,7 @@ func TestMCPAgentSession(t *testing.T) {
 	ag := alice.mcp("v0.2.0")
 
 	tools, err := ag.cs.ListTools(context.Background(), nil)
-	if err != nil || len(tools.Tools) != 19 {
+	if err != nil || len(tools.Tools) != 20 {
 		t.Fatalf("tools: %v %d", err, len(tools.Tools))
 	}
 	if ag.dials != 0 {

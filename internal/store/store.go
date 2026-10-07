@@ -45,6 +45,10 @@ type Store struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	// watch holds the open inbox watches; publish feeds them after each
+	// commit that wrote inbox items.
+	watch watchers
+
 	// beforeCommit, when set by tests, runs inside every write transaction
 	// just before COMMIT.
 	beforeCommit func(context.Context) error
@@ -205,6 +209,8 @@ type wtx struct {
 	events  int
 	// quiet allows a mutation with no event: a lease renewal.
 	quiet bool
+	// inbox are the items this attempt wrote, pushed once it commits.
+	inbox []InboxItem
 }
 
 // exec runs a mutating statement. It refuses an UPDATE that does not set
@@ -330,6 +336,9 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	}
 	if w.mutated {
 		s.dirty.Store(true)
+	}
+	if len(w.inbox) > 0 {
+		s.publish(w.inbox)
 	}
 	return nil
 }

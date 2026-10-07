@@ -73,8 +73,9 @@ type Server struct {
 }
 
 var (
-	// PrincipalPattern is what a principal name may look like.
-	PrincipalPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
+	// PrincipalPattern is what a principal name may look like; the store
+	// holds the one definition, which mentions and handoffs also use.
+	PrincipalPattern = store.PrincipalPattern
 	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	actorPart        = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,255}$`)
 )
@@ -194,6 +195,12 @@ type session struct {
 	harness string
 	enc     *proto.Encoder
 	dec     *proto.Decoder
+
+	// push is the running watch, if the client sent watch. Only the
+	// request loop sets it; pushMu orders pushed frames against the
+	// loop's flush before each response.
+	push   *pusher
+	pushMu sync.Mutex
 }
 
 func (s *Server) handle(ctx context.Context, c net.Conn) {
@@ -209,6 +216,10 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	}
 	log = log.With("principal", sess.actor.Principal, "session", sess.actor.Session, "machine", sess.actor.Machine)
 	log.Debug("connected")
+	defer func() {
+		_ = c.Close() // unblocks a pusher stuck writing to a client that stopped reading
+		s.unwatch(sess)
+	}()
 	s.touch(ctx, log, sess.actor, sess.harness)
 	for {
 		f, err := sess.dec.Decode()
@@ -229,8 +240,17 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		}
 		start := time.Now()
 		rctx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
-		res, perr := s.Dispatch(rctx, sess.actor, f.Op, f.Args)
+		var res any
+		var perr *proto.Error
+		if f.Op == proto.OpWatch {
+			res, perr = s.watch(rctx, sess, f.Args)
+		} else {
+			res, perr = s.Dispatch(rctx, sess.actor, f.Op, f.Args)
+		}
 		cancel()
+		if p := sess.push; p != nil {
+			s.flush(sess, p) // what was committed before this answer goes first
+		}
 		attrs := []any{"op", f.Op, "ms", time.Since(start).Milliseconds()}
 		if perr != nil {
 			// A refusal is worth seeing at the default level; a success is

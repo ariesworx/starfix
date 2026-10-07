@@ -89,8 +89,9 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 type Finish struct {
 	// Reason is the close reason.
 	Reason string
-	// Handoff, if set, is recorded as a handoff note.
-	Handoff string
+	// Handoff, if its note is set, is recorded as a handoff note with
+	// its fields.
+	Handoff HandoffNote
 	// Discovered are new issues, each linked discovered-from the finished
 	// one. IDs are generated; ID and IdempotencyKey must be empty.
 	Discovered []NewIssue
@@ -110,10 +111,8 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if len(f.Reason) > 2000 {
 		return Issue{}, nil, fmt.Errorf("%w: reason longer than 2000", ErrInvalid)
 	}
-	if f.Handoff != "" {
-		if err := validBody(f.Handoff); err != nil {
-			return Issue{}, nil, err
-		}
+	if err := f.Handoff.validate(); err != nil {
+		return Issue{}, nil, err
 	}
 	if len(f.Discovered) > MaxDiscovered {
 		return Issue{}, nil, fmt.Errorf("%w: at most %d discovered issues", ErrInvalid, MaxDiscovered)
@@ -160,8 +159,8 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 				return err
 			}
 		}
-		if f.Handoff != "" {
-			if _, err := insertComment(ctx, w, id, f.Handoff, CommentHandoff); err != nil {
+		if f.Handoff.Note != "" {
+			if err := insertHandoff(ctx, w, id, f.Handoff); err != nil {
 				return err
 			}
 		}
@@ -174,17 +173,22 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	return out, ids, nil
 }
 
-// HandoffIssue records a handoff note on an issue without closing it. With
+// HandoffIssue records a handoff note, with its fields, on an issue
+// without closing it, telling the principal it is handed to and those its
+// note mentions. With
 // release it also lets the issue go, so another can start it: the claim
 // ends, in_progress becomes open and the assignee is cleared. Releasing an
 // issue another principal holds is refused with a *HeldError, a stale
 // epoch with a *StaleEpochError, and a closed issue with ErrInvalid; a
 // note alone is accepted on any issue.
-func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, note string, release bool) (Issue, error) {
+func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
-	if err := validBody(note); err != nil {
+	if err := validBody(h.Note); err != nil {
+		return Issue{}, err
+	}
+	if err := h.HandoffFields.validate(); err != nil {
 		return Issue{}, err
 	}
 	var out Issue
@@ -208,7 +212,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 				return err
 			}
 		}
-		if _, err := insertComment(ctx, w, id, note, CommentHandoff); err != nil {
+		if err := insertHandoff(ctx, w, id, h); err != nil {
 			return err
 		}
 		out = before

@@ -174,7 +174,11 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 		// keeps the session's history under one id.
 		opts.Session = client.NewSessionID()
 	}
-	srv := mcpserver.New(mcpserver.Options{Version: r.env.Version,
+	// The server pushes inbox items on the connection's reader goroutine;
+	// srv counts them for the next tool result.
+	var srv *mcpserver.Server
+	opts.OnPush = func(p proto.Push) { srv.Push(p) }
+	srv = mcpserver.New(mcpserver.Options{Version: r.env.Version,
 		Dial: func(ctx context.Context) (mcpserver.Conn, error) {
 			return mcpserver.DialRepo(ctx, r.dir, opts)
 		}})

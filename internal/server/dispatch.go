@@ -52,6 +52,9 @@ func init() {
 		proto.OpDigest:   typed(digest),
 		proto.OpRenew:    typed(renew),
 		proto.OpWho:      typed(who),
+		proto.OpInbox:    typed(inbox),
+		proto.OpAck:      typed(ack),
+		proto.OpWatch:    typed(watchOp),
 	}
 }
 
@@ -106,10 +109,18 @@ func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
 	}
+	h, err := s.cfg.Store.LastHandoff(ctx, id)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
 	out := proto.ShowResult{Issue: wireIssue(is)}
 	if claim != nil {
 		c := wireClaim(*claim)
 		out.Claim = &c
+	}
+	if h != nil {
+		w := wireHandoff(*h)
+		out.Handoff = &w
 	}
 	if !in.Full {
 		for _, f := range []*string{&out.Issue.Body, &out.Issue.Design, &out.Issue.Acceptance, &out.Issue.Notes} {
@@ -330,14 +341,14 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 		// The issue is taken; say so rather than fail the start.
 		s.cfg.Logger.Error("read handoff", "issue", is.ID, "err", err)
 	} else if h != nil {
-		c := wireComment(*h)
-		out.Handoff = &c
+		w := wireHandoff(*h)
+		out.Handoff = &w
 	}
 	return out, nil
 }
 
 func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) (any, *proto.Error) {
-	f := store.Finish{Reason: in.Reason, Handoff: in.Handoff}
+	f := store.Finish{Reason: in.Reason, Handoff: storeHandoff(in.Handoff, in.HandoffFields)}
 	for _, d := range in.Discovered {
 		n := store.NewIssue{Title: d.Title, Type: store.IssueType(d.Type)}
 		if d.Priority != nil {
@@ -358,7 +369,7 @@ func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) 
 }
 
 func handoff(ctx context.Context, s *Server, a store.Actor, in proto.HandoffArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, in.Note, in.Release)
+	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, storeHandoff(in.Note, in.HandoffFields), in.Release)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHandoff, in.ID, 0, err)
 	}

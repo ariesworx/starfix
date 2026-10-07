@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/gitx"
@@ -65,9 +67,7 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 		return nil
 	}
 	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim})
-	if h := out.Handoff; h != nil {
-		_, _ = fmt.Fprintf(r.env.Stdout, "\nhandoff from %s, %s:\n%s\n", h.Author, when(h.CreatedAt), h.Body)
-	}
+	printHandoff(r.env.Stdout, out.Handoff)
 	_, _ = fmt.Fprintf(r.env.Stdout, "\nbranch: %s%s\n", out.Branch, note)
 	return nil
 }
@@ -83,13 +83,14 @@ func (l *repeated) Set(v string) error {
 }
 
 func cmdFinish(ctx context.Context, r *runner, args []string) error {
-	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]... [--epoch N]"
+	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--discovered TITLE]... [--epoch N]"
 	fs := r.newFlags("finish")
 	var in proto.FinishArgs
 	var found repeated
 	fs.Int64Var(&in.Epoch, "epoch", 0, "refuse unless this is still the claim's epoch")
 	fs.StringVar(&in.Reason, "reason", "", "what was done")
 	fs.StringVar(&in.Handoff, "handoff", "", "a note for whoever comes next, or - for standard input")
+	handoffFlags(fs, &in.HandoffFields)
 	fs.Var(&found, "discovered", "title of new work found on the way, filed as a task (repeatable)")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
@@ -120,11 +121,12 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 }
 
 func cmdHandoff(ctx context.Context, r *runner, args []string) error {
-	const usage = "handoff ID NOTE...|- [--release] [--epoch N]"
+	const usage = "handoff ID NOTE...|- [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--release] [--epoch N]"
 	fs := r.newFlags("handoff")
 	var in proto.HandoffArgs
 	fs.Int64Var(&in.Epoch, "epoch", 0, "refuse unless this is still the claim's epoch")
 	fs.BoolVar(&in.Release, "release", false, "also let the issue go: back to open, unassigned")
+	handoffFlags(fs, &in.HandoffFields)
 	pos, err := parse(fs, args, usage)
 	if err != nil {
 		return err
@@ -137,6 +139,40 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 		return err
 	}
 	return r.write(ctx, proto.OpHandoff, in)
+}
+
+// handoffFlags adds a handoff's structured fields to finish and handoff.
+func handoffFlags(fs *flag.FlagSet, f *proto.HandoffFields) {
+	fs.StringVar(&f.State, "state", "", "how far the work got: done, partial or blocked")
+	fs.StringVar(&f.Next, "next", "", "the next step")
+	fs.StringVar(&f.Branch, "branch", "", "the branch the work is on")
+	fs.StringVar(&f.Worktree, "worktree", "", "the worktree the work is in")
+	fs.StringVar(&f.To, "to", "", "the principal it is handed to; they find it in their inbox")
+}
+
+// printHandoff prints an issue's latest handoff, if any.
+func printHandoff(w io.Writer, h *proto.Handoff) {
+	if h == nil {
+		return
+	}
+	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+	var tags []string
+	if h.State != "" {
+		tags = append(tags, h.State)
+	}
+	if h.To != "" {
+		tags = append(tags, "to "+h.To)
+	}
+	p("\nhandoff from %s, %s", h.Author, when(h.CreatedAt))
+	if len(tags) > 0 {
+		p(" (%s)", strings.Join(tags, ", "))
+	}
+	p(":\n%s\n", h.Body)
+	for _, kv := range [][2]string{{"next", h.Next}, {"on branch", h.Branch}, {"in worktree", h.Worktree}} {
+		if kv[1] != "" {
+			p("%s: %s\n", kv[0], kv[1])
+		}
+	}
 }
 
 func cmdAway(ctx context.Context, r *runner, args []string) error {

@@ -25,6 +25,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -72,6 +73,7 @@ const Instructions = "Issue tracker shared by every agent and person on this pro
 	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
 	"To stop without closing, call handoff (release lets another start it). " +
 	"For a standup or status report, call digest and write the narrative from it; who lists the agents at work. " +
+	"A line \"inbox: N new\" after a result means call inbox: a lost claim, a handoff, a mention or an assignment. " +
 	"Writes return {id, rev}; pass rev to update or close to refuse a stale edit. " +
 	"On an error, follow its fix line."
 
@@ -81,16 +83,15 @@ type Server struct {
 	link   *link
 	opts   Options
 	claims claims
+	pushed pushed
 }
 
 // claims are the issues this session took and their epochs, so finish and
-// handoff are fenced, and the renewer knows what to keep alive.
+// handoff are fenced, and the renewer knows what to keep alive. A claim
+// the session lost reaches the agent as a claim.lost inbox item.
 type claims struct {
 	mu   sync.Mutex
 	held map[string]int64
-	// lost are issues whose claim lapsed or was taken over, reported once
-	// by the next prime.
-	lost []string
 }
 
 func (c *claims) take(id string, epoch int64) {
@@ -119,7 +120,7 @@ func (c *claims) any() bool {
 }
 
 // keep replaces the held set with what the server says this session still
-// holds; anything else is lost.
+// holds; the rest were lost, and the server's inbox says so.
 func (c *claims) keep(still []proto.Claim) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -129,24 +130,11 @@ func (c *claims) keep(still []proto.Claim) {
 			now[cl.ID] = e
 		}
 	}
-	for id := range c.held {
-		if _, ok := now[id]; !ok {
-			c.lost = append(c.lost, id)
-		}
-	}
 	c.held = now
 }
 
-// takeLost returns and clears the lost claims.
-func (c *claims) takeLost() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	l := c.lost
-	c.lost = nil
-	return l
-}
-
-// New returns the server. Call Close when done with it.
+// New returns the server. Call Close when done with it. Wire the
+// connections' pushed events (client.Options.OnPush) to Push.
 func New(opts Options) *Server {
 	if opts.RenewEvery == 0 {
 		opts.RenewEvery = time.Minute
@@ -210,11 +198,15 @@ func (s *Server) Renew(ctx context.Context) {
 	}
 }
 
-// link holds the session's one connection, redialing after a loss.
+// link holds the session's one connection, redialing after a loss. Each
+// new connection watches the inbox, and watches again after a resync.
 type link struct {
 	dial func(ctx context.Context) (Conn, error)
 	mu   sync.Mutex
 	conn Conn
+	// rewatch: the server stopped pushing (a resync); watch again on the
+	// next call. Set from the reader goroutine, so not under mu.
+	rewatch atomic.Bool
 }
 
 // lostError is a call that failed because the connection dropped.
@@ -248,6 +240,8 @@ func (l *link) get(ctx context.Context) (Conn, error) {
 		return nil, &dialError{err: err}
 	}
 	l.conn = c
+	l.rewatch.Store(false)
+	watch(ctx, c)
 	return c, nil
 }
 
@@ -261,6 +255,9 @@ func (l *link) with(ctx context.Context, retry bool, fn func(Conn) error) error 
 		c, err := l.get(ctx)
 		if err != nil {
 			return err
+		}
+		if l.rewatch.Swap(false) {
+			watch(ctx, c)
 		}
 		err = fn(c)
 		if err == nil || c.Err() == nil {
@@ -310,6 +307,9 @@ type tool struct {
 	enums      enums
 	// retry: safe to run again on a new connection if the first one drops.
 	retry bool
+	// showsInbox: the result shows the inbox, so it resets the count of
+	// pushed items instead of carrying the "inbox: N new" line.
+	showsInbox bool
 }
 
 // add registers one tool. The input schema is inferred from In, with
@@ -349,10 +349,27 @@ func add[In, Out any](s *Server, t tool, h func(context.Context, Conn, In) (Out,
 				out, err = h(ctx, c, in)
 				return err
 			})
-			if err != nil {
-				return toolError(err), nil, nil
+			// Counted after the call: the server pushes what was committed
+			// before it answers, so this result reports it.
+			line := s.notice()
+			if t.showsInbox && err == nil {
+				line = ""
 			}
-			return nil, out, nil
+			if err != nil {
+				res := toolError(err)
+				if line != "" {
+					res.Content = append(res.Content, &mcp.TextContent{Text: line})
+				}
+				return res, nil, nil
+			}
+			if line == "" {
+				return nil, out, nil
+			}
+			b, err := json.Marshal(out)
+			if err != nil {
+				return toolError(fmt.Errorf("encode %s result: %w", t.name, err)), nil, nil
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}, &mcp.TextContent{Text: line}}}, out, nil
 		})
 }
 

@@ -156,10 +156,23 @@ func checkLease(d time.Duration) error {
 	return nil
 }
 
-// take leases c to w's actor for lease. A new holder raises the epoch; the
-// same session taking again keeps it and only extends the lease.
+// take leases c to w's actor for lease. A new holder raises the epoch, and
+// the holder it replaced gets a claim.lost inbox item; the same session
+// taking again keeps it and only extends the lease.
 func take(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Claim, error) {
 	same := c.active(w.now) && c.Holder == w.actor
+	if !same && c.Holder.Principal != "" && c.Holder != w.actor {
+		// The holder lost it: to another session of its principal, or,
+		// once the lease lapsed, to anyone, before the reaper got to it.
+		why := "lease expired; "
+		if c.active(w.now) {
+			why = ""
+		}
+		if err := w.notify(ctx, InboxItem{To: c.Holder.Principal, Session: c.Holder.Session, Kind: InboxClaimLost, Issue: c.Issue,
+			Body: fmt.Sprintf("%staken by %s/%s (epoch %d): stop work on it", why, w.actor.Principal, w.actor.Session, c.Epoch+1)}); err != nil {
+			return Claim{}, err
+		}
+	}
 	if !same {
 		c.Epoch++
 		c.ClaimedAt = w.now
@@ -269,8 +282,9 @@ func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duratio
 }
 
 // ReapClaims ends every claim whose lease has run out: the claim loses its
-// holder, and an issue still in_progress under the claim's principal goes
-// back to open, unassigned. It returns the claims it ended.
+// holder, who gets a claim.lost inbox item, and an issue still in_progress
+// under the claim's principal goes back to open, unassigned. It returns
+// the claims it ended.
 func (s *Store) ReapClaims(ctx context.Context) ([]Claim, error) {
 	var out []Claim
 	err := s.write(ctx, ReaperActor, func(w *wtx) error {
@@ -289,6 +303,10 @@ func (s *Store) ReapClaims(ctx context.Context) ([]Claim, error) {
 			}
 			if err := w.event(ctx, OpClaimExpire, string(c.Issue),
 				map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil, ""); err != nil {
+				return err
+			}
+			if err := w.notify(ctx, InboxItem{To: c.Holder.Principal, Session: c.Holder.Session, Kind: InboxClaimLost, Issue: c.Issue,
+				Body: fmt.Sprintf("lease expired (epoch %d): stop work on it; start it again if it is still free", c.Epoch)}); err != nil {
 				return err
 			}
 			is, err := loadIssue(ctx, w.tx, c.Issue)

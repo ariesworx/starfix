@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 )
 
 // AddLabel adds a label to an issue. Adding a present label is a no-op.
@@ -51,7 +53,8 @@ func labelArgs(id IssueID, label string) error {
 	return validLabel(label)
 }
 
-// AddComment appends a comment, authored by the actor.
+// AddComment appends a comment, authored by the actor, and tells the
+// principals it mentions (@name).
 func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body string) (Comment, error) {
 	if err := id.Validate(); err != nil {
 		return Comment{}, err
@@ -65,8 +68,10 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body st
 			return err
 		}
 		var err error
-		c, err = insertComment(ctx, w, id, body, CommentPlain)
-		return err
+		if c, err = insertComment(ctx, w, id, body, CommentPlain); err != nil {
+			return err
+		}
+		return w.notifyMentions(ctx, id, body)
 	})
 	if err != nil {
 		return Comment{}, err
@@ -84,16 +89,44 @@ func validBody(body string) error {
 // insertComment appends a comment of the given kind, authored by w's actor,
 // and records the event. The issue must exist.
 func insertComment(ctx context.Context, w *wtx, id IssueID, body string, kind CommentKind) (Comment, error) {
+	return insertNote(ctx, w, id, body, kind, HandoffFields{})
+}
+
+// insertNote is insertComment for a note that may carry handoff fields:
+// they are stored in handoffs and recorded in the comment's event.
+func insertNote(ctx context.Context, w *wtx, id IssueID, body string, kind CommentKind, f HandoffFields) (Comment, error) {
 	cid, err := newCommentID()
 	if err != nil {
 		return Comment{}, err
 	}
-	c := Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Kind: kind, Body: body, CreatedAt: w.now}
+	// Notes are ordered by created_at, so keep it strictly increasing per
+	// issue: two notes in the same microsecond (or under a test clock) would
+	// otherwise tie, and the random id would decide which is the latest.
+	at := w.now
+	var last sql.NullTime
+	if err := w.tx.QueryRowContext(ctx, `SELECT MAX(created_at) FROM comments WHERE issue_id = ?`, string(id)).Scan(&last); err != nil {
+		return Comment{}, fmt.Errorf("latest comment: %w", err)
+	}
+	if last.Valid && !at.After(last.Time) {
+		at = last.Time.Add(time.Microsecond)
+	}
+	c := Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Kind: kind, Body: body, CreatedAt: at}
 	if _, err := w.exec(ctx, `INSERT INTO comments (id, issue_id, author, session, kind, body, created_at)
   VALUES (?, ?, ?, ?, ?, ?, ?)`, c.ID, string(id), c.Author, c.Session, string(c.Kind), c.Body, c.CreatedAt); err != nil {
 		return Comment{}, fmt.Errorf("insert comment: %w", err)
 	}
-	return c, w.event(ctx, OpCommentAdd, string(id), nil, c, "")
+	var after any = c
+	if !f.empty() {
+		if _, err := w.exec(ctx, `INSERT INTO handoffs (comment_id, issue_id, state, next_step, branch, worktree, to_principal)
+  VALUES (?, ?, ?, ?, ?, ?, ?)`, c.ID, string(id), string(f.State), f.Next, f.Branch, f.Worktree, f.To); err != nil {
+			return Comment{}, fmt.Errorf("insert handoff: %w", err)
+		}
+		after = struct {
+			Comment
+			Handoff HandoffFields `json:"handoff"`
+		}{c, f}
+	}
+	return c, w.event(ctx, OpCommentAdd, string(id), nil, after, "")
 }
 
 // Comments returns an issue's comments, oldest first.
@@ -102,19 +135,6 @@ func (s *Store) Comments(ctx context.Context, id IssueID) ([]Comment, error) {
 		return nil, err
 	}
 	return s.comments(ctx, `WHERE issue_id = ? ORDER BY created_at, id`, string(id))
-}
-
-// LastHandoff returns the newest handoff note on an issue, or nil.
-func (s *Store) LastHandoff(ctx context.Context, id IssueID) (*Comment, error) {
-	if err := id.Validate(); err != nil {
-		return nil, err
-	}
-	cs, err := s.comments(ctx, `WHERE issue_id = ? AND kind = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
-		string(id), string(CommentHandoff))
-	if err != nil || len(cs) == 0 {
-		return nil, err
-	}
-	return &cs[0], nil
 }
 
 // AllComments returns every comment, by issue, then oldest first.

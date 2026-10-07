@@ -203,7 +203,7 @@ func (n *NewIssue) normalize() error {
 
 // CreateIssue creates an issue and returns it. With an IdempotencyKey, a
 // repeat of the same create returns the issue the first one made and writes
-// nothing.
+// nothing. An assignee other than the actor gets an inbox item.
 func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issue, error) {
 	if err := in.normalize(); err != nil {
 		return Issue{}, err
@@ -235,8 +235,10 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 				return fmt.Errorf("idempotency lookup: %w", err)
 			}
 		}
-		out, err = insertIssue(ctx, w, id, in, meta)
-		return err
+		if out, err = insertIssue(ctx, w, id, in, meta); err != nil {
+			return err
+		}
+		return w.notifyAssigned(ctx, out)
 	})
 	if err != nil {
 		return Issue{}, err
@@ -288,7 +290,8 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 }
 
 // UpdateIssue applies patch if the issue is still at rev expected, and
-// returns the new state. A stale rev, or a concurrent write that keeps
+// returns the new state. A new assignee other than the actor gets an inbox
+// item. A stale rev, or a concurrent write that keeps
 // winning, returns ErrConflict.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
@@ -327,7 +330,13 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return err
 		}
 		b, a := diff(before, out)
-		return w.event(ctx, OpIssueUpdate, string(id), b, a, "")
+		if err := w.event(ctx, OpIssueUpdate, string(id), b, a, ""); err != nil {
+			return err
+		}
+		if out.Assignee != before.Assignee {
+			return w.notifyAssigned(ctx, out)
+		}
+		return nil
 	})
 	if err != nil {
 		return Issue{}, err

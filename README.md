@@ -13,8 +13,8 @@ and supervises many agents on top of starfix.
 
 > **Status: stage 3 of 7 in progress.** Issues work end to end over SSH, bd
 > backlogs import and export, and agents use starfix through MCP, with
-> leased claims and a registry of who is at work. The inbox, memory and the
-> offline cache follow. Not ready for production use.
+> leased claims, a registry of who is at work, and an inbox the server
+> pushes. Memory and the offline cache follow. Not ready for production use.
 
 ## Why starfix
 
@@ -199,8 +199,10 @@ command's usage; `--json` prints one JSON document, errors included.
 | Command | Does |
 |---|---|
 | `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
-| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim |
-| `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it |
+| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim. The note can carry the handoff fields below |
+| `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it. Optional fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P`, which puts it in P's inbox. `start` and `show` print the latest |
+| `inbox` | List your unread inbox, newest first: lost claims, handoffs to you, mentions, assignments (`--all` includes read ones, `-n N`); `--ack ID`, repeatable or comma-separated, or `--ack-all` marks them read |
+| `watch` | Print your inbox items as they happen, until interrupted (ctrl-c exits 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it fell behind and missed items (`sfx inbox` lists them) |
 | `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds |
 | `create` | Create an issue and print its id |
@@ -215,7 +217,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `comment`, `comments` | Add a comment; list an issue's comments |
 | `history` | List an issue's changes |
 | `digest` | Summarize a window (`--since 24h`, `7d`, a date or a time): closed, started, in progress, stalled, blocked, handed off, created and discovered; `--by P`, `--label L` filter it |
-| `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook[=AGENT]` for an agent's SessionStart hook (bare `--hook` is Claude Code's) |
+| `prime` | A session's orientation: your in-progress issues, inbox, top ready work, version notices; `--hook[=AGENT]` for an agent's SessionStart hook (bare `--hook` is Claude Code's) |
 | `mcp` | The MCP server for agents, on stdin and stdout |
 | `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini`, `jetbrains`, `junie` or `vscode`: MCP config (with `STARFIX_HARNESS` in its env), instruction pointer, SessionStart hook |
 | `setup --all` | Set up every agent at once, one summary line each; a file two agents share is written once |
@@ -321,6 +323,17 @@ other than the current one (`--epoch N`; `sfx mcp` passes it), so a
 session that lost its claim cannot close work someone has since taken.
 `show` prints the claim.
 
+Each principal has an inbox. The server puts an item there in the same
+transaction as its cause: `claim.lost` when the reaper ends your
+session's expired claim or another session takes it over; `handoff` when
+a handoff names you with `--to`; `mention` when a comment, or a handoff or
+finish note, says `@you` (only principals the server has seen, and never
+yourself); `assigned` when someone else assigns you an issue. `sfx inbox`
+lists them and `--ack` marks them read. `sfx mcp` asks the server to push
+new items as they happen, and adds one line to the agent's next tool
+result, `inbox: N new (call inbox)`; the `inbox` tool lists them and acks.
+`prime` shows the unread count and the newest few.
+
 `sfx who` (and the `who` tool) lists who is at work: every session that
 connected or renewed in the last 5 minutes, with its machine, its harness
 and the issues it holds. The server records a session when it connects,
@@ -331,7 +344,7 @@ config's `env`; failing that, `claude-code` when `CLAUDECODE=1` and
 
 The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
 `list`, `show`, `create`, `update`, `close`, `reopen`, `dep`, `label`,
-`comment`, `comments`, `history`, `digest` and `who`; there are no admin tools. Results are compact (writes return
+`comment`, `comments`, `history`, `digest`, `who` and `inbox`; there are no admin tools. Results are compact (writes return
 `{id, rev}`, lists return id, title, status and priority) and capped at
 about 2,000 tokens, prime and digest at 1,500. `digest` is structured data
 from the event log, for a standup or status report; the agent writes any
@@ -365,7 +378,7 @@ connection, and other writes report that they may have applied.
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
-| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims, agents registry built) |
+| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims, agents registry, inbox, push and structured handoffs built) |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |

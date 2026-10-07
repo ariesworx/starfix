@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -21,21 +22,28 @@ type Prime struct {
 	// More: an issue list was cut to fit the budget.
 	More    bool     `json:"more,omitempty"`
 	Notices []string `json:"notices,omitempty"`
-	// Lost are issues this session started whose claim has since lapsed
-	// or been taken over: stop work on them.
+	// Lost are issues whose claim this session lost, lapsed or taken
+	// over, from its unread claim.lost inbox items: stop work on them.
 	Lost []string `json:"lost,omitempty"`
+	// Unread counts your unread inbox items; Inbox is the newest few.
+	Unread int         `json:"unread,omitempty"`
+	Inbox  []InboxItem `json:"inbox,omitempty"`
 }
 
 // How much prime shows.
 const (
 	primeWorking  = 5
 	primeReady    = 5
+	primeInbox    = 3
 	primeTitleLen = 100
+	// primeLostFrom is how many unread items prime reads to find lost
+	// claims.
+	primeLostFrom = 20
 )
 
-// BuildPrime reads the caller's in-progress issues and the top ready ones.
-// Titles are cut, and issues dropped from the end, until it fits
-// MaxPrimeTokens.
+// BuildPrime reads the caller's in-progress issues, the top ready ones and
+// the inbox. Titles are cut, and issues dropped from the end, until it
+// fits MaxPrimeTokens. A server without the inbox leaves it out.
 func BuildPrime(ctx context.Context, c Conn, clientVersion string) (*Prime, error) {
 	p := &Prime{Project: c.Project(), You: c.Principal(), Session: c.Session(),
 		Working: []proto.Summary{}, Ready: []proto.Summary{}, Notices: c.Notices(clientVersion)}
@@ -52,6 +60,19 @@ func BuildPrime(ctx context.Context, c Conn, clientVersion string) (*Prime, erro
 		return nil, err
 	}
 	p.Ready = r.Issues
+	var in proto.InboxResult
+	switch err := c.Call(ctx, proto.OpInbox, proto.InboxArgs{Limit: primeLostFrom}, &in); {
+	case err == nil:
+		p.Unread = in.Unread
+		for _, it := range in.Items {
+			if it.Kind == "claim.lost" && it.Issue != "" && !slices.Contains(p.Lost, it.Issue) {
+				p.Lost = append(p.Lost, it.Issue)
+			}
+		}
+		p.Inbox = compactItems(in.Items[:min(len(in.Items), primeInbox)])
+	case c.Err() != nil:
+		return nil, err
+	}
 	p.fit()
 	return p, nil
 }
@@ -66,8 +87,13 @@ func (p *Prime) fit() {
 	for i := range p.Notices {
 		p.Notices[i], _ = cut(p.Notices[i], 300)
 	}
+	for i := range p.Inbox {
+		p.Inbox[i].Body, _ = cut(p.Inbox[i].Body, primeTitleLen)
+	}
 	for size(p) > MaxPrimeTokens {
 		switch {
+		case len(p.Inbox) > 0:
+			p.Inbox = p.Inbox[:len(p.Inbox)-1]
 		case len(p.Ready) > 0:
 			p.Ready = p.Ready[:len(p.Ready)-1]
 		case len(p.Working) > 0:
@@ -94,6 +120,12 @@ func (p *Prime) Text() string {
 	}
 	if len(p.Lost) > 0 {
 		fmt.Fprintf(&b, "lost claim (stop work on it): %s\n", strings.Join(p.Lost, " "))
+	}
+	if p.Unread > 0 {
+		fmt.Fprintf(&b, "inbox: %d unread (call inbox)\n", p.Unread)
+		for _, it := range p.Inbox {
+			fmt.Fprintf(&b, "  #%d %s %s from %s: %s\n", it.ID, it.Kind, it.Issue, it.From, it.Body)
+		}
 	}
 	section := func(name, empty string, list []proto.Summary) {
 		if len(list) == 0 {
