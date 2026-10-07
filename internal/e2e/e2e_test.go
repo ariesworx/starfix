@@ -28,6 +28,7 @@ import (
 	"github.com/ariesworx/starfix/internal/cli"
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/dolttest"
+	"github.com/ariesworx/starfix/internal/iaptest"
 	"github.com/ariesworx/starfix/internal/proto"
 	"github.com/ariesworx/starfix/internal/server"
 	"github.com/ariesworx/starfix/internal/store"
@@ -39,6 +40,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	iaptest.Main()
 	os.Exit(run(m))
 }
 

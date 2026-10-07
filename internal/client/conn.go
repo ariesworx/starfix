@@ -146,15 +146,14 @@ func Dial(ctx context.Context, cfg *Config, opts Options) (*Conn, error) {
 		},
 		Timeout: opts.Timeout,
 	}
-	var d net.Dialer
-	nc, err := d.DialContext(ctx, "tcp", addr)
+	nc, err := dialTransport(ctx, cfg, addr)
 	if err != nil {
-		return nil, proto.Errf(proto.CodeUnavailable, "check server.host and server.port in "+ConfigFile+", and your network",
-			fmt.Sprintf("cannot reach %s: %v", addr, err))
+		return nil, err
 	}
-	if dl, ok := ctx.Deadline(); ok {
-		_ = nc.SetDeadline(dl)
-	}
+	// Closing the transport bounds the SSH handshake for both transports;
+	// the IAP tunnel's pipes have no portable deadlines.
+	stop := context.AfterFunc(ctx, func() { _ = nc.Close() })
+	defer stop()
 	cc, chans, reqs, err := ssh.NewClientConn(nc, addr, sc)
 	if err != nil {
 		_ = nc.Close()
@@ -166,6 +165,17 @@ func Dial(ctx context.Context, cfg *Config, opts Options) (*Conn, error) {
 				"send your public key (`ssh-add -L`, or the .pub next to your key file) to the starfix admin",
 				fmt.Sprintf("%s refused your SSH key%s", addr, plural(len(signers))))
 		}
+		var timeout time.Duration
+		if ctx.Err() != nil {
+			timeout = opts.Timeout
+		}
+		if t, ok := nc.(*iapConn); ok {
+			return nil, t.failed(err, timeout)
+		}
+		if timeout > 0 {
+			return nil, proto.Errf(proto.CodeUnavailable, "check server.host and server.port in "+ConfigFile+", and your network",
+				fmt.Sprintf("timed out after %s in the ssh handshake with %s", timeout, addr))
+		}
 		return nil, proto.Errf(proto.CodeUnavailable, "check server.host and server.port in "+ConfigFile,
 			fmt.Sprintf("ssh handshake with %s failed: %v", addr, err))
 	}
@@ -174,8 +184,22 @@ func Dial(ctx context.Context, cfg *Config, opts Options) (*Conn, error) {
 	if err != nil {
 		return nil, errors.Join(err, client.Close())
 	}
-	_ = nc.SetDeadline(time.Time{})
 	return c, nil
+}
+
+// dialTransport opens the byte stream SSH runs over: a TCP connection to
+// addr, or, when cfg sets server.iap, a Google Cloud IAP tunnel.
+func dialTransport(ctx context.Context, cfg *Config, addr string) (net.Conn, error) {
+	if cfg.Server.IAP != nil {
+		return dialIAP(cfg)
+	}
+	var d net.Dialer
+	nc, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, proto.Errf(proto.CodeUnavailable, "check server.host and server.port in "+ConfigFile+", and your network",
+			fmt.Sprintf("cannot reach %s: %v", addr, err))
+	}
+	return nc, nil
 }
 
 func plural(n int) string {
@@ -258,13 +282,7 @@ func (c *Conn) lost(err error) *proto.Error {
 	if !errors.Is(err, io.EOF) {
 		msg = fmt.Sprintf("connection to the server failed: %v", err)
 	}
-	if s := strings.TrimSpace(c.stderr.String()); s != "" {
-		lines := strings.Split(s, "\n")
-		for i, l := range lines {
-			lines[i] = safetext.Line(strings.TrimSuffix(l, "\r"))
-		}
-		msg += " (server said: " + strings.Join(lines, " | ") + ")"
-	}
+	msg += quoteStderr(c.stderr.String(), "server")
 	return proto.Errf(proto.CodeUnavailable,
 		"retry; if it persists, check that this key's authorized_keys line forces `starfixd stdio --principal NAME` and that starfixd is running", msg)
 }
@@ -432,20 +450,42 @@ func signers(cfg *Config, getenv func(string) string) ([]ssh.Signer, func(), err
 	return out, closeAgent, nil
 }
 
-// capBuffer keeps the first max bytes written to it.
+// quoteStderr is " (who said: …)" quoting what a program printed on
+// stderr, escaped, on one line; or "" when it printed nothing.
+func quoteStderr(stderr, who string) string {
+	s := strings.TrimSpace(stderr)
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = safetext.Line(strings.TrimSuffix(l, "\r"))
+	}
+	return " (" + who + " said: " + strings.Join(lines, " | ") + ")"
+}
+
+// capBuffer keeps the first max bytes written to it, or with tail the
+// last max.
 type capBuffer struct {
-	mu  sync.Mutex
-	max int
-	b   []byte
+	mu   sync.Mutex
+	max  int
+	tail bool
+	b    []byte
 }
 
 func (b *capBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if room := b.max - len(b.b); room > 0 {
-		b.b = append(b.b, p[:min(room, len(p))]...)
+	n := len(p)
+	switch {
+	case b.tail:
+		p = p[max(0, len(p)-b.max):]
+		b.b = append(b.b, p...)
+		b.b = b.b[max(0, len(b.b)-b.max):]
+	case len(b.b) < b.max:
+		b.b = append(b.b, p[:min(b.max-len(b.b), len(p))]...)
 	}
-	return len(p), nil
+	return n, nil
 }
 
 func (b *capBuffer) String() string {

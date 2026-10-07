@@ -215,6 +215,7 @@ server:
   port: 22                 # default
   user: starfix            # default
   host_key: SHA256:…       # ssh-keyscan -t ed25519 HOST | ssh-keygen -lf -
+# iap: {project: example-project, zone: us-central1-a}   # optional; see below
 # key: ~/.ssh/id_ed25519   # optional; ssh-agent is used otherwise
 ```
 
@@ -238,6 +239,39 @@ and never looks above your home directory. On macOS and Linux the file
 must be yours and writable by no one else; `chmod go-w .starfix.yaml`
 fixes a checkout made under a umask of 002. Windows has no owner check, so
 there the search boundary is the only guard.
+
+### Servers without a public IP (Google Cloud IAP)
+
+A server on a Compute Engine instance with no external address is reached
+through Identity-Aware Proxy TCP forwarding. Add an `iap` block, and
+`server.host` becomes the instance name:
+
+```yaml
+server:
+  host: starfix-1
+  host_key: SHA256:…
+  iap:
+    project: example-project
+    zone: us-central1-a
+    instance: starfix-1    # optional; defaults to server.host
+```
+
+| Field | Holds |
+|---|---|
+| `iap.project` | The Google Cloud project id |
+| `iap.zone` | The instance's zone |
+| `iap.instance` | The instance name; defaults to `server.host` |
+
+`sfx` then runs `gcloud compute start-iap-tunnel INSTANCE PORT
+--listen-on-stdin` itself for each connection and speaks SSH through it, so
+nobody keeps a tunnel open by hand. The host key is still pinned and
+checked. Each developer needs the Google Cloud CLI on `PATH`, signed in
+with `gcloud auth login`, and the IAP-secured Tunnel User role on the
+instance; the firewall must admit IAP's range (35.235.240.0/20) on the SSH
+port. `sfx setup` warns when `gcloud` is missing.
+
+There is no general proxy command setting, on purpose: `.starfix.yaml` is
+committed, so a command in it would run whatever a cloned repository says.
 
 ## Moving from bd
 

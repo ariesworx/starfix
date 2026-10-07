@@ -439,6 +439,8 @@ func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, glob
 
 // setupRoot is the directory the targets are relative to: the root of the
 // repository that holds .starfix.yaml or, with global, the home directory.
+// For a repository, it warns when this machine lacks a program needed to
+// reach the server (gcloud, for IAP).
 func (r *runner) setupRoot(global bool) (string, error) {
 	if global {
 		home, err := r.env.UserHomeDir()
@@ -454,6 +456,11 @@ func (r *runner) setupRoot(global bool) (string, error) {
 			return "", err
 		}
 		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
+	}
+	// The agent can be set up regardless, but it will not connect.
+	var pe *proto.Error
+	if errors.As(cfg.CheckTransport(), &pe) {
+		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\nfix: %s\n", esc(pe.Message), esc(pe.Fix))
 	}
 	return cfg.Root, nil
 }

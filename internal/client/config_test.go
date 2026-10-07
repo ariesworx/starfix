@@ -211,3 +211,63 @@ func TestLoadConfigRefusesOthersFiles(t *testing.T) {
 		})
 	}
 }
+
+// The iap block is validated field by field, since its values become
+// gcloud's argv: anything that could pass for a flag, or carry a space,
+// a newline or a shell metacharacter, is refused.
+func TestParseConfigIAP(t *testing.T) {
+	base := "project: " + testProject + "\nserver:\n  host: starfix-1\n  host_key: " + testFpr + "\n"
+	iap := func(project, zone, instance string) string {
+		s := base + "  iap:\n    project: " + project + "\n    zone: " + zone + "\n"
+		if instance != "" {
+			s += "    instance: " + instance + "\n"
+		}
+		return s
+	}
+	tests := []struct {
+		name     string
+		in       string
+		instance string // want, when err is ""
+		err      string
+	}{
+		{name: "instance from host", in: iap("example-project", "us-central1-a", ""), instance: "starfix-1"},
+		{name: "explicit instance", in: iap("example-project", "europe-west4-b", "tracker-2"), instance: "tracker-2"},
+		{name: "unknown field", in: iap("example-project", "us-central1-a", "") + "    command: sh\n", err: "command"},
+		{name: "no project", in: base + "  iap:\n    zone: us-central1-a\n", err: "server.iap.project"},
+		{name: "no zone", in: base + "  iap:\n    project: example-project\n", err: "server.iap.zone"},
+		{name: "project as a flag", in: iap(`"-example-project"`, "us-central1-a", ""), err: "server.iap.project"},
+		{name: "project as a long flag", in: iap(`"--flag=x"`, "us-central1-a", ""), err: "server.iap.project"},
+		{name: "project with a space", in: iap(`"example project"`, "us-central1-a", ""), err: "server.iap.project"},
+		{name: "project with a semicolon", in: iap(`"example;rm-rf"`, "us-central1-a", ""), err: "server.iap.project"},
+		{name: "project with a newline", in: iap(`"example-project\n--x"`, "us-central1-a", ""), err: "server.iap.project"},
+		{name: "project too short", in: iap("abcde", "us-central1-a", ""), err: "server.iap.project"},
+		{name: "zone as a flag", in: iap("example-project", `"--zone=x"`, ""), err: "server.iap.zone"},
+		{name: "zone with a space", in: iap("example-project", `"us-central1-a b"`, ""), err: "server.iap.zone"},
+		{name: "region, not zone", in: iap("example-project", "us-central1", ""), err: "server.iap.zone"},
+		{name: "instance as a flag", in: iap("example-project", "us-central1-a", `"-x"`), err: "server.iap.instance"},
+		{name: "instance with a semicolon", in: iap("example-project", "us-central1-a", `"a;b"`), err: "server.iap.instance"},
+		{name: "instance with a newline", in: iap("example-project", "us-central1-a", `"a\nb"`), err: "server.iap.instance"},
+		{name: "instance uppercase", in: iap("example-project", "us-central1-a", "Starfix"), err: "server.iap.instance"},
+		{name: "host not an instance name", in: strings.Replace(iap("example-project", "us-central1-a", ""), "starfix-1", "starfix.example.com", 1), err: "server.iap.instance"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := ParseConfig([]byte(tc.in))
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("ParseConfig(%q) = %v, want error containing %q", tc.in, err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseConfig(%q) = %v", tc.in, err)
+			}
+			if c.Server.IAP == nil || c.Server.IAP.Instance != tc.instance {
+				t.Fatalf("ParseConfig(%q).Server.IAP = %+v, want instance %q", tc.in, c.Server.IAP, tc.instance)
+			}
+		})
+	}
+	if c, err := ParseConfig([]byte(base)); err != nil || c.Server.IAP != nil {
+		t.Errorf("ParseConfig without iap: IAP = %+v, %v; want nil", c.Server.IAP, err)
+	}
+}
