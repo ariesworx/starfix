@@ -27,17 +27,28 @@ It replaces bd and needs neither bd nor beads-remote. beads-remote's SSH, pinnin
 ## 2. Architecture
 
 ```text
-agent ──MCP stdio──> starfix ─────────────────┐
-person ──CLI──────> (same binary)             │ compact RPC (JSON over HTTP/2)
+agent ──MCP stdio──> starfix
+person ──CLI──────> (same binary)
                      ├ SQLite (WAL): read cache, op log, outbox
-                     └ in-process SSH, host key pinned ═══ ssh:22 ═══> starfixd
-                                                                         ├ leases, reaper (server clock)
-                                                                         ├ event stream (SSE) and inboxes
-                                                                         ├ gate runner, GitHub webhooks
-                                                                         └ dolt sql-server (loopback)
+                     └ in-process SSH, host key pinned
+                          ║ ssh:22, one session: newline-delimited JSON frames
+                          ▼
+                     sshd ── forced command: starfixd stdio --principal <name>
+                          │ unix socket (0700 directory, same Unix user)
+                          ▼
+                     starfixd serve
+                       ├ leases, reaper (server clock)
+                       ├ event stream (pushed frames) and inboxes
+                       ├ gate runner, GitHub webhooks
+                       └ dolt sql-server (loopback)
 ```
 
-**Transport.** `golang.org/x/crypto/ssh` runs inside the process: no system `ssh` and no port juggling. The developer's SSH key is their identity, and `starfixd` maps each key fingerprint to a principal, so shared Unix accounts no longer hide who did what.
+**Transport.** `golang.org/x/crypto/ssh` runs inside the process: no system `ssh` and no port juggling. The developer's SSH key is their identity. No new port is opened: the server's own sshd authenticates each key, and each line in the starfixd account's `authorized_keys` is `restrict,command="starfixd stdio --principal <name>" <key>`, so the principal comes from which key authenticated, never from the client, and shared Unix accounts no longer hide who did what.
+
+- `starfixd serve` is the daemon. It owns the store and listens on a unix socket in a 0700 directory. It runs on Linux only, because only there can it check which user connects (`--dev` overrides this on a single-user machine; Windows hosts use WSL2). The `starfix` client and MCP server run natively on Linux, macOS and Windows.
+- `starfixd stdio` is the forced command. It connects to that socket, sends a bridge frame naming the principal, then copies the session's stdin and stdout. The daemon trusts the bridge frame only because the socket peer is local and is the daemon's own user (SO_PEERCRED on Linux).
+- The protocol is newline-delimited JSON frames (`internal/proto`): a hello and welcome that negotiate the protocol version (§11), then requests and responses with typed error codes. A frame type is reserved for server-pushed events (stage 3).
+- This replaces the earlier plan of JSON over HTTP/2: an SSH session already gives an authenticated, encrypted, ordered stream, and a forced command needs no extra listener.
 
 **Database.** Dolt, behind `starfixd`; nothing else talks to it. Postgres is the fallback behind the same interface (see database-choice.md). Dolt's own history serves as a second audit trail, with `AS OF` queries available to admins.
 
@@ -231,7 +242,7 @@ Dolt stays the backend (decided 6 Oct 2026). starfix and starfixd ship as one si
 
 **Dolt version.** Each starfix release pins the Dolt version it was tested with. `starfixd upgrade` installs that version (checksum verified), not simply the newest Dolt, because Dolt releases about weekly and an untested server/client mix is how bd lost data. `starfixd check` warns when the running Dolt differs from the pin.
 
-**Version handshake.** Every response carries the server version, its protocol range and the latest release it knows of. starfixd checks for releases at most once a day; this can be turned off for air-gapped servers, where the admin sets the latest version by hand.
+**Version handshake.** The first exchange on every connection carries the client's version and protocol version, and the server's version, its protocol range and the latest release it knows of. starfixd checks for releases at most once a day; this can be turned off for air-gapped servers, where the admin sets the latest version by hand.
 
 | Situation | Who is told | How |
 |---|---|---|
@@ -279,7 +290,7 @@ Agreed 6 Oct 2026. Extends item 10.
 | 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
 | 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `starfix upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
-| 3 | Claims with leases, epochs, reaper, agents registry, inbox, SSE, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting, `account` and token capture (§12.1) | Multi-session soak test |
+| 3 | Claims with leases, epochs, reaper, agents registry, inbox, event push, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting, `account` and token capture (§12.1) | Multi-session soak test |
 | 4 | Memory with scopes and tags, migrated from bd `kv.memory.*`; prices, `starfix cost` and `starfix log` (§12.1) | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
 | 6 | Locks, reservations, gates, molecules/formulas, swarm, cross-project | |

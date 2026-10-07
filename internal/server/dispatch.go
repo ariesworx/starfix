@@ -1,0 +1,306 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"unicode/utf8"
+
+	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/store"
+)
+
+// Dispatch runs one operation for actor. args is the raw JSON of the op's
+// *Args type; unknown fields are refused, since every field of every
+// protocol version in range is known here.
+func (s *Server) Dispatch(ctx context.Context, actor store.Actor, op string, args json.RawMessage) (any, *proto.Error) {
+	h, ok := handlers[op]
+	if !ok {
+		return nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server, or check the operation name",
+			fmt.Sprintf("unknown operation %q", op))
+	}
+	return h(ctx, s, actor, args)
+}
+
+type handler func(ctx context.Context, s *Server, a store.Actor, args json.RawMessage) (any, *proto.Error)
+
+var handlers map[string]handler
+
+func init() {
+	handlers = map[string]handler{
+		proto.OpCreate:   typed(create),
+		proto.OpShow:     typed(show),
+		proto.OpList:     typed(list),
+		proto.OpReady:    typed(ready),
+		proto.OpBlocked:  typed(blocked),
+		proto.OpUpdate:   typed(update),
+		proto.OpClose:    typed(closeIssue),
+		proto.OpReopen:   typed(reopen),
+		proto.OpDepAdd:   typed(depAdd),
+		proto.OpDepRm:    typed(depRm),
+		proto.OpLabelAdd: typed(labelAdd),
+		proto.OpLabelRm:  typed(labelRm),
+		proto.OpComment:  typed(comment),
+		proto.OpComments: typed(comments),
+		proto.OpHistory:  typed(history),
+	}
+}
+
+// typed decodes args strictly into A and calls fn.
+func typed[A any](fn func(ctx context.Context, s *Server, a store.Actor, args A) (any, *proto.Error)) handler {
+	return func(ctx context.Context, s *Server, a store.Actor, raw json.RawMessage) (any, *proto.Error) {
+		var args A
+		if len(raw) > 0 {
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&args); err != nil {
+				return nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+					fmt.Sprintf("bad arguments: %v", err))
+			}
+		}
+		return fn(ctx, s, a, args)
+	}
+}
+
+func create(ctx context.Context, s *Server, a store.Actor, in proto.CreateArgs) (any, *proto.Error) {
+	n := store.NewIssue{
+		ID: store.IssueID(in.ID), IdempotencyKey: in.Idem, ParentID: store.IssueID(in.Parent),
+		Title: in.Title, Body: in.Body, Design: in.Design, Acceptance: in.Acceptance, Notes: in.Notes,
+		Status: store.Status(in.Status), Type: store.IssueType(in.Type),
+		Assignee: in.Assignee, Owner: in.Owner, Labels: in.Labels,
+	}
+	if in.Priority != nil {
+		p := store.Priority(*in.Priority)
+		n.Priority = &p
+	}
+	is, err := s.cfg.Store.CreateIssue(ctx, a, n)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpCreate, in.ID, 0, err)
+	}
+	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+// compactText is how much of each long text field compact show returns.
+const compactText = 500
+
+func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any, *proto.Error) {
+	id := store.IssueID(in.ID)
+	is, err := s.cfg.Store.GetIssue(ctx, id)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
+	deps, err := s.cfg.Store.Deps(ctx, id)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
+	out := proto.ShowResult{Issue: wireIssue(is)}
+	if !in.Full {
+		for _, f := range []*string{&out.Issue.Body, &out.Issue.Design, &out.Issue.Acceptance, &out.Issue.Notes} {
+			if cut, ok := truncate(*f, compactText); ok {
+				*f = cut
+				out.Issue.Truncated = true
+			}
+		}
+	}
+	for _, d := range deps {
+		out.Deps = append(out.Deps, proto.Dep{From: string(d.From), To: string(d.To), Type: string(d.Type),
+			CreatedBy: d.CreatedBy, CreatedAt: d.CreatedAt.UTC()})
+	}
+	return out, nil
+}
+
+// truncate cuts s to at most n bytes on a rune boundary, adding "…".
+func truncate(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…", true
+}
+
+func list(ctx context.Context, s *Server, _ store.Actor, in proto.ListArgs) (any, *proto.Error) {
+	f := store.Filter{Assignee: in.Assignee, ParentID: store.IssueID(in.Parent), Labels: in.Labels,
+		Limit: in.Limit, Cursor: store.Cursor(in.Cursor)}
+	for _, st := range in.Status {
+		f.Statuses = append(f.Statuses, store.Status(st))
+	}
+	for _, t := range in.Type {
+		f.Types = append(f.Types, store.IssueType(t))
+	}
+	for _, p := range in.Priority {
+		f.Priorities = append(f.Priorities, store.Priority(p))
+	}
+	page, err := s.cfg.Store.List(ctx, f)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpList, "", 0, err)
+	}
+	return proto.ListResult{Issues: summaries(page.Issues), Next: string(page.Next)}, nil
+}
+
+func ready(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) (any, *proto.Error) {
+	issues, err := s.cfg.Store.Ready(ctx, in.Limit)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpReady, "", 0, err)
+	}
+	return proto.ListResult{Issues: summaries(issues)}, nil
+}
+
+func blocked(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) (any, *proto.Error) {
+	bs, err := s.cfg.Store.Blocked(ctx, in.Limit)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpBlocked, "", 0, err)
+	}
+	out := proto.BlockedResult{Issues: []proto.BlockedIssue{}}
+	for _, b := range bs {
+		bi := proto.BlockedIssue{Summary: summary(b.Issue), Via: string(b.Via), BlockedBy: []string{}}
+		for _, id := range b.BlockedBy {
+			bi.BlockedBy = append(bi.BlockedBy, string(id))
+		}
+		out.Issues = append(out.Issues, bi)
+	}
+	return out, nil
+}
+
+func update(ctx context.Context, s *Server, a store.Actor, in proto.UpdateArgs) (any, *proto.Error) {
+	p := store.IssuePatch{Title: in.Title, Body: in.Body, Design: in.Design, Acceptance: in.Acceptance,
+		Notes: in.Notes, Assignee: in.Assignee, Owner: in.Owner}
+	if in.Status != nil {
+		st := store.Status(*in.Status)
+		p.Status = &st
+	}
+	if in.Priority != nil {
+		pr := store.Priority(*in.Priority)
+		p.Priority = &pr
+	}
+	if in.Type != nil {
+		t := store.IssueType(*in.Type)
+		p.Type = &t
+	}
+	if in.Parent != nil {
+		pid := store.IssueID(*in.Parent)
+		p.ParentID = &pid
+	}
+	is, err := s.cfg.Store.UpdateIssue(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev), p)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpUpdate, in.ID, in.Rev, err)
+	}
+	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func closeIssue(ctx context.Context, s *Server, a store.Actor, in proto.CloseArgs) (any, *proto.Error) {
+	is, err := s.cfg.Store.CloseIssue(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev), in.Reason)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpClose, in.ID, in.Rev, err)
+	}
+	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func reopen(ctx context.Context, s *Server, a store.Actor, in proto.ReopenArgs) (any, *proto.Error) {
+	is, err := s.cfg.Store.ReopenIssue(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev))
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpReopen, in.ID, in.Rev, err)
+	}
+	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func depType(t string) store.DepType {
+	if t == "" {
+		return store.DepBlocks
+	}
+	return store.DepType(t)
+}
+
+func depAdd(ctx context.Context, s *Server, a store.Actor, in proto.DepArgs) (any, *proto.Error) {
+	if err := s.cfg.Store.AddDep(ctx, a, store.IssueID(in.From), store.IssueID(in.To), depType(in.Type)); err != nil {
+		return nil, s.mapErr(ctx, proto.OpDepAdd, in.From, 0, err)
+	}
+	return proto.Empty{}, nil
+}
+
+func depRm(ctx context.Context, s *Server, a store.Actor, in proto.DepArgs) (any, *proto.Error) {
+	if err := s.cfg.Store.RemoveDep(ctx, a, store.IssueID(in.From), store.IssueID(in.To), depType(in.Type)); err != nil {
+		return nil, s.mapErr(ctx, proto.OpDepRm, in.From, 0, err)
+	}
+	return proto.Empty{}, nil
+}
+
+func labelAdd(ctx context.Context, s *Server, a store.Actor, in proto.LabelArgs) (any, *proto.Error) {
+	if err := s.cfg.Store.AddLabel(ctx, a, store.IssueID(in.ID), in.Label); err != nil {
+		return nil, s.mapErr(ctx, proto.OpLabelAdd, in.ID, 0, err)
+	}
+	return proto.Empty{}, nil
+}
+
+func labelRm(ctx context.Context, s *Server, a store.Actor, in proto.LabelArgs) (any, *proto.Error) {
+	if err := s.cfg.Store.RemoveLabel(ctx, a, store.IssueID(in.ID), in.Label); err != nil {
+		return nil, s.mapErr(ctx, proto.OpLabelRm, in.ID, 0, err)
+	}
+	return proto.Empty{}, nil
+}
+
+func comment(ctx context.Context, s *Server, a store.Actor, in proto.CommentArgs) (any, *proto.Error) {
+	c, err := s.cfg.Store.AddComment(ctx, a, store.IssueID(in.ID), in.Body)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpComment, in.ID, 0, err)
+	}
+	return proto.CommentResult{ID: c.ID}, nil
+}
+
+func comments(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (any, *proto.Error) {
+	id := store.IssueID(in.ID)
+	cs, err := s.cfg.Store.Comments(ctx, id)
+	if err == nil && len(cs) == 0 {
+		_, err = s.cfg.Store.GetIssue(ctx, id) // no comments, or no issue?
+	}
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpComments, in.ID, 0, err)
+	}
+	out := proto.CommentsResult{Comments: []proto.Comment{}}
+	for _, c := range cs {
+		out.Comments = append(out.Comments, proto.Comment{ID: c.ID, Author: c.Author, Session: c.Session,
+			Body: c.Body, CreatedAt: c.CreatedAt.UTC()})
+	}
+	return out, nil
+}
+
+func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (any, *proto.Error) {
+	evs, err := s.cfg.Store.History(ctx, store.IssueID(in.ID))
+	if err == nil && len(evs) == 0 {
+		_, err = s.cfg.Store.GetIssue(ctx, store.IssueID(in.ID))
+	}
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpHistory, in.ID, 0, err)
+	}
+	out := proto.HistoryResult{Events: []proto.Event{}}
+	for _, e := range evs {
+		out.Events = append(out.Events, proto.Event{Seq: e.Seq, At: e.At.UTC(), Principal: e.Actor.Principal,
+			Session: e.Actor.Session, Machine: e.Actor.Machine, Op: string(e.Op), Before: e.Before, After: e.After})
+	}
+	return out, nil
+}
+
+func summary(is store.Issue) proto.Summary {
+	return proto.Summary{ID: string(is.ID), Title: is.Title, Status: string(is.Status), Priority: int(is.Priority)}
+}
+
+func summaries(issues []store.Issue) []proto.Summary {
+	out := make([]proto.Summary, 0, len(issues))
+	for _, is := range issues {
+		out = append(out, summary(is))
+	}
+	return out
+}
+
+func wireIssue(is store.Issue) proto.Issue {
+	return proto.Issue{
+		ID: string(is.ID), ParentID: string(is.ParentID), Title: is.Title, Body: is.Body, Design: is.Design,
+		Acceptance: is.Acceptance, Notes: is.Notes, Status: string(is.Status), Priority: int(is.Priority),
+		Type: string(is.Type), Assignee: is.Assignee, Owner: is.Owner, DueAt: is.DueAt, DeferUntil: is.DeferUntil,
+		ExpiresAt: is.ExpiresAt, Ephemeral: is.Ephemeral, Pinned: is.Pinned, Template: is.Template,
+		Metadata: is.Metadata, CloseReason: is.CloseReason, CreatedBy: is.CreatedBy, CreatedAt: is.CreatedAt.UTC(),
+		UpdatedAt: is.UpdatedAt.UTC(), ClosedAt: is.ClosedAt, Rev: int64(is.Rev), Labels: is.Labels,
+	}
+}
