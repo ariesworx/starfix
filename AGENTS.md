@@ -54,7 +54,7 @@ gofmt -l .                       # must print nothing
 go vet ./...
 golangci-lint run ./...          # CI pins v2.14.0; config in .golangci.yml
 go mod verify                    # module cache still matches go.sum
-go test -race ./...
+STARFIX_REQUIRE_DOLT=1 go test -race -shuffle=on ./...
 for os in darwin windows; do     # sfx must build and vet on every developer OS
   GOOS=$os GOARCH=amd64 go vet ./...
   GOOS=$os GOARCH=amd64 go build ./cmd/...
@@ -62,16 +62,23 @@ done
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 ```
 
-The Go version is the `go` line in `go.mod`.
+The Go version is the `go` line in `go.mod`. CI also runs
+`TestCheckPeerOtherUID` (`internal/server`) under `sudo`, because it starts
+a socket peer as another user; it skips when not root. The `release`
+workflow runs this whole gate (`ci.yml`, as a reusable workflow) on the
+tagged commit before it builds anything ([RELEASING.md](RELEASING.md)).
 
 **Dolt.** The store, server, bdimport, `cmd/starfixd` and e2e tests start a
 real `dolt sql-server` through `internal/dolttest`. They need `dolt` on
 `PATH`, at the version in `version.Dolt` (`internal/version`; CI's `DOLT_VERSION`; a
-test keeps the two equal, so change them together). Get it from
+test keeps the two equal, so change them together, and `TestDoltVersion`
+checks the `dolt` on `PATH`). Get it from
 [Dolt's releases](https://github.com/dolthub/dolt/releases). Without
 `dolt` those tests skip with a message, and the rest still run; a skipped
 store test proves nothing, so install Dolt before changing the store,
-server or protocol. Tests that need `git` skip without it too.
+server or protocol. With `STARFIX_REQUIRE_DOLT=1`, as CI sets it, a missing
+`dolt` fails those tests instead of skipping them. Tests that need `git`
+skip without it too.
 
 ## Rules
 

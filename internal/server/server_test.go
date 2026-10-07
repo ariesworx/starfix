@@ -30,7 +30,15 @@ func TestMain(m *testing.M) {
 	os.Exit(run(m))
 }
 
+// peerHelperEnv, when set to a socket address, makes this test binary a
+// child that dials it as another user (TestCheckPeerOtherUID); it then
+// needs no Dolt.
+const peerHelperEnv = "STARFIX_PEER_HELPER"
+
 func run(m *testing.M) int {
+	if os.Getenv(peerHelperEnv) != "" {
+		return m.Run()
+	}
 	dir, err := os.MkdirTemp("", "starfix-server-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -284,7 +292,13 @@ func TestHandshake(t *testing.T) {
 		{name: "C1 control in the machine", frames: []*proto.Frame{bridge,
 			{T: proto.FrameHello, Proto: 2, Project: project, Session: "s", Machine: "m\u009b2J"}}, code: proto.CodeInvalid},
 		{name: "bidi control in the session", frames: []*proto.Frame{bridge, hello(2, project, "s\u202e")}, code: proto.CodeInvalid},
-		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}}, closed: true},
+		// Each forged bridge frame is followed by a valid hello, so the
+		// connection closes because the principal is checked, not for want
+		// of a hello (T-6).
+		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}, hello(2, project, "")}, closed: true},
+		{name: "empty principal", frames: []*proto.Frame{{T: proto.FrameBridge}, hello(2, project, "")}, closed: true},
+		{name: "principal with a newline", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "alice\nbob"}, hello(2, project, "")}, closed: true},
+		{name: "valid principal in a hello frame", frames: []*proto.Frame{{T: proto.FrameHello, Principal: "alice"}, hello(2, project, "")}, closed: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -311,6 +325,35 @@ func TestHandshake(t *testing.T) {
 				t.Fatalf("got %+v, want refusal %s with a fix", f.Err, tc.code)
 			}
 		})
+	}
+}
+
+// TestServeRefusesPeer checks that a connection whose socket peer fails
+// the peer check gets nothing: no welcome, and no agent row, even with a
+// valid bridge frame and hello behind it.
+func TestServeRefusesPeer(t *testing.T) {
+	s := newServer(t)
+	checked := 0
+	s.cfg.PeerCheck = func(net.Conn) error {
+		checked++
+		return errors.New("peer uid 65534 is not the daemon's uid 1000")
+	}
+	f, err := handshake(t, s, &proto.Frame{T: proto.FrameBridge, Principal: "alice"},
+		&proto.Frame{T: proto.FrameHello, Version: "v0.2.0", Proto: proto.Proto, Project: project, Session: "s-refused", Machine: "m"})
+	if err == nil {
+		t.Fatalf("refused peer got a reply: %+v", f)
+	}
+	if checked != 1 {
+		t.Errorf("peer check ran %d times, want 1", checked)
+	}
+	who, perr := call[proto.WhoResult](t, s, bob, proto.OpWho, proto.WhoArgs{})
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	for _, a := range who.Agents {
+		if a.Session == "s-refused" {
+			t.Errorf("refused peer registered an agent: %+v", a)
+		}
 	}
 }
 

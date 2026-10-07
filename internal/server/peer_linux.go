@@ -16,7 +16,10 @@ const PeerChecked = true
 
 // CheckPeer refuses a unix socket connection from any user but the
 // daemon's own, using SO_PEERCRED.
-func CheckPeer(c net.Conn) error {
+func CheckPeer(c net.Conn) error { return checkPeerUID(c, os.Getuid()) }
+
+// checkPeerUID refuses c unless it is a unix socket whose peer runs as uid.
+func checkPeerUID(c net.Conn, uid int) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return errors.New("not a unix socket connection")
@@ -35,7 +38,7 @@ func CheckPeer(c net.Conn) error {
 	if cerr != nil {
 		return fmt.Errorf("peer credentials: %w", cerr)
 	}
-	if uid := os.Getuid(); int(cred.Uid) != uid {
+	if int(cred.Uid) != uid {
 		return fmt.Errorf("peer uid %d is not the daemon's uid %d", cred.Uid, uid)
 	}
 	return nil
