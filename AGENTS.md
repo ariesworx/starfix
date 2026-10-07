@@ -41,6 +41,7 @@ architecture. The README's status line says which stage is in progress.
 | `internal/e2e` | End-to-end tests: CLI and MCP through an in-process SSH server to a real daemon and store |
 | `spike/dolt` | Stage 0 measurements, kept as evidence; not maintained and excluded from lint |
 | `docs/design` | Design documents |
+| `.claude/agents`, `.codex/agents`, `.gemini/agents` | Agent specifications (below); `internal/agentspec` keeps them in step |
 
 ## Commands
 
@@ -146,6 +147,16 @@ server or protocol. Tests that need `git` skip without it too.
     `RELEASING.md`, or the design doc. Where the build departs from the
     design, add to that section's dated **As built** note in
     `docs/design/starfix.md` rather than rewriting the plan.
+
+## Agent specifications
+
+`go-engineer` is a test-first Go engineer and reviewer for changes in this
+repository, in each harness's format: `.claude/agents/go-engineer.md`
+(Claude Code), `.codex/agents/go-engineer.toml` (Codex) and
+`.gemini/agents/go-engineer.md` (Gemini CLI). Delegate Go work and reviews
+to it. The three files share one prompt, name and description; edit all
+three together, and `internal/agentspec` fails until they match. A spec
+adds working method only; repository facts and rules belong here.
 
 ## Git
 

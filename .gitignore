@@ -1,0 +1,2 @@
+# Worktrees that Claude Code subagents create for isolated work.
+.claude/worktrees/
