@@ -1,6 +1,6 @@
 // Command starfixd is the starfix server.
 //
-//	starfixd serve [--dev] [--config FILE] [--socket PATH] [--project UUID] [--prefix P]
+//	starfixd serve [--dev] [--config FILE] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
 //	starfixd stdio --principal NAME [--socket PATH]
 //	starfixd import-bd [--dry-run] [--json] FILE|-
 //	starfixd export-bd [-o FILE]
@@ -23,7 +23,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,7 +34,7 @@ import (
 )
 
 const usage = `usage:
-  starfixd serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P]
+  starfixd serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]
   starfixd stdio --principal NAME [--config FILE] [--socket PATH]
   starfixd import-bd [--config FILE] [--dsn DSN] [--principal NAME] [--dry-run] [--json] FILE|-
   starfixd export-bd [--config FILE] [--dsn DSN] [-o FILE]
@@ -118,6 +117,8 @@ func serve(ctx context.Context, args []string) error {
 		fs.StringVar(&fl.DSN, "dsn", "", "Dolt DSN (no password)")
 		fs.StringVar(&fl.Project, "project", "", "project UUID")
 		fs.StringVar(&fl.Prefix, "prefix", "", "issue-ID prefix")
+		fs.StringVar(&fl.LogLevel, "log-level", "", "debug, info, warn or error (default info)")
+		fs.StringVar(&fl.LogFormat, "log-format", "", "text or json (default text)")
 	}); err != nil {
 		return err
 	}
@@ -134,7 +135,10 @@ func serve(ctx context.Context, args []string) error {
 	case s.Project == "":
 		return errors.New("no project; fix: set --project, $STARFIXD_PROJECT or project: in the config file")
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log, err := server.NewLogger(os.Stderr, s.LogLevel, s.LogFormat)
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, Logger: log})
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)

@@ -132,6 +132,8 @@ dsn: starfix:PASSWORD@tcp(127.0.0.1:3306)/starfix
 project: 6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f   # any UUID; uuidgen | tr A-Z a-z
 socket: /run/starfix/starfixd.sock
 # systemd_unit: starfixd.service   # lets `starfixd upgrade` restart and health-check it
+# log_level: info                  # debug adds a line per request; warn, error
+# log_format: text                 # or json, for a log shipper
 YAML
 starfixd serve        # run it under systemd
 ```
@@ -227,7 +229,7 @@ refused.
 
 | Command | Does |
 |---|---|
-| `serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P]` | Run the daemon |
+| `serve [--dev] [--config FILE] [--dsn DSN] [--socket PATH] [--project UUID] [--prefix P] [--log-level L] [--log-format F]` | Run the daemon. Logs go to stderr (journald under systemd): connections and successful requests at `debug`, refusals, handshake failures and expired claims at `info`, internal errors at `error`. Also `$STARFIXD_LOG_LEVEL`, `$STARFIXD_LOG_FORMAT` |
 | `stdio --principal NAME` | sshd forced command: bridge one session to the daemon |
 | `import-bd [--dry-run] [--json] FILE` | Import a bd `issues.jsonl` (`-` for stdin) |
 | `export-bd [-o FILE]` | Write the store in bd's JSONL format |

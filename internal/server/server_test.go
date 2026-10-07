@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"os"
@@ -445,6 +447,7 @@ func TestResolveSettings(t *testing.T) {
 	unknown := write("unknown.yaml", "dns: typo\n", 0o600)
 	unit := write("unit.yaml", "systemd_unit: starfixd.service\n", 0o600)
 	badUnit := write("badunit.yaml", "systemd_unit: --no-block\n", 0o600)
+	logs := write("logs.yaml", "log_level: warn\nlog_format: json\n", 0o600)
 	env := map[string]string{}
 	getenv := func(k string) string { return env[k] }
 
@@ -471,6 +474,14 @@ func TestResolveSettings(t *testing.T) {
 		{name: "unknown key refused", path: unknown, err: "dns"},
 		{name: "systemd unit", path: unit, check: func(s Settings) bool { return s.SystemdUnit == "starfixd.service" }},
 		{name: "option-like unit refused", path: badUnit, err: "is not a unit name"},
+		{name: "log settings default", path: "", check: func(s Settings) bool { return s.LogLevel == "info" && s.LogFormat == "text" }},
+		{name: "log settings from file", path: logs, check: func(s Settings) bool { return s.LogLevel == "warn" && s.LogFormat == "json" }},
+		{name: "log level env beats file", path: logs, env: map[string]string{EnvLogLevel: "debug"},
+			check: func(s Settings) bool { return s.LogLevel == "debug" && s.LogFormat == "json" }},
+		{name: "log format flag beats env", path: logs, flags: Settings{LogFormat: "text"}, env: map[string]string{EnvLogFormat: "json"},
+			check: func(s Settings) bool { return s.LogFormat == "text" }},
+		{name: "unknown log level refused", flags: Settings{LogLevel: "loud"}, err: "log level"},
+		{name: "unknown log format refused", flags: Settings{LogFormat: "xml"}, err: "log format"},
 		{name: "named file must exist", path: filepath.Join(dir, "missing.yaml"), err: "no such file"},
 	}
 	for _, tc := range tests {
@@ -675,5 +686,39 @@ func TestDispatchWho(t *testing.T) {
 		if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "7d") {
 			t.Errorf("who since %q = %+v, want invalid with a fix naming 7d", since, perr)
 		}
+	}
+}
+
+func TestNewLogger(t *testing.T) {
+	tests := []struct {
+		name          string
+		level, format string
+		want, notWant string
+	}{
+		{"text hides debug", "info", "text", "level=INFO msg=shown", "hidden"},
+		{"debug shows debug", "debug", "text", "msg=hidden", ""},
+		{"json", "info", "json", `"msg":"shown"`, "hidden"},
+		{"warn hides info", "warn", "text", "", "shown"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log, err := NewLogger(&buf, tc.level, tc.format)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log.Debug("hidden")
+			log.Info("shown")
+			got := buf.String()
+			if tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Errorf("NewLogger(%q, %q) wrote %q, want it to contain %q", tc.level, tc.format, got, tc.want)
+			}
+			if tc.notWant != "" && strings.Contains(got, tc.notWant) {
+				t.Errorf("NewLogger(%q, %q) wrote %q, want no %q", tc.level, tc.format, got, tc.notWant)
+			}
+		})
+	}
+	if _, err := NewLogger(io.Discard, "loud", "text"); err == nil {
+		t.Error("NewLogger accepted level loud")
 	}
 }
