@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/safetext"
 	"github.com/ariesworx/starfix/internal/store"
 )
 
@@ -77,8 +78,12 @@ var (
 	// holds the one definition, which mentions and handoffs also use.
 	PrincipalPattern = store.PrincipalPattern
 	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	actorPart        = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,255}$`)
 )
+
+// validActorPart reports whether a session or machine name is 1-255 bytes
+// on one line, without control or bidirectional characters (safetext), as
+// the store requires of every actor.
+func validActorPart(s string) bool { return len(s) <= 255 && s != "" && safetext.ValidLine(s) }
 
 // New checks cfg and returns a Server.
 func New(cfg Config) (*Server, error) {
@@ -320,9 +325,9 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	if sess.actor.Machine == "" {
 		sess.actor.Machine = "unknown"
 	}
-	if !actorPart.MatchString(sess.actor.Session) || !actorPart.MatchString(sess.actor.Machine) {
+	if !validActorPart(sess.actor.Session) || !validActorPart(sess.actor.Machine) {
 		return refuse(proto.Errf(proto.CodeInvalid, "set STARFIX_SESSION to 1-255 printable characters",
-			"session and machine must be 1-255 printable characters"))
+			"session and machine must be 1-255 printable characters, without control or bidirectional characters"))
 	}
 	sess.harness = f.Harness
 	w.Session = sess.actor.Session

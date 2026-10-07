@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -52,28 +51,30 @@ func normalizeImport(in Issue) (Issue, error) {
 	bad := func(format string, a ...any) (Issue, error) {
 		return Issue{}, fmt.Errorf("%w: issue %s: "+format, append([]any{ErrInvalid, in.ID}, a...)...)
 	}
+	for _, err := range []error{
+		checkTitle(in.Title),
+		checkLine("created_by", in.CreatedBy, maxName, true),
+		checkLine("assignee", in.Assignee, maxName, false),
+		checkLine("owner", in.Owner, maxName, false),
+		checkLine("close reason", in.CloseReason, maxReason, false),
+		checkText("body", in.Body, maxText, false),
+		checkText("design", in.Design, maxText, false),
+		checkText("acceptance", in.Acceptance, maxText, false),
+		checkText("notes", in.Notes, maxText, false),
+	} {
+		if err != nil {
+			return Issue{}, fmt.Errorf("issue %s: %w", in.ID, err)
+		}
+	}
 	switch {
-	case strings.TrimSpace(in.Title) == "" || len(in.Title) > 500:
-		return bad("title must be 1-500 characters, not %d", len(in.Title))
 	case !in.Status.Valid():
 		return bad("status %q", in.Status)
 	case !in.Priority.Valid():
 		return bad("priority %d", in.Priority)
 	case !in.Type.Valid():
 		return bad("type %q", in.Type)
-	case !actorPart.MatchString(in.CreatedBy):
-		return bad("created_by must be 1-255 printable characters")
-	case len(in.Assignee) > 255 || len(in.Owner) > 255:
-		return bad("assignee and owner must be at most 255 bytes")
-	case len(in.CloseReason) > 2000:
-		return bad("close reason longer than 2000")
 	case in.CreatedAt.IsZero():
 		return bad("created_at is required")
-	}
-	for _, f := range []string{in.Body, in.Design, in.Acceptance, in.Notes} {
-		if len(f) > 65535 {
-			return bad("a text field is longer than 65535 bytes")
-		}
 	}
 	if in.ParentID != "" {
 		if err := in.ParentID.Validate(); err != nil {
@@ -302,8 +303,8 @@ func normalizeDep(d Dep) (Dep, error) {
 	if err := validEdge(d.From, d.To, d.Type); err != nil {
 		return Dep{}, err
 	}
-	if !actorPart.MatchString(d.CreatedBy) {
-		return Dep{}, fmt.Errorf("%w: dep %s -> %s: created_by must be 1-255 printable characters", ErrInvalid, d.From, d.To)
+	if err := checkLine("created_by", d.CreatedBy, maxName, true); err != nil {
+		return Dep{}, fmt.Errorf("dep %s -> %s: %w", d.From, d.To, err)
 	}
 	if d.CreatedAt.IsZero() {
 		return Dep{}, fmt.Errorf("%w: dep %s -> %s: created_at is required", ErrInvalid, d.From, d.To)
@@ -395,13 +396,16 @@ func normalizeComment(c Comment) (Comment, error) {
 	if err := c.Issue.Validate(); err != nil {
 		return Comment{}, err
 	}
+	for _, err := range []error{
+		checkText("body", c.Body, maxText, true),
+		checkLine("author", c.Author, maxName, true),
+		checkLine("session", c.Session, maxName, false),
+	} {
+		if err != nil {
+			return Comment{}, fmt.Errorf("comment %s: %w", c.ID, err)
+		}
+	}
 	switch {
-	case c.Body == "" || len(c.Body) > 65535:
-		return Comment{}, fmt.Errorf("%w: comment %s must be 1-65535 bytes", ErrInvalid, c.ID)
-	case !actorPart.MatchString(c.Author):
-		return Comment{}, fmt.Errorf("%w: comment %s: author must be 1-255 printable characters", ErrInvalid, c.ID)
-	case len(c.Session) > 255:
-		return Comment{}, fmt.Errorf("%w: comment %s: session longer than 255", ErrInvalid, c.ID)
 	case c.CreatedAt.IsZero():
 		return Comment{}, fmt.Errorf("%w: comment %s: created_at is required", ErrInvalid, c.ID)
 	}

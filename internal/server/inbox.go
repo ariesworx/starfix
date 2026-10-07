@@ -158,9 +158,44 @@ func wireInboxItem(it store.InboxItem) proto.InboxItem {
 		From: it.From, At: it.At.UTC(), ReadAt: it.ReadAt}
 }
 
-func wireHandoff(h store.Handoff) proto.Handoff {
+// wireHandoff is h as viewer reads it. The worktree, a path on the
+// author's machine that names their account and layout, goes only to the
+// author's own principal (S-14).
+func wireHandoff(h store.Handoff, viewer store.Actor) proto.Handoff {
+	wt := h.Worktree
+	if h.Author != viewer.Principal {
+		wt = ""
+	}
 	return proto.Handoff{Comment: wireComment(h.Comment), HandoffFields: proto.HandoffFields{State: string(h.State),
-		Next: h.Next, Branch: h.Branch, Worktree: h.Worktree, To: h.To}}
+		Next: h.Next, Branch: h.Branch, Worktree: wt, To: h.To}}
+}
+
+// eventState is an event's before or after state as viewer reads it: a
+// handoff's worktree in a comment.add event goes only to the author's own
+// principal, as in wireHandoff.
+func eventState(e store.Event, state json.RawMessage, viewer store.Actor) json.RawMessage {
+	if e.Op != store.OpCommentAdd || e.Actor.Principal == viewer.Principal || len(state) == 0 {
+		return state
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(state, &m) != nil {
+		return state
+	}
+	var h map[string]json.RawMessage
+	if json.Unmarshal(m["handoff"], &h) != nil || h["worktree"] == nil {
+		return state
+	}
+	delete(h, "worktree")
+	hb, err := json.Marshal(h)
+	if err != nil {
+		return nil
+	}
+	m["handoff"] = hb
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 func storeHandoff(note string, f proto.HandoffFields) store.HandoffNote {

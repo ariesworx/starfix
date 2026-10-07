@@ -202,7 +202,9 @@ func TestDispatchErrors(t *testing.T) {
 		{name: "cycle", op: proto.OpDepAdd, args: proto.DepArgs{From: b.ID, To: a.ID},
 			code: proto.CodeCycle, msg: a.ID + " already depends on " + b.ID + ", so this would make a cycle", fix: "dep rm"},
 		{name: "invalid title", op: proto.OpCreate, args: proto.CreateArgs{Title: " "},
-			code: proto.CodeInvalid, msg: "title must be 1-500 characters", fix: "`sfx create -h`"},
+			code: proto.CodeInvalid, msg: "title must be 1-500 bytes", fix: "`sfx create -h`"},
+		{name: "control characters in a title", op: proto.OpCreate, args: proto.CreateArgs{Title: "ok\x1b]0;pwned\x07\x1b[2J"},
+			code: proto.CodeInvalid, msg: "title must be one line of UTF-8 without control", fix: "`sfx create -h`"},
 		{name: "invalid dep type", op: proto.OpDepAdd, args: proto.DepArgs{From: a.ID, To: b.ID, Type: "likes"},
 			code: proto.CodeInvalid, fix: "`sfx dep add -h`"},
 		{name: "status on a closed issue", op: proto.OpUpdate, args: proto.UpdateArgs{ID: b.ID, Rev: 2, Status: &open},
@@ -279,6 +281,9 @@ func TestHandshake(t *testing.T) {
 		{name: "other project", frames: []*proto.Frame{bridge, hello(1, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
 		{name: "request before hello", frames: []*proto.Frame{bridge, {T: proto.FrameReq, ID: 1, Op: "show"}}, code: proto.CodeInvalid},
 		{name: "no bridge frame", frames: []*proto.Frame{hello(1, project, "")}, closed: true},
+		{name: "C1 control in the machine", frames: []*proto.Frame{bridge,
+			{T: proto.FrameHello, Proto: 2, Project: project, Session: "s", Machine: "m\u009b2J"}}, code: proto.CodeInvalid},
+		{name: "bidi control in the session", frames: []*proto.Frame{bridge, hello(2, project, "s\u202e")}, code: proto.CodeInvalid},
 		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}}, closed: true},
 	}
 	for _, tc := range tests {

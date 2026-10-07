@@ -222,6 +222,7 @@ type WhoIn struct {
 
 // Started is the issue start took, with what working on it needs.
 type Started struct {
+	untrusted
 	ID         string `json:"id"`
 	Rev        int64  `json:"rev"`
 	Title      string `json:"title"`
@@ -259,6 +260,7 @@ type Ref struct {
 // Issues is a list result. Next continues a list; More says ready or
 // blocked had more than fit.
 type Issues struct {
+	untrusted
 	Issues []proto.Summary `json:"issues"`
 	Next   string          `json:"next,omitempty"`
 	More   bool            `json:"more,omitempty"`
@@ -266,6 +268,7 @@ type Issues struct {
 
 // Blocked is the blocked result.
 type Blocked struct {
+	untrusted
 	Issues []proto.BlockedIssue `json:"issues"`
 	More   bool                 `json:"more,omitempty"`
 }
@@ -273,6 +276,7 @@ type Blocked struct {
 // Issue is the compact form of show: no timestamps or authorship, and
 // edges as "ID type".
 type Issue struct {
+	untrusted
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Status      string   `json:"status"`
@@ -300,6 +304,7 @@ type Issue struct {
 // Created is create's result: the write's {id, rev} and similar closed
 // issues in one line.
 type Created struct {
+	untrusted
 	ID      string `json:"id"`
 	Rev     int64  `json:"rev"`
 	Similar string `json:"similar,omitempty"`
@@ -347,6 +352,7 @@ type Comment struct {
 // Comments lists an issue's newest comments, oldest first. Omitted counts
 // the older ones left out.
 type Comments struct {
+	untrusted
 	Comments []Comment `json:"comments"`
 	Omitted  int       `json:"omitted,omitempty"`
 }
@@ -362,6 +368,7 @@ type Event struct {
 
 // History lists an issue's newest events, oldest first.
 type History struct {
+	untrusted
 	Events  []Event `json:"events"`
 	Omitted int     `json:"omitted,omitempty"`
 }
@@ -383,6 +390,7 @@ type DigestItem struct {
 // Digest is the digest result, held under MaxDigestTokens. Totals count
 // everything; the sections list the first few.
 type Digest struct {
+	untrusted
 	Since      string             `json:"since"`
 	Until      string             `json:"until"`
 	Totals     proto.DigestTotals `json:"totals"`
@@ -411,6 +419,7 @@ type Agent struct {
 // Who lists the agents seen recently, most recently first. More says
 // some were left out to fit.
 type Who struct {
+	untrusted
 	Agents []Agent `json:"agents"`
 	More   bool    `json:"more,omitempty"`
 }

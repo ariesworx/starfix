@@ -161,8 +161,18 @@ func (s *Store) GetIssue(ctx context.Context, id IssueID) (Issue, error) {
 }
 
 func (n *NewIssue) normalize() error {
-	if strings.TrimSpace(n.Title) == "" || len(n.Title) > 500 {
-		return fmt.Errorf("%w: title must be 1-500 characters", ErrInvalid)
+	if err := checkTitle(n.Title); err != nil {
+		return err
+	}
+	for _, f := range []struct{ name, v string }{{"assignee", n.Assignee}, {"owner", n.Owner}} {
+		if err := checkLine(f.name, f.v, maxName, false); err != nil {
+			return err
+		}
+	}
+	for _, f := range []struct{ name, v string }{{"body", n.Body}, {"design", n.Design}, {"acceptance", n.Acceptance}, {"notes", n.Notes}} {
+		if err := checkText(f.name, f.v, maxText, false); err != nil {
+			return err
+		}
 	}
 	if n.Status == "" {
 		n.Status = StatusOpen
@@ -200,6 +210,15 @@ func (n *NewIssue) normalize() error {
 		return n.ID.Validate()
 	}
 	return nil
+}
+
+// checkTitle refuses a blank title or one that is not a single line of up
+// to 500 bytes.
+func checkTitle(t string) error {
+	if strings.TrimSpace(t) == "" {
+		return fmt.Errorf("%w: title must be 1-%d bytes, not blank", ErrInvalid, maxTitle)
+	}
+	return checkLine("title", t, maxTitle, true)
 }
 
 // CreateIssue creates an issue and returns it. With an IdempotencyKey, a
@@ -368,8 +387,8 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 		args = append(args, v)
 	}
 	if p.Title != nil {
-		if strings.TrimSpace(*p.Title) == "" || len(*p.Title) > 500 {
-			return nil, nil, fmt.Errorf("%w: title must be 1-500 characters", ErrInvalid)
+		if err := checkTitle(*p.Title); err != nil {
+			return nil, nil, err
 		}
 		add("title", *p.Title)
 	}
@@ -378,6 +397,9 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 		v   *string
 	}{{"body", p.Body}, {"design", p.Design}, {"acceptance", p.Acceptance}, {"notes", p.Notes}} {
 		if f.v != nil {
+			if err := checkText(f.col, *f.v, maxText, false); err != nil {
+				return nil, nil, err
+			}
 			add(f.col, *f.v)
 		}
 	}
@@ -407,11 +429,16 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 		}
 		add("parent_id", nullStr(*p.ParentID))
 	}
-	if p.Assignee != nil {
-		add("assignee", nullStr(*p.Assignee))
-	}
-	if p.Owner != nil {
-		add("owner", nullStr(*p.Owner))
+	for _, f := range []struct {
+		col string
+		v   *string
+	}{{"assignee", p.Assignee}, {"owner", p.Owner}} {
+		if f.v != nil {
+			if err := checkLine(f.col, *f.v, maxName, false); err != nil {
+				return nil, nil, err
+			}
+			add(f.col, nullStr(*f.v))
+		}
 	}
 	for _, f := range []struct {
 		col string
@@ -453,8 +480,8 @@ func (s *Store) ForceClose(ctx context.Context, actor Actor, id IssueID, expecte
 }
 
 func (s *Store) closeIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string, force bool) (Issue, error) {
-	if len(reason) > 2000 {
-		return Issue{}, fmt.Errorf("%w: reason longer than 2000", ErrInvalid)
+	if err := checkLine("reason", reason, maxReason, false); err != nil {
+		return Issue{}, err
 	}
 	return s.setClosed(ctx, actor, id, expected, true, reason, force)
 }

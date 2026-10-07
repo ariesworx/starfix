@@ -93,10 +93,7 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, i
 }
 
 func validBody(body string) error {
-	if body == "" || len(body) > 65535 {
-		return fmt.Errorf("%w: comment must be 1-65535 bytes", ErrInvalid)
-	}
-	return nil
+	return checkText("comment", body, maxText, true)
 }
 
 // insertComment appends a comment of the given kind, authored by w's actor,

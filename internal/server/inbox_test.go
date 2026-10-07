@@ -55,7 +55,7 @@ func TestDispatchInbox(t *testing.T) {
 }
 
 // Handoff fields go in through finish and handoff and come back from
-// start and show.
+// start and show; the worktree only to its author (TestWorktreeOnlyToItsAuthor).
 func TestDispatchStructuredHandoff(t *testing.T) {
 	s := newServer(t)
 	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
@@ -63,6 +63,11 @@ func TestDispatchStructuredHandoff(t *testing.T) {
 	f := proto.HandoffFields{State: "partial", Next: "wire the CLI", Branch: "feature/sf-1-work", Worktree: "/src/work", To: "bob"}
 	mustCall[proto.WriteResult](t, s, alice, proto.OpHandoff, proto.HandoffArgs{ID: a.ID, Note: "half done", Release: true, HandoffFields: f})
 
+	own := mustCall[proto.ShowResult](t, s, alice, proto.OpShow, proto.ShowArgs{ID: a.ID})
+	if h := own.Handoff; h == nil || h.HandoffFields != f {
+		t.Fatalf("alice's show handoff = %+v, want %+v", own.Handoff, f)
+	}
+	f.Worktree = ""
 	show := mustCall[proto.ShowResult](t, s, bob, proto.OpShow, proto.ShowArgs{ID: a.ID})
 	if h := show.Handoff; h == nil || h.Body != "half done" || h.Author != "alice" || h.HandoffFields != f {
 		t.Fatalf("show handoff = %+v, want the note with %+v", show.Handoff, f)

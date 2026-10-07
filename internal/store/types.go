@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/safetext"
 )
 
 // Rev is an issue's revision. It starts at 1 and increments on every write.
@@ -128,14 +130,12 @@ type Actor struct {
 	Machine   string `json:"machine"`
 }
 
-var actorPart = regexp.MustCompile(`^[^\x00-\x1f]{1,255}$`)
-
 func (a Actor) validate() error {
 	for _, f := range []struct{ name, v string }{
 		{"principal", a.Principal}, {"session", a.Session}, {"machine", a.Machine},
 	} {
-		if !actorPart.MatchString(f.v) {
-			return fmt.Errorf("%w: actor %s must be 1-255 printable characters", ErrInvalid, f.name)
+		if err := checkLine("actor "+f.name, f.v, maxName, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -301,9 +301,13 @@ type BlockedIssue struct {
 
 var labelPattern = regexp.MustCompile(`^[^\s,\x00-\x1f]{1,64}$`)
 
+// ValidLabel reports whether l may be stored as a label: 1-64 characters
+// without spaces, commas, or control or bidirectional characters.
+func ValidLabel(l string) bool { return labelPattern.MatchString(l) && safetext.ValidLine(l) }
+
 func validLabel(l string) error {
-	if !labelPattern.MatchString(l) {
-		return fmt.Errorf("%w: label %q must be 1-64 characters without spaces or commas", ErrInvalid, l)
+	if !ValidLabel(l) {
+		return fmt.Errorf("%w: label %q must be 1-64 characters without spaces, commas, or control or bidirectional characters", ErrInvalid, l)
 	}
 	return nil
 }

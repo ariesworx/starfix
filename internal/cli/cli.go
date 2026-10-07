@@ -16,6 +16,7 @@ import (
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/safetext"
 )
 
 // Exit codes.
@@ -118,6 +119,52 @@ type runner struct {
 	// onPush, if set before connecting, takes the events the server
 	// pushes (sfx watch).
 	onPush func(proto.Push)
+	// rawOut is standard output before wrapOutput, for JSON; outs are the
+	// escaping writers wrapOutput put in place.
+	rawOut io.Writer
+	outs   []*safetext.Writer
+}
+
+// wrapOutput routes everything printed through safetext writers. Issue
+// text, names, server messages and server stderr come from other people
+// and from the server; a control or bidi character in them is shown as an
+// escape (\x1b, \u202e), so it cannot clear the screen, set the clipboard,
+// hide a link or rewrite a line (C-3). Printers also escape single-line
+// fields with safetext.Line, so a newline in one cannot start a line of
+// its own. JSON goes to the raw output, escaped by emit.
+func (r *runner) wrapOutput() {
+	r.rawOut = r.env.Stdout
+	out, errw := safetext.NewWriter(r.env.Stdout), safetext.NewWriter(r.env.Stderr)
+	r.env.Stdout, r.env.Stderr, r.outs = out, errw, []*safetext.Writer{out, errw}
+}
+
+// mcpOut is standard output for a protocol, not for text: sfx mcp's
+// JSON-RPC, which encoding/json already escapes.
+func (r *runner) mcpOut() io.Writer {
+	if r.rawOut != nil {
+		return r.rawOut
+	}
+	return r.env.Stdout
+}
+
+// esc is safetext.Line, for a single-line field in text output: a title,
+// a name, a label, a reason, an id from the server.
+func esc(s string) string { return safetext.Line(s) }
+
+// escAll is esc on each of xs.
+func escAll(xs []string) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = esc(x)
+	}
+	return out
+}
+
+// flush writes out anything the escaping writers hold.
+func (r *runner) flush() {
+	for _, w := range r.outs {
+		_ = w.Flush()
+	}
 }
 
 // Run executes one starfix command line (without the program name) and
@@ -142,6 +189,8 @@ func Run(ctx context.Context, args []string, env Env) int {
 		env.Stdin = strings.NewReader("")
 	}
 	r := &runner{env: env, dir: "."}
+	r.wrapOutput()
+	defer r.flush()
 	args, err := r.globals(args)
 	if err != nil {
 		return r.fail(err)
@@ -237,22 +286,29 @@ func (r *runner) fail(err error) int {
 	if r.json {
 		r.emit(map[string]*proto.Error{"error": {Code: code, Message: msg, Fix: fix}})
 	} else {
-		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", msg)
+		// The message and fix may be the server's: one line each.
+		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", safetext.Line(msg))
 		if fix != "" {
-			_, _ = fmt.Fprintf(r.env.Stderr, "fix: %s\n", fix)
+			_, _ = fmt.Fprintf(r.env.Stderr, "fix: %s\n", safetext.Line(fix))
 		}
 	}
 	return exit
 }
 
-// emit writes v as one JSON document.
+// emit writes v as one JSON document. encoding/json escapes the C0
+// controls; safetext.JSON escapes DEL, C1 and bidi characters as \uXXXX
+// too, so the document is the same value and safe on a terminal.
 func (r *runner) emit(v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: encode output: %v\n", err)
 		return
 	}
-	_, _ = fmt.Fprintf(r.env.Stdout, "%s\n", b)
+	out := r.rawOut
+	if out == nil {
+		out = r.env.Stdout
+	}
+	_, _ = fmt.Fprintf(out, "%s\n", safetext.JSON(b))
 }
 
 // connect dials the server on first use.
@@ -265,7 +321,7 @@ func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 		return nil, err
 	}
 	if w := c.Warning(r.env.Version); w != "" {
-		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", w)
+		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", esc(w))
 	}
 	r.conn = c
 	return c, nil

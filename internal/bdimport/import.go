@@ -161,6 +161,9 @@ func warnMapping(rep *Report, kind, detail, id string, n int) {
 	case "label":
 		rep.warn(key, "label", id, n, "rename the label in bd (1-64 characters, no spaces or commas) and import again",
 			fmt.Sprintf("label %q is not a valid starfix label; skipped", detail))
+	case "text":
+		rep.warn(key, "text", id, n, fixNone,
+			detail+" had control or bidirectional characters; they were removed, and line breaks in a one-line field became spaces")
 	case "no-created-at":
 		rep.warn(key, "created_at", id, n, fixNone, "no created_at; updated_at used instead")
 	case "thread-id":

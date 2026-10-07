@@ -130,7 +130,7 @@ func wireItems(items []store.AcceptanceItem) []proto.AcceptanceItem {
 // compactText is how much of each long text field compact show returns.
 const compactText = 500
 
-func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any, *proto.Error) {
+func show(ctx context.Context, s *Server, a store.Actor, in proto.ShowArgs) (any, *proto.Error) {
 	id := store.IssueID(in.ID)
 	is, err := s.cfg.Store.GetIssue(ctx, id)
 	if err != nil {
@@ -158,7 +158,7 @@ func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any
 		out.Claim = &c
 	}
 	if h != nil {
-		w := wireHandoff(*h)
+		w := wireHandoff(*h, a)
 		out.Handoff = &w
 	}
 	if !in.Full {
@@ -335,7 +335,7 @@ func comments(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (a
 	return out, nil
 }
 
-func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (any, *proto.Error) {
+func history(ctx context.Context, s *Server, a store.Actor, in proto.IDArgs) (any, *proto.Error) {
 	evs, err := s.cfg.Store.History(ctx, store.IssueID(in.ID))
 	if err == nil && len(evs) == 0 {
 		_, err = s.cfg.Store.GetIssue(ctx, store.IssueID(in.ID))
@@ -346,7 +346,8 @@ func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (an
 	out := proto.HistoryResult{Events: []proto.Event{}}
 	for _, e := range evs {
 		out.Events = append(out.Events, proto.Event{Seq: e.Seq, At: e.At.UTC(), Principal: e.Actor.Principal,
-			Session: e.Actor.Session, Machine: e.Actor.Machine, Op: string(e.Op), Before: e.Before, After: e.After})
+			Session: e.Actor.Session, Machine: e.Actor.Machine, Op: string(e.Op),
+			Before: eventState(e, e.Before, a), After: eventState(e, e.After, a)})
 	}
 	return out, nil
 }
@@ -389,7 +390,7 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 		// The issue is taken; say so rather than fail the start.
 		s.cfg.Logger.Error("read handoff", "issue", is.ID, "err", err)
 	} else if h != nil {
-		w := wireHandoff(*h)
+		w := wireHandoff(*h, a)
 		out.Handoff = &w
 	}
 	return out, nil
