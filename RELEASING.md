@@ -5,7 +5,7 @@ the rest in two jobs:
 
 | Job | Secrets | Does |
 |---|---|---|
-| `build` | none | Builds `sfx` for linux, darwin and windows on amd64 and arm64, and `starfixd` for linux on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -X …version.Version=<tag>"`); packs each into `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) with the LICENSE and README; writes `checksums.txt` (sha256); attests build provenance for every archive; uploads them as a workflow artifact |
+| `build` | none | Downloads and verifies the modules (`go mod verify`) into a clean cache and runs `govulncheck`, failing on a known vulnerability; builds `sfx` for linux, darwin and windows on amd64 and arm64, and `starfixd` for linux on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -X …version.Version=<tag>"`); packs each into `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) with the LICENSE and README; writes `checksums.txt` (sha256); attests build provenance for every archive; uploads them as a workflow artifact |
 | `sign-and-publish` | `STARFIX_RELEASE_KEY`, in the `release` environment | Waits for the maintainer's approval; checks the archives against `checksums.txt`; signs it into `checksums.txt.sig` with `internal/tools/releasekey`; creates the GitHub release with every file |
 
 `checksums.txt.sig` is one line: the standard base64 of a raw Ed25519
