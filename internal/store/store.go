@@ -32,6 +32,10 @@ type Options struct {
 	Now func() time.Time
 	// Logger receives background committer errors. Default discards.
 	Logger *slog.Logger
+
+	// tick, when set by tests, replaces the committer's CommitInterval
+	// ticker, so a test decides when each commit happens.
+	tick <-chan time.Time
 }
 
 // Store is the server-side issue store. It is safe for concurrent use.
@@ -138,13 +142,17 @@ func (s *Store) Close() error {
 
 func (s *Store) commitLoop(every time.Duration) {
 	defer close(s.done)
-	t := time.NewTicker(every)
-	defer t.Stop()
+	tick := s.opts.tick
+	if tick == nil {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		tick = t.C
+	}
 	for {
 		select {
 		case <-s.stop:
 			return
-		case <-t.C:
+		case <-tick:
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if err := s.Flush(ctx); err != nil {
 				s.opts.Logger.Error("dolt commit failed", "err", err)

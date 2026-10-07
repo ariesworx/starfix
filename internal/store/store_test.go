@@ -26,42 +26,59 @@ func doltCommits(t *testing.T, s *Store) (int, string) {
 	return n, msg
 }
 
+// TestBatchedCommits drives the committer from its own tick channel, so it
+// counts commits per tick rather than per wall-clock interval (T-1).
 func TestBatchedCommits(t *testing.T) {
-	s := openStore(t, newDSN(t), Options{CommitInterval: 50 * time.Millisecond})
-	// waitFor polls dolt_log until the newest commit message is want.
-	waitFor := func(want string) int {
+	ticks := make(chan time.Time)
+	s := openStore(t, newDSN(t), Options{CommitInterval: time.Hour, tick: ticks})
+	// tick sends two ticks. The committer is ready for the second only
+	// once it has finished the first's flush; the second then finds
+	// nothing pending unless a write raced it, and none does here.
+	tick := func() {
 		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			n, msg := doltCommits(t, s)
-			if msg == want {
-				return n
+		for range 2 {
+			select {
+			case ticks <- time.Time{}:
+			case <-time.After(30 * time.Second):
+				t.Fatal("committer did not take a tick")
 			}
-			if time.Now().After(deadline) {
-				t.Fatalf("newest commit %q, want %q", msg, want)
-			}
-			time.Sleep(20 * time.Millisecond)
 		}
 	}
+	commits := func(wantMsg string) int {
+		t.Helper()
+		n, msg := doltCommits(t, s)
+		if msg != wantMsg {
+			t.Fatalf("newest commit %q, want %q", msg, wantMsg)
+		}
+		return n
+	}
+
 	// The migration is committed by the first tick.
-	base := waitFor("starfix: events through 0")
+	tick()
+	base := commits("starfix: events through 0")
 
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() { mustCreate(t, s, NewIssue{}) })
 	}
 	wg.Wait()
-	n := waitFor("starfix: events through 20")
-	if n-base > 5 {
-		t.Errorf("%d commits for 20 writes; commits are not batched", n-base)
+	tick()
+	if n := commits("starfix: events through 20"); n != base+1 {
+		t.Errorf("20 writes then a tick made %d commits, want 1", n-base)
 	}
+
 	// Idle ticks add nothing.
-	time.Sleep(300 * time.Millisecond)
-	if idle, _ := doltCommits(t, s); idle != n {
-		t.Errorf("idle committer made %d empty commits", idle-n)
+	for range 3 {
+		tick()
 	}
-	if err := s.Flush(t.Context()); err != nil {
-		t.Fatal(err)
+	if n := commits("starfix: events through 20"); n != base+1 {
+		t.Errorf("idle ticks made %d empty commits", n-base-1)
+	}
+
+	mustCreate(t, s, NewIssue{})
+	tick()
+	if n := commits("starfix: events through 21"); n != base+2 {
+		t.Errorf("one write then a tick made %d commits, want 1", n-base-1)
 	}
 }
 

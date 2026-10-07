@@ -2,6 +2,7 @@ package proto
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -42,17 +43,42 @@ func CheckProto(p, lo, hi int, serverVersion string) *Error {
 	return nil
 }
 
+// orDev names a server version in a message. A string that is neither a
+// version nor "dev" came from a server that may be hostile, so it is never
+// echoed (C-5).
 func orDev(v string) string {
-	if v == "" {
-		return "unknown version"
+	if v == "dev" || ValidVersion(v) {
+		return v
 	}
-	return v
+	return "unknown version"
 }
 
-// CompareVersions compares two release versions of the form vMAJOR.MINOR.PATCH,
-// with an optional -prerelease that sorts before the release. ok is false
-// when either is not a release version (for example "dev"); callers then
-// stay quiet.
+// maxVersion bounds a version string. Release tags are far shorter
+// (release.TagPattern); the bound keeps a server-sent string from growing a
+// message.
+const maxVersion = 64
+
+// versionPattern is a semantic version 2.0 with a "v" prefix: numeric
+// identifiers without leading zeros, prerelease and build identifiers
+// non-empty and drawn from [0-9A-Za-z-]. Anything else, including control
+// characters, spaces and non-ASCII, is not a version.
+var versionPattern = regexp.MustCompile(`^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})` +
+	`(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?` +
+	`(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+
+// ValidVersion reports whether s is a release version that CompareVersions
+// orders: vMAJOR.MINOR.PATCH, an optional -prerelease and +build, at most
+// 64 bytes. Callers treat any other string from a server as unknown.
+func ValidVersion(s string) bool {
+	_, ok := parseVersion(s)
+	return ok
+}
+
+// CompareVersions compares two release versions of the form
+// vMAJOR.MINOR.PATCH, with an optional -prerelease that sorts before the
+// release and +build metadata that is ignored, by semantic versioning 2.0
+// precedence. ok is false when either is not a valid version (for example
+// "dev", or a hostile string from a server); callers then stay quiet.
 func CompareVersions(a, b string) (cmp int, ok bool) {
 	pa, oka := parseVersion(a)
 	pb, okb := parseVersion(b)
@@ -60,58 +86,88 @@ func CompareVersions(a, b string) (cmp int, ok bool) {
 		return 0, false
 	}
 	for i := range 3 {
-		if pa.n[i] != pb.n[i] {
-			if pa.n[i] < pb.n[i] {
-				return -1, true
-			}
-			return 1, true
+		if c := cmpInt(pa.n[i], pb.n[i]); c != 0 {
+			return c, true
 		}
 	}
 	switch {
-	case pa.pre == pb.pre:
+	case len(pa.pre) == 0 && len(pb.pre) == 0:
 		return 0, true
-	case pa.pre == "":
+	case len(pa.pre) == 0:
 		return 1, true
-	case pb.pre == "":
+	case len(pb.pre) == 0:
 		return -1, true
-	case pa.pre < pb.pre:
-		return -1, true
-	default:
-		return 1, true
 	}
+	for i := range min(len(pa.pre), len(pb.pre)) {
+		if c := cmpIdent(pa.pre[i], pb.pre[i]); c != 0 {
+			return c, true
+		}
+	}
+	return cmpInt(len(pa.pre), len(pb.pre)), true
+}
+
+// cmpIdent orders two prerelease identifiers: numeric ones numerically and
+// below alphanumeric ones, which compare in ASCII order. The pattern bounds
+// a numeric identifier only by maxVersion, so numbers compare by length
+// first (no leading zeros) rather than by parsing.
+func cmpIdent(a, b string) int {
+	na, nb := isNumeric(a), isNumeric(b)
+	switch {
+	case na && nb:
+		if c := cmpInt(len(a), len(b)); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	case na:
+		return -1
+	case nb:
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func isNumeric(s string) bool {
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }
 
 type semver struct {
 	n   [3]int
-	pre string
+	pre []string
 }
 
 func parseVersion(s string) (semver, bool) {
 	var v semver
-	s, ok := strings.CutPrefix(s, "v")
-	if !ok {
+	if len(s) > maxVersion {
 		return v, false
 	}
-	if i := strings.IndexByte(s, '+'); i >= 0 {
-		s = s[:i]
-	}
-	if i := strings.IndexByte(s, '-'); i >= 0 {
-		v.pre = s[i+1:]
-		if v.pre == "" {
-			return v, false
-		}
-		s = s[:i]
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 3 {
+	m := versionPattern.FindStringSubmatch(s)
+	if m == nil {
 		return v, false
 	}
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 || p == "" || (len(p) > 1 && p[0] == '0') {
+	for i := range 3 {
+		n, err := strconv.Atoi(m[i+1])
+		if err != nil {
 			return v, false
 		}
 		v.n[i] = n
+	}
+	if m[4] != "" {
+		v.pre = strings.Split(m[4], ".")
 	}
 	return v, true
 }

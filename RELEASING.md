@@ -1,10 +1,11 @@
 # Releasing starfix
 
 A release is a pushed `vMAJOR.MINOR.PATCH` tag. The `release` workflow does
-the rest in two jobs:
+the rest in three jobs, each waiting for the one before:
 
 | Job | Secrets | Does |
 |---|---|---|
+| `gate` | none | Runs the full CI gate (`ci.yml`, called as a reusable workflow) on the tagged commit: lint, `go mod verify`, govulncheck, the cross-platform builds, and every test with `-race -shuffle=on` against the pinned Dolt, which must be present (`STARFIX_REQUIRE_DOLT=1`). A tag whose commit fails it is never built or signed |
 | `build` | none | Downloads and verifies the modules (`go mod verify`) into a clean cache and runs `govulncheck`, failing on a known vulnerability; builds `sfx` for linux, darwin and windows on amd64 and arm64, and `starfixd` for linux on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -X …version.Version=<tag>"`); packs each into `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) with the LICENSE and README; writes `checksums.txt` (sha256); attests build provenance for every archive; uploads them as a workflow artifact |
 | `sign-and-publish` | `STARFIX_RELEASE_KEY`, in the `release` environment | Waits for the maintainer's approval; checks the archives against `checksums.txt`; signs it into `checksums.txt.sig` with `internal/tools/releasekey`; creates the GitHub release with every file |
 
@@ -22,7 +23,9 @@ The release notes name the Dolt version the release was tested with
 
 When to cut the first one is the maintainer's call.
 
-1. Make sure the commit to tag is on `main` and its CI is green.
+1. Make sure the commit to tag is on `main` and its CI is green. The
+   `gate` job runs the same checks again on the tag, so a red commit
+   stops there, but finding out first saves a tag.
 2. Tag and push; only the maintainer can (the tag ruleset below):
 
    ```sh
