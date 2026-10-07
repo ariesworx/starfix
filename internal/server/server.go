@@ -397,8 +397,9 @@ func (s *Server) busyWrites(principal string, wait time.Duration) *proto.Error {
 // handshake reads the bridge frame and the client's hello, and answers with
 // a welcome, or a refusal and an error. On success the session holds a
 // connection slot (sess.slot). A refusal after a valid bridge frame also
-// returns the session, so the caller can say whose it was; other failures
-// return nil.
+// returns the session, so the caller can say whose it was, and so does a
+// welcome that could not be written, so the caller frees its slot; other
+// failures return nil.
 func (s *Server) handshake(c net.Conn) (*session, error) {
 	sess := &session{enc: proto.NewEncoder(c), dec: proto.NewDecoder(c)}
 	_ = c.SetReadDeadline(time.Now().Add(bridgeTimeout))
@@ -457,7 +458,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	w.Session = sess.actor.Session
 	w.Principal = sess.actor.Principal
 	if err := sess.enc.Encode(w); err != nil {
-		return nil, err
+		return sess, err // sess holds a slot, which the caller frees
 	}
 	return sess, nil
 }

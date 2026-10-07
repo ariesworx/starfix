@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -308,6 +309,36 @@ func TestConnectionCaps(t *testing.T) {
 			t.Fatalf("alice's slot was never freed: %v", w.Err)
 		}
 		runtime.Gosched()
+	}
+}
+
+// A client that leaves before reading its welcome gives back the slot the
+// handshake took for it; otherwise enough of them would lock its
+// principal out until a restart.
+func TestWelcomeWriteFailureFreesSlot(t *testing.T) {
+	s := newServer(t)
+	srv, cli := net.Pipe()
+	var wg sync.WaitGroup
+	wg.Go(func() { s.handle(t.Context(), srv); _ = srv.Close() })
+	_ = cli.SetDeadline(time.Now().Add(10 * time.Second))
+	// net.Pipe has no buffer: once the hello is written the server has
+	// read it, and all it does with the connection next is write the
+	// welcome, which the close makes fail.
+	enc := proto.NewEncoder(cli)
+	if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: alice.Principal}); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: alice.Session,
+		Machine: alice.Machine}); err != nil {
+		t.Fatal(err)
+	}
+	_ = cli.Close()
+	wg.Wait()
+	s.slots.mu.Lock()
+	n, total := s.slots.by[alice.Principal], s.slots.total
+	s.slots.mu.Unlock()
+	if n != 0 || total != 0 {
+		t.Errorf("after a client closed before its welcome, alice holds %d connection slots, %d in all; want 0", n, total)
 	}
 }
 
