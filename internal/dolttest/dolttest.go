@@ -1,4 +1,13 @@
 // Package dolttest starts a throwaway dolt sql-server for tests.
+//
+// [Start] launches a [Server] in a directory the caller owns, usually
+// t.TempDir(), and the caller must [Server.Stop] it. Tests reach it
+// through its unix socket: [Server.NewDatabase] makes an empty database
+// for each test, with the DSN of the least-privileged account [User], and
+// [Server.RootDSN] gives Dolt's superuser, for tests of the store's
+// account check. Without dolt on PATH, Start returns [ErrNoDolt] and
+// callers skip, unless [RequireEnv] makes that a failure. NewDatabase is
+// safe for concurrent use.
 package dolttest
 
 import (
@@ -26,6 +35,7 @@ var ErrNoDolt = errors.New("dolt not found on PATH")
 // never pass by skipping.
 const RequireEnv = "STARFIX_REQUIRE_DOLT"
 
+// required reports whether RequireEnv is set to anything but 0.
 func required() bool {
 	v := os.Getenv(RequireEnv)
 	return v != "" && v != "0"
@@ -40,12 +50,14 @@ func required() bool {
 // only, never root's, so the tests run through the same account check
 // (store.Options.AllowUnsafeAccount) as a production server.
 type Server struct {
+	// Port is the loopback TCP port the server listens on. Connections
+	// use the socket instead.
 	Port   int
 	socket string
 	dir    string
 	cmd    *exec.Cmd
-	exit   chan error
-	n      atomic.Int64
+	exit   chan error   // receives cmd.Wait's result, once, when dolt exits
+	n      atomic.Int64 // databases made, for unique names
 }
 
 // pickPort chooses the TCP port for the next launch; tests replace it.
@@ -84,7 +96,9 @@ func Version(ctx context.Context) (string, error) {
 }
 
 // Start runs dolt sql-server with its data and config under dir, on a free
-// port, and waits until it accepts connections.
+// port, and waits until it accepts connections, trying up to three ports.
+// ctx bounds only the startup. The caller must Stop the server, which
+// otherwise outlives the test process.
 func Start(ctx context.Context, dir string) (*Server, error) {
 	bin, err := lookDolt()
 	if err != nil {
@@ -141,6 +155,9 @@ system_variables:
   secure_file_priv: %q
 `
 
+// launch starts dolt on port and socket, waits up to 30 seconds for root
+// to connect over the socket, and creates User. If it fails, the server is
+// stopped.
 func launch(ctx context.Context, bin string, env []string, data string, port int, dir, socket string) (*Server, error) {
 	logf, err := os.Create(filepath.Join(dir, "server.log")) //nolint:gosec // test temp dir
 	if err != nil {
@@ -152,6 +169,7 @@ func launch(ctx context.Context, bin string, env []string, data string, port int
 		_ = logf.Close()
 		return nil, fmt.Errorf("dolttest: %w", err)
 	}
+	// Not CommandContext: the server runs until Stop, not until ctx ends.
 	cmd := exec.Command(bin, "sql-server", "--config", cfg) //nolint:gosec // dolt from PATH
 	cmd.Env = env
 	cmd.Stdout = logf
@@ -189,6 +207,8 @@ func launch(ctx context.Context, bin string, env []string, data string, port int
 	}
 }
 
+// freePort returns a loopback TCP port that was free a moment ago;
+// nothing holds it.
 func freePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -226,7 +246,8 @@ func (s *Server) NewDatabase(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%s@unix(%s)/%s", User, s.socket, name), nil
 }
 
-// Stop shuts the server down.
+// Stop interrupts the server and waits for it to exit, killing it after
+// 10 seconds. Call it once: a second call waits 10 seconds and fails.
 func (s *Server) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
