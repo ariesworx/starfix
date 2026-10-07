@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -110,8 +111,18 @@ func (s *Store) Deps(ctx context.Context, id IssueID) ([]Dep, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	rows, err := s.r.QueryContext(ctx, `SELECT from_id, to_id, type, created_by, created_at FROM deps
-  WHERE from_id = ? OR to_id = ? ORDER BY from_id, to_id, type`, string(id), string(id))
+	return s.deps(ctx, `WHERE from_id = ? OR to_id = ?`, string(id), string(id))
+}
+
+// AllDeps returns every edge, ordered by from, to and type.
+func (s *Store) AllDeps(ctx context.Context) ([]Dep, error) {
+	return s.deps(ctx, ``)
+}
+
+func (s *Store) deps(ctx context.Context, where string, args ...any) ([]Dep, error) {
+	q := `SELECT from_id, to_id, type, created_by, created_at, metadata FROM deps ` + where + //nolint:gosec // where is a constant from the callers above
+		` ORDER BY from_id, to_id, type`
+	rows, err := s.r.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("deps: %w", err)
 	}
@@ -119,8 +130,13 @@ func (s *Store) Deps(ctx context.Context, id IssueID) ([]Dep, error) {
 	var out []Dep
 	for rows.Next() {
 		var d Dep
-		if err := rows.Scan(&d.From, &d.To, &d.Type, &d.CreatedBy, &d.CreatedAt); err != nil {
+		var meta []byte
+		if err := rows.Scan(&d.From, &d.To, &d.Type, &d.CreatedBy, &d.CreatedAt, &meta); err != nil {
 			return nil, fmt.Errorf("deps: %w", err)
+		}
+		d.CreatedAt = d.CreatedAt.UTC()
+		if len(meta) > 0 {
+			d.Metadata = json.RawMessage(meta)
 		}
 		out = append(out, d)
 	}

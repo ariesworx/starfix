@@ -6,9 +6,9 @@ from the command line. It is written in Go and stores its data in
 [Dolt](https://github.com/dolthub/dolt) behind a small server.
 
 **Status: stage 1 in progress.** The store, the `starfixd` server, the SSH
-transport with its version handshake, and the `starfix` CLI for issues are
-built. The MCP server, bd import, claims and the offline cache are not. Read
-the [design](docs/design/starfix.md), the
+transport with its version handshake, the `starfix` CLI for issues and the
+bd import and export are built. The MCP server, claims and the offline cache
+are not. Read the [design](docs/design/starfix.md), the
 [database choice](docs/design/database.md), and the draft
 [Bearing orchestrator spec](docs/design/bearing.md).
 
@@ -57,6 +57,19 @@ starfix dep add sf-a1b2c3d4 sf-e5f6g7h8     # a1b2… depends on e5f6…
 starfix close sf-a1b2c3d4 --reason "fixed in #12"
 starfix help                                 # every command; --json on all
 ```
+
+To move a bd backlog in, export it with `bd export -o bd.jsonl`, copy it to
+the server and, as the starfixd user:
+
+```sh
+starfixd import-bd --dry-run bd.jsonl   # what would change; writes nothing
+starfixd import-bd bd.jsonl             # safe to rerun
+starfixd export-bd -o back.jsonl        # bd's format, for bd or a later import
+```
+
+bd IDs are kept. Whatever starfix cannot hold yet (some dependency types,
+memories, a few fields) is listed with the IDs it affects, never dropped
+silently; the mapping is in `internal/bdimport`.
 
 The host key is pinned, never trusted on first use. Exit codes: 0 ok, 1
 failure (with a `fix:` line), 2 usage, 3 protocol version refused.

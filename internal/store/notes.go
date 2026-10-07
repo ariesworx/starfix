@@ -86,8 +86,17 @@ func (s *Store) Comments(ctx context.Context, id IssueID) ([]Comment, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	rows, err := s.r.QueryContext(ctx, `SELECT id, issue_id, author, session, body, created_at
-  FROM comments WHERE issue_id = ? ORDER BY created_at, id`, string(id))
+	return s.comments(ctx, `WHERE issue_id = ? ORDER BY created_at, id`, string(id))
+}
+
+// AllComments returns every comment, by issue, then oldest first.
+func (s *Store) AllComments(ctx context.Context) ([]Comment, error) {
+	return s.comments(ctx, `ORDER BY issue_id, created_at, id`)
+}
+
+func (s *Store) comments(ctx context.Context, rest string, args ...any) ([]Comment, error) {
+	q := `SELECT id, issue_id, author, session, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers above
+	rows, err := s.r.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("comments: %w", err)
 	}
@@ -98,6 +107,7 @@ func (s *Store) Comments(ctx context.Context, id IssueID) ([]Comment, error) {
 		if err := rows.Scan(&c.ID, &c.Issue, &c.Author, &c.Session, &c.Body, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("comments: %w", err)
 		}
+		c.CreatedAt = c.CreatedAt.UTC()
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
