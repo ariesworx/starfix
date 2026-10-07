@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 )
 
 // AddLabel adds a label to an issue. Adding a present label is a no-op.
@@ -97,7 +99,18 @@ func insertNote(ctx context.Context, w *wtx, id IssueID, body string, kind Comme
 	if err != nil {
 		return Comment{}, err
 	}
-	c := Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Kind: kind, Body: body, CreatedAt: w.now}
+	// Notes are ordered by created_at, so keep it strictly increasing per
+	// issue: two notes in the same microsecond (or under a test clock) would
+	// otherwise tie, and the random id would decide which is the latest.
+	at := w.now
+	var last sql.NullTime
+	if err := w.tx.QueryRowContext(ctx, `SELECT MAX(created_at) FROM comments WHERE issue_id = ?`, string(id)).Scan(&last); err != nil {
+		return Comment{}, fmt.Errorf("latest comment: %w", err)
+	}
+	if last.Valid && !at.After(last.Time) {
+		at = last.Time.Add(time.Microsecond)
+	}
+	c := Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Kind: kind, Body: body, CreatedAt: at}
 	if _, err := w.exec(ctx, `INSERT INTO comments (id, issue_id, author, session, kind, body, created_at)
   VALUES (?, ?, ?, ?, ?, ?, ?)`, c.ID, string(id), c.Author, c.Session, string(c.Kind), c.Body, c.CreatedAt); err != nil {
 		return Comment{}, fmt.Errorf("insert comment: %w", err)
