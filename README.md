@@ -157,6 +157,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `label` | Add or remove labels |
 | `comment`, `comments` | Add a comment; list an issue's comments |
 | `history` | List an issue's changes |
+| `digest` | Summarize a window (`--since 24h`, `7d`, a date or a time): closed, started, in progress, stalled, blocked, handed off, created and discovered; `--by P`, `--label L` filter it |
 | `prime` | A session's orientation: your in-progress issues, top ready work, version notices |
 | `mcp` | The MCP server for agents, on stdin and stdout |
 | `setup AGENT` | Register `sfx mcp` with `claude-code`, `codex` or `gemini` |
@@ -207,9 +208,11 @@ MCP `start` never touches git; the agent runs git itself.
 
 The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
 `list`, `show`, `create`, `update`, `close`, `reopen`, `dep`, `label`,
-`comment`, `comments` and `history`; there are no admin tools. Results are compact (writes return
+`comment`, `comments`, `history` and `digest`; there are no admin tools. Results are compact (writes return
 `{id, rev}`, lists return id, title, status and priority) and capped at
-about 2,000 tokens, prime at 1,500. A refusal is a tool error with the
+about 2,000 tokens, prime and digest at 1,500. `digest` is structured data
+from the event log, for a standup or status report; the agent writes any
+narrative, and starfix runs no model. A refusal is a tool error with the
 server's code and message and a `fix:` line naming the agent's next step.
 
 The server knows who you are from your SSH key. The session id comes from
@@ -231,7 +234,7 @@ connection, and other writes report that they may have applied.
 |---|---|---|
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
-| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish` built) |
+| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish`, `digest` built) |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |

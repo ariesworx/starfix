@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFrameRoundTrip(t *testing.T) {
@@ -215,6 +216,24 @@ func TestEventChanged(t *testing.T) {
 	for _, tc := range tests {
 		if got := tc.e.Changed(); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.e.Op, got, tc.want)
+		}
+	}
+}
+
+func TestSpan(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{0, "0m"},
+		{59*time.Second + 45*time.Minute, "45m"},
+		{5*time.Hour + 59*time.Minute, "5h"},
+		{24 * time.Hour, "1d"},
+		{3*24*time.Hour + 4*time.Hour + 30*time.Minute, "3d4h"},
+		{12*24*time.Hour + 5*time.Hour, "12d"},
+	} {
+		if got := Span(tc.d); got != tc.want {
+			t.Errorf("Span(%v) = %q, want %q", tc.d, got, tc.want)
 		}
 	}
 }

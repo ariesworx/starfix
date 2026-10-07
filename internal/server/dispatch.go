@@ -48,6 +48,7 @@ func init() {
 		proto.OpStart:    typed(start),
 		proto.OpFinish:   typed(finish),
 		proto.OpHandoff:  typed(handoff),
+		proto.OpDigest:   typed(digest),
 	}
 }
 

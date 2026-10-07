@@ -11,6 +11,8 @@ const (
 	MaxResultTokens = 2000
 	// MaxPrimeTokens caps prime.
 	MaxPrimeTokens = 1500
+	// MaxDigestTokens caps digest (design §5).
+	MaxDigestTokens = 1500
 	// DefaultLimit is how many issues a list returns when the agent does
 	// not say.
 	DefaultLimit = 10

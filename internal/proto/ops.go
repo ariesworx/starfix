@@ -2,6 +2,7 @@ package proto
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -25,6 +26,7 @@ const (
 	OpStart    = "start"     // StartArgs → StartResult
 	OpFinish   = "finish"    // FinishArgs → FinishResult
 	OpHandoff  = "handoff"   // HandoffArgs → WriteResult
+	OpDigest   = "digest"    // DigestArgs → DigestResult
 )
 
 // Issue is the full form of an issue, returned by show.
@@ -286,6 +288,81 @@ type HandoffArgs struct {
 	ID      string `json:"id"`
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty"`
+}
+
+// DigestArgs selects a digest. Since is an RFC 3339 time, a date
+// (2006-01-02, midnight UTC) or a duration back from now such as 90m, 24h
+// or 7d; empty means 24h. By keeps what one principal did; Label keeps
+// issues with that label.
+type DigestArgs struct {
+	Since string `json:"since,omitempty"`
+	By    string `json:"by,omitempty"`
+	Label string `json:"label,omitempty"`
+}
+
+// DigestItem is one issue in a digest section. By and At are who made the
+// section's event and when; for in progress, the holder and when it was
+// taken; for stalled, the holder and the last event; for blocked, the
+// assignee and no time.
+type DigestItem struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Priority  int       `json:"priority"`
+	By        string    `json:"by,omitempty"`
+	At        time.Time `json:"at,omitzero"`
+	Note      string    `json:"note,omitempty"`
+	From      string    `json:"from,omitempty"`
+	BlockedBy []string  `json:"blocked_by,omitempty"`
+}
+
+// DigestTotals counts everything each section matched; the sections list
+// the first few. Events counts the events in the window.
+type DigestTotals struct {
+	Events     int `json:"events"`
+	Closed     int `json:"closed"`
+	Started    int `json:"started"`
+	InProgress int `json:"in_progress"`
+	Stalled    int `json:"stalled"`
+	Blocked    int `json:"blocked"`
+	HandedOff  int `json:"handed_off"`
+	Created    int `json:"created"`
+	Discovered int `json:"discovered"`
+}
+
+// DigestResult summarizes the window from Since to Until and the work in
+// flight at Until. It is built from the event log and issue state; any
+// narrative is the reader's to write.
+type DigestResult struct {
+	Since      time.Time    `json:"since"`
+	Until      time.Time    `json:"until"`
+	Totals     DigestTotals `json:"totals"`
+	Closed     []DigestItem `json:"closed,omitempty"`
+	Started    []DigestItem `json:"started,omitempty"`
+	InProgress []DigestItem `json:"in_progress,omitempty"`
+	Stalled    []DigestItem `json:"stalled,omitempty"`
+	Blocked    []DigestItem `json:"blocked,omitempty"`
+	HandedOff  []DigestItem `json:"handed_off,omitempty"`
+	Created    []DigestItem `json:"created,omitempty"`
+	Discovered []DigestItem `json:"discovered,omitempty"`
+	// Truncated: a total is a lower bound, or items were left out to fit
+	// a budget.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Span formats a duration compactly for people and agents: 45m, 5h, 3d4h.
+func Span(d time.Duration) string {
+	d = d.Truncate(time.Minute)
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+	days, hours := int(d/(24*time.Hour)), int(d%(24*time.Hour)/time.Hour)
+	if hours == 0 || days >= 10 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd%dh", days, hours)
 }
 
 // Empty is the result of writes that have nothing to report.

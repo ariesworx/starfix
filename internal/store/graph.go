@@ -261,24 +261,9 @@ ORDER BY i.priority, i.created_at, i.id, (b.via <> i.id)`, s.now())
 }
 
 func (s *Store) attachBlockers(ctx context.Context, bs []BlockedIssue) error {
-	rows, err := s.r.QueryContext(ctx, `SELECT d.from_id, d.to_id FROM deps d
-JOIN issues t ON t.id = d.to_id
-WHERE d.type IN (`+readyBlocking+`) AND t.status <> 'closed'
-ORDER BY d.from_id, d.to_id`)
+	by, err := blockerMap(ctx, s.r)
 	if err != nil {
-		return fmt.Errorf("blockers: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	by := map[IssueID][]IssueID{}
-	for rows.Next() {
-		var f, t IssueID
-		if err := rows.Scan(&f, &t); err != nil {
-			return fmt.Errorf("blockers: %w", err)
-		}
-		by[f] = append(by[f], t)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("blockers: %w", err)
+		return err
 	}
 	for i := range bs {
 		src := bs[i].Issue.ID
@@ -288,6 +273,30 @@ ORDER BY d.from_id, d.to_id`)
 		bs[i].BlockedBy = by[src]
 	}
 	return nil
+}
+
+// blockerMap maps each issue to its open blocking targets, in id order.
+func blockerMap(ctx context.Context, q querier) (map[IssueID][]IssueID, error) {
+	rows, err := q.QueryContext(ctx, `SELECT d.from_id, d.to_id FROM deps d
+JOIN issues t ON t.id = d.to_id
+WHERE d.type IN (`+readyBlocking+`) AND t.status <> 'closed'
+ORDER BY d.from_id, d.to_id`)
+	if err != nil {
+		return nil, fmt.Errorf("blockers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	by := map[IssueID][]IssueID{}
+	for rows.Next() {
+		var f, t IssueID
+		if err := rows.Scan(&f, &t); err != nil {
+			return nil, fmt.Errorf("blockers: %w", err)
+		}
+		by[f] = append(by[f], t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("blockers: %w", err)
+	}
+	return by, nil
 }
 
 func withLabels(ctx context.Context, q querier, issues []Issue) error {

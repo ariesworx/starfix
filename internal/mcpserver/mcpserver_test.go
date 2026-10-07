@@ -153,7 +153,7 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ro := []string{"blocked", "comments", "history", "list", "prime", "ready", "show"}
+	ro := []string{"blocked", "comments", "digest", "history", "list", "prime", "ready", "show"}
 	var names []string
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
@@ -172,14 +172,14 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "finish", "handoff", "history", "label",
+	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "digest", "finish", "handoff", "history", "label",
 		"list", "prime", "ready", "reopen", "show", "start", "update"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v\nwant    %v", names, want)
 	}
-	// Design §5 aims for about 2k tokens for the whole verb set. These 17
-	// tools are about 6 KiB, some 1.5k real tokens; the budget below is in
-	// Tokens' deliberately high estimate. Counted is what a model reads:
+	// Design §5 aims for about 2k tokens for the whole verb set. These 18
+	// tools are about 6.4 KiB, some 1.6k real tokens; the budget below is
+	// in Tokens' deliberately high estimate. Counted is what a model reads:
 	// names, descriptions and input schemas; annotations steer the
 	// harness's approval prompts.
 	type seen struct {
@@ -198,7 +198,7 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, budget := Tokens(b), 2100; got > budget {
+	if got, budget := Tokens(b), 2200; got > budget {
 		t.Errorf("tool schemas cost ~%d tokens (%d bytes), budget %d", got, len(b), budget)
 	}
 }
@@ -244,6 +244,7 @@ func TestSchemaRejects(t *testing.T) {
 		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "x", "priority": 9}}}},
 		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"type": "bug"}}}},
 		{"handoff", map[string]any{"id": "sf-1"}},
+		{"digest", map[string]any{"since": "7d", "extra": true}},
 	} {
 		if res := callTool(t, cs, tc.tool, tc.args); !res.IsError {
 			t.Errorf("%s %v was accepted", tc.tool, tc.args)
@@ -550,5 +551,74 @@ func TestStart(t *testing.T) {
 	}
 	if !got.Truncated || Tokens([]byte(text(t, res))) > MaxResultTokens {
 		t.Fatalf("start is %d tokens, truncated %v", Tokens([]byte(text(t, res))), got.Truncated)
+	}
+}
+
+// digest passes its filters through, turns times into stamps and spans,
+// and holds the worst case under its budget.
+func TestDigest(t *testing.T) {
+	until := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	item := func(i int, title int) proto.DigestItem {
+		return proto.DigestItem{ID: fmt.Sprintf("sf-%08d", i), Title: strings.Repeat("t", title), Priority: 2, By: "alice",
+			At: until.Add(-26 * time.Hour), Note: strings.Repeat("n", 200), From: "sf-00000000", BlockedBy: []string{"sf-1", "sf-2"}}
+	}
+	section := func(n, title int) []proto.DigestItem {
+		var out []proto.DigestItem
+		for i := range n {
+			out = append(out, item(i, title))
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		n, title  int
+		truncated bool
+	}{
+		{"small", 1, 20, false},
+		{"worst case", 10, 500, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got proto.DigestArgs
+			f := &fakeConn{reply: func(op string, args any) (any, error) {
+				a, ok := args.(proto.DigestArgs)
+				if !ok || op != proto.OpDigest {
+					return nil, fmt.Errorf("%s args %#v", op, args)
+				}
+				got = a
+				s := section(tc.n, tc.title)
+				return proto.DigestResult{Since: until.Add(-7 * 24 * time.Hour), Until: until,
+					Totals: proto.DigestTotals{Events: 99, Closed: tc.n, InProgress: tc.n},
+					Closed: s, Started: s, InProgress: s, Stalled: s, Blocked: s, HandedOff: s, Created: s, Discovered: s}, nil
+			}}
+			cs, _ := connect(t, f)
+			res := callTool(t, cs, "digest", map[string]any{"since": "7d", "by": "alice", "label": "ui"})
+			if res.IsError {
+				t.Fatal(text(t, res))
+			}
+			if got != (proto.DigestArgs{Since: "7d", By: "alice", Label: "ui"}) {
+				t.Fatalf("args %+v", got)
+			}
+			raw := text(t, res)
+			var d Digest
+			if err := json.Unmarshal([]byte(raw), &d); err != nil {
+				t.Fatal(err)
+			}
+			if Tokens([]byte(raw)) > MaxDigestTokens || d.Truncated != tc.truncated {
+				t.Fatalf("%d tokens (cap %d), truncated %v", Tokens([]byte(raw)), MaxDigestTokens, d.Truncated)
+			}
+			if d.Since != "2026-09-30T12:00Z" || d.Until != "2026-10-07T12:00Z" || d.Totals.Events != 99 || len(d.Closed) == 0 {
+				t.Fatalf("digest %+v", d)
+			}
+			if c := d.Closed[0]; c.At != "2026-10-06T10:00Z" || c.For != "" || c.By != "alice" || len(c.Title) > 100+len("…") {
+				t.Errorf("closed %+v", c)
+			}
+			if len(d.InProgress) == 0 {
+				t.Fatal("in progress dropped entirely")
+			}
+			if ip := d.InProgress[0]; ip.For != "1d2h" || ip.At != "" {
+				t.Errorf("in progress %+v", ip)
+			}
+		})
 	}
 }
