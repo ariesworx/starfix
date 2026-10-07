@@ -8,7 +8,7 @@ across sessions and machines. Agents use it through MCP; people administer it
 from the command line. It is written in Go and stores its data in
 [Dolt](https://github.com/dolthub/dolt) behind a small server.
 
-The repository also holds the design for **Bearing**, an orchestrator that runs
+The repository also holds the design for **Bearings**, an orchestrator that runs
 and supervises many agents on top of starfix.
 
 > **Status: stage 2 of 7 in progress.** Issues work end to end over SSH, bd
@@ -59,7 +59,7 @@ and supervises many agents on top of starfix.
 |---|---|---|---|
 | `starfix` | Linux, macOS, Windows | CLI for people; MCP server for agents | Built |
 | `starfixd` | Linux (Windows via WSL2) | Server daemon and sshd bridge | Built |
-| `bearing`, `bearingd` | Linux, macOS (Windows via WSL2) | Agent orchestrator | Design ([spec](docs/design/bearing.md)) |
+| `bearings`, `bearingsd` | Linux, macOS (Windows via WSL2) | Agent orchestrator | Design ([spec](docs/design/bearings.md)) |
 
 `starfixd serve` refuses to run off Linux, because only Linux lets it check
 which user connects to its socket. `--dev` overrides that on a single-user
@@ -223,8 +223,8 @@ connection, and other writes report that they may have applied.
 | 6 | Locks, gates, formulas, swarm, cross-project | |
 | 7 | Scheduled digests, GitHub sync, compaction, vectors | |
 
-Bearing's stages (B0–B5) start once starfix stage 3 lands; see the
-[Bearing spec](docs/design/bearing.md#6-plan).
+The Bearings stages (B0–B5) start once starfix stage 3 lands; see the
+[Bearings spec](docs/design/bearings.md#6-plan).
 
 ## Design documents
 
@@ -232,7 +232,7 @@ Bearing's stages (B0–B5) start once starfix stage 3 lands; see the
 |---|---|
 | [starfix.md](docs/design/starfix.md) | Principles, architecture, data model, bd parity, MCP tools, memory, coordination, offline, upgrades, developer experience, cost tracking, plan |
 | [database.md](docs/design/database.md) | Why Dolt; the Postgres fallback; vector search and embeddings |
-| [bearing.md](docs/design/bearing.md) | The Bearing orchestrator: components, defaults, plan, decisions |
+| [bearings.md](docs/design/bearings.md) | The Bearings orchestrator: components, defaults, plan, decisions |
 | [spike/dolt/RESULTS.md](spike/dolt/RESULTS.md) | Stage 0 findings on Dolt under concurrent writers |
 
 ## Development
