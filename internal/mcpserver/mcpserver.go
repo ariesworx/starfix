@@ -61,6 +61,7 @@ const Instructions = "Issue tracker shared by every agent and person on this pro
 	"it returns the issue, its last handoff and a branch name. Comment as you go. " +
 	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
 	"To stop without closing, call handoff (release lets another start it). " +
+	"For a standup or status report, call digest and write the narrative from it. " +
 	"Writes return {id, rev}; pass rev to update or close to refuse a stale edit. " +
 	"On an error, follow its fix line."
 

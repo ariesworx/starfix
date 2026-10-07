@@ -164,6 +164,13 @@ type HandoffIn struct {
 	Release bool   `json:"release,omitempty" jsonschema:"unassign so others can start it"`
 }
 
+// DigestIn selects a digest.
+type DigestIn struct {
+	Since string `json:"since,omitempty" jsonschema:"24h, 7d or a time; default 24h"`
+	By    string `json:"by,omitempty" jsonschema:"principal"`
+	Label string `json:"label,omitempty"`
+}
+
 // Outputs.
 
 // Started is the issue start took, with what working on it needs.
@@ -262,6 +269,38 @@ type History struct {
 	Omitted int     `json:"omitted,omitempty"`
 }
 
+// DigestItem is one issue in a digest section. For in progress and
+// stalled, For is how long it has been held or idle, and At is left out.
+type DigestItem struct {
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Priority  int      `json:"priority"`
+	By        string   `json:"by,omitempty"`
+	At        string   `json:"at,omitempty"`
+	For       string   `json:"for,omitempty"`
+	Note      string   `json:"note,omitempty"`
+	From      string   `json:"from,omitempty"`
+	BlockedBy []string `json:"blocked_by,omitempty"`
+}
+
+// Digest is the digest result, held under MaxDigestTokens. Totals count
+// everything; the sections list the first few.
+type Digest struct {
+	Since      string             `json:"since"`
+	Until      string             `json:"until"`
+	Totals     proto.DigestTotals `json:"totals"`
+	Closed     []DigestItem       `json:"closed,omitempty"`
+	Started    []DigestItem       `json:"started,omitempty"`
+	InProgress []DigestItem       `json:"in_progress,omitempty"`
+	Stalled    []DigestItem       `json:"stalled,omitempty"`
+	Blocked    []DigestItem       `json:"blocked,omitempty"`
+	HandedOff  []DigestItem       `json:"handed_off,omitempty"`
+	Created    []DigestItem       `json:"created,omitempty"`
+	Discovered []DigestItem       `json:"discovered,omitempty"`
+	// Truncated: items were left out to fit, or a total is a lower bound.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
 func (s *Server) register() {
 	add(s, tool{name: "prime", desc: "Start here: your in-progress issues, top ready work, notices.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
@@ -284,6 +323,9 @@ func (s *Server) register() {
 			var out proto.WriteResult
 			return out, c.Call(ctx, proto.OpHandoff, proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release}, &out)
 		})
+	add(s, tool{name: "digest", desc: "Recent work: closed, started, in progress, stalled, blocked, handed off.",
+		ann: readOnly, retry: true},
+		func(ctx context.Context, c Conn, in DigestIn) (Digest, error) { return digest(ctx, c, in) })
 	add(s, tool{name: "ready", desc: "Open issues nothing blocks, best first.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in LimitIn) (Issues, error) {
 			var r proto.ListResult
@@ -491,6 +533,54 @@ func history(ctx context.Context, c Conn, in PageIn) (History, error) {
 		out.Events, out.Omitted = out.Events[1:], out.Omitted+1
 	}
 	return out, nil
+}
+
+func digest(ctx context.Context, c Conn, in DigestIn) (Digest, error) {
+	var r proto.DigestResult
+	if err := c.Call(ctx, proto.OpDigest, proto.DigestArgs{Since: in.Since, By: in.By, Label: in.Label}, &r); err != nil {
+		return Digest{}, err
+	}
+	conv := func(items []proto.DigestItem, held bool) []DigestItem {
+		var out []DigestItem
+		for _, it := range items {
+			d := DigestItem{ID: it.ID, Priority: it.Priority, By: it.By, Note: it.Note, From: it.From, BlockedBy: it.BlockedBy}
+			d.Title, _ = cut(it.Title, primeTitleLen)
+			switch {
+			case held:
+				d.For = proto.Span(r.Until.Sub(it.At))
+			case !it.At.IsZero():
+				d.At = stamp(it.At)
+			}
+			out = append(out, d)
+		}
+		return out
+	}
+	out := Digest{Since: stamp(r.Since), Until: stamp(r.Until), Totals: r.Totals, Truncated: r.Truncated,
+		Closed: conv(r.Closed, false), Started: conv(r.Started, false), InProgress: conv(r.InProgress, true),
+		Stalled: conv(r.Stalled, true), Blocked: conv(r.Blocked, false), HandedOff: conv(r.HandedOff, false),
+		Created: conv(r.Created, false), Discovered: conv(r.Discovered, false)}
+	out.fit()
+	return out, nil
+}
+
+// fit drops the last item of the longest section until d is under
+// MaxDigestTokens, so every section keeps its first items.
+func (d *Digest) fit() {
+	sections := []*[]DigestItem{&d.Closed, &d.Started, &d.InProgress, &d.Stalled, &d.Blocked, &d.HandedOff,
+		&d.Created, &d.Discovered}
+	for size(d) > MaxDigestTokens {
+		var longest *[]DigestItem
+		for _, sec := range sections {
+			if len(*sec) > 0 && (longest == nil || len(*sec) > len(*longest)) {
+				longest = sec
+			}
+		}
+		if longest == nil {
+			return
+		}
+		*longest = (*longest)[:len(*longest)-1]
+		d.Truncated = true
+	}
 }
 
 func stamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04Z") }

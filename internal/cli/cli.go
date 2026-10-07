@@ -74,6 +74,7 @@ func init() {
 		{"start", "start [ID] [--branch | --worktree DIR]", "take an issue (the top ready one without ID) and show it", cmdStart},
 		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]...", "close your issue with a handoff note and discovered work", cmdFinish},
 		{"handoff", "handoff ID NOTE...|- [--release]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
+		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
 		{"prime", "prime [--hook]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"setup", "setup claude-code|codex|cursor|gemini|vscode [--write|--check|--remove] [--global] [--command PATH]", "set an agent up: MCP config, instruction pointer, session hook", cmdSetup},
