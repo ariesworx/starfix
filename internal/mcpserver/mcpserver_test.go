@@ -447,6 +447,58 @@ func TestReconnect(t *testing.T) {
 	}
 }
 
+// A failed call is a tool error naming the next step, whatever the
+// tool's result type: prime's is a pointer, left nil by the failure.
+func TestFailedCallsAreToolErrors(t *testing.T) {
+	refuse := func(string, any) (any, error) {
+		return nil, proto.Errf(proto.CodeBusy, "wait 3s and retry", "alice is over the write limit")
+	}
+	scenarios := []struct {
+		name  string
+		conns []*fakeConn
+		want  string
+	}{
+		{"no server", nil, "auth: 127.0.0.1:22 refused your SSH key\nfix: tell the user starfix cannot connect"},
+		{"server refuses", []*fakeConn{{reply: refuse}}, "busy: alice is over the write limit\nfix: the server is limiting your requests"},
+	}
+	calls := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"prime", nil},
+		{"inbox", nil},
+		{"start", nil},
+		{"finish", map[string]any{"id": "sf-1"}},
+		{"handoff", map[string]any{"id": "sf-1", "note": "n"}},
+		{"digest", nil},
+		{"who", nil},
+		{"ready", nil},
+		{"blocked", nil},
+		{"list", nil},
+		{"show", map[string]any{"id": "sf-1"}},
+		{"create", map[string]any{"title": "x"}},
+		{"update", map[string]any{"id": "sf-1", "title": "y"}},
+		{"close", map[string]any{"id": "sf-1"}},
+		{"reopen", map[string]any{"id": "sf-1"}},
+		{"dep", map[string]any{"action": "add", "id": "sf-1", "depends_on": "sf-2"}},
+		{"label", map[string]any{"action": "add", "id": "sf-1", "labels": []any{"x"}}},
+		{"comment", map[string]any{"id": "sf-1", "body": "hi"}},
+		{"comments", map[string]any{"id": "sf-1"}},
+		{"history", map[string]any{"id": "sf-1"}},
+	}
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			cs, _ := connect(t, sc.conns...)
+			for _, c := range calls {
+				res := callTool(t, cs, c.tool, c.args)
+				if got := text(t, res); !res.IsError || !strings.HasPrefix(got, sc.want) {
+					t.Errorf("%s = %q (error %v), want a tool error starting %q", c.tool, got, res.IsError, sc.want)
+				}
+			}
+		})
+	}
+}
+
 // A create retried after a drop carries the same idempotency key.
 func TestCreateRetryKeepsKey(t *testing.T) {
 	var idems []string

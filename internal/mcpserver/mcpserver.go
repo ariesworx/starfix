@@ -348,11 +348,6 @@ func add[In, Out any](s *Server, t tool, h func(context.Context, Conn, In) (Out,
 				out, err = h(ctx, c, in)
 				return err
 			})
-			if m, ok := any(&out).(marker); ok {
-				m.mark()
-			} else if m, ok := any(out).(marker); ok {
-				m.mark()
-			}
 			// Counted after the call: the server pushes what was committed
 			// before it answers, so this result reports it.
 			line := s.notice()
@@ -365,6 +360,13 @@ func add[In, Out any](s *Server, t tool, h func(context.Context, Conn, In) (Out,
 					res.Content = append(res.Content, &mcp.TextContent{Text: line})
 				}
 				return res, nil, nil
+			}
+			// Only a result that is returned is marked: after a failure,
+			// a pointer result such as prime's may be nil.
+			if m, ok := any(&out).(marker); ok {
+				m.mark()
+			} else if m, ok := any(out).(marker); ok {
+				m.mark()
 			}
 			if line == "" {
 				return nil, out, nil
