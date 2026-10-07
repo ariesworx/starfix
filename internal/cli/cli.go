@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/client"
+	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -68,6 +69,8 @@ func init() {
 		{"comment", "comment ID TEXT...|-", "add a comment", cmdComment},
 		{"comments", "comments ID", "list an issue's comments", cmdComments},
 		{"history", "history ID", "list an issue's changes", cmdHistory},
+		{"prime", "prime", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
+		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
 }
@@ -87,7 +90,7 @@ type runner struct {
 	env  Env
 	json bool
 	dir  string
-	conn *client.Conn
+	conn *mcpserver.RepoConn
 }
 
 // Run executes one starfix command line (without the program name) and
@@ -217,24 +220,11 @@ func (r *runner) emit(v any) {
 }
 
 // connect dials the server on first use.
-func (r *runner) connect(ctx context.Context) (*client.Conn, error) {
+func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 	if r.conn != nil {
 		return r.conn, nil
 	}
-	cfg, err := client.LoadConfig(r.dir)
-	if err != nil {
-		var pe *proto.Error
-		if errors.As(err, &pe) {
-			return nil, err
-		}
-		return nil, proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
-	}
-	host, err := r.env.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
-	}
-	c, err := client.Dial(ctx, cfg, client.Options{Version: r.env.Version, Session: client.SessionFromEnv(r.env.Getenv),
-		Machine: host, Getenv: r.env.Getenv})
+	c, err := mcpserver.DialRepo(ctx, r.dir, r.clientOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +233,16 @@ func (r *runner) connect(ctx context.Context) (*client.Conn, error) {
 	}
 	r.conn = c
 	return c, nil
+}
+
+// clientOptions describe this machine and session to the server.
+func (r *runner) clientOptions() client.Options {
+	host, err := r.env.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return client.Options{Version: r.env.Version, Session: client.SessionFromEnv(r.env.Getenv),
+		Machine: host, Getenv: r.env.Getenv}
 }
 
 // call runs one operation.
