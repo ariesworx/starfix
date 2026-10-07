@@ -32,6 +32,8 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Getenv         func(string) string
 	Hostname       func() (string, error)
+	// UserHomeDir is used only by `setup --global`. Default os.UserHomeDir.
+	UserHomeDir func() (string, error)
 	// Version is this binary's build version.
 	Version string
 }
@@ -71,6 +73,7 @@ func init() {
 		{"history", "history ID", "list an issue's changes", cmdHistory},
 		{"prime", "prime", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
+		{"setup", "setup claude-code|codex|gemini [--write|--check|--remove] [--global] [--command PATH]", "register starfix mcp with an agent", cmdSetup},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
 }
@@ -101,6 +104,9 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.Hostname == nil {
 		env.Hostname = os.Hostname
+	}
+	if env.UserHomeDir == nil {
+		env.UserHomeDir = os.UserHomeDir
 	}
 	if env.Stdin == nil {
 		env.Stdin = strings.NewReader("")
