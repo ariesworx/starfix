@@ -465,7 +465,7 @@ func (r *runner) setupRoot(global bool) (string, error) {
 		if _, ok := errors.AsType[*proto.Error](err); ok {
 			return "", err
 		}
-		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
+		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see docs/cli.md, Connect a repository", err.Error())
 	}
 	// The agent can be set up regardless, but it will not connect.
 	if pe, ok := errors.AsType[*proto.Error](cfg.CheckTransport()); ok {

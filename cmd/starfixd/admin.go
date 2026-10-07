@@ -85,7 +85,7 @@ func devFlags(fs *flag.FlagSet, dev, unsafe *bool) {
 // unsafe Dolt account is for a developer's own machine only.
 func checkDev(dev, unsafe bool) error {
 	if unsafe && !dev {
-		return usageError("--allow-unsafe-dolt is for development only and needs --dev; on a server, give starfixd a least-privileged Dolt account (README, quick start)")
+		return usageError("--allow-unsafe-dolt is for development only and needs --dev; on a server, give starfixd a least-privileged Dolt account (docs/server.md, steps 2 and 4)")
 	}
 	return nil
 }

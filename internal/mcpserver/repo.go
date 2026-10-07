@@ -28,7 +28,7 @@ func DialRepo(ctx context.Context, dir string, opts client.Options) (*RepoConn, 
 		if _, ok := errors.AsType[*proto.Error](err); ok {
 			return nil, err
 		}
-		return nil, proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
+		return nil, proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see docs/cli.md, Connect a repository", err.Error())
 	}
 	c, err := client.Dial(ctx, cfg, opts)
 	if err != nil {

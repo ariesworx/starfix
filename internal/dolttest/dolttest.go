@@ -44,7 +44,7 @@ func required() bool {
 // Server is a running dolt sql-server on a loopback port. Connections go
 // through its unix socket, which only this server can have created.
 //
-// It is configured the way the README's quick start locks Dolt down:
+// It is configured the way docs/server.md locks a server's Dolt down:
 // secure_file_priv names a directory that does not exist, and NewDatabase
 // hands out the DSN of User, an account with rights on that database
 // only, never root's, so the tests run through the same account check

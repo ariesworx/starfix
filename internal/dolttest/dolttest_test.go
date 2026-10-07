@@ -111,8 +111,8 @@ func TestStartPortTaken(t *testing.T) {
 	}
 }
 
-// TestLockedDown checks that the test server is configured as the README's
-// quick start says a production one must be: NewDatabase's DSN logs in as
+// TestLockedDown checks that the test server is configured as
+// docs/server.md says a production one must be: NewDatabase's DSN logs in as
 // User, not root, and secure_file_priv names a directory.
 func TestLockedDown(t *testing.T) {
 	s := startOrSkip(t)
