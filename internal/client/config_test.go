@@ -2,8 +2,10 @@ package client
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -99,5 +101,113 @@ func TestKeyPath(t *testing.T) {
 		if got, err := c.KeyPath(); err != nil || got != tc.want {
 			t.Errorf("KeyPath(%q) = %q, %v; want %q", tc.key, got, err, tc.want)
 		}
+	}
+}
+
+// Discovery stops at the repository's top level and at the home
+// directory, so a config planted in a shared parent (/tmp, a drive root)
+// cannot capture a checkout without one (C-6).
+func TestLoadConfigBoundary(t *testing.T) {
+	body := "project: " + testProject + "\nserver:\n  host: starfix.example.com\n  host_key: " + testFpr + "\n"
+	tests := []struct {
+		name string
+		// dirs are made, files written with body (or as named, mode
+		// 0600), relative to a temp top; run is where LoadConfig starts.
+		dirs, configs []string
+		gitFile       string // a .git file, as a worktree or submodule has
+		run, root     string // root "" means not found
+	}{
+		{name: "in the repository", dirs: []string{"repo/.git", "repo/a"}, configs: []string{"repo"}, run: "repo/a", root: "repo"},
+		{name: "not above the repository", dirs: []string{"repo/.git", "repo/a"}, configs: []string{"."}, run: "repo/a"},
+		{name: "not above a worktree's .git file", dirs: []string{"wt/a"}, gitFile: "wt", configs: []string{"."}, run: "wt/a"},
+		{name: "a nested repository is its own", dirs: []string{"outer/.git", "outer/inner/.git"}, configs: []string{"outer"}, run: "outer/inner"},
+		{name: "up to home", dirs: []string{"home/proj/a"}, configs: []string{"home"}, run: "home/proj/a", root: "home"},
+		{name: "not above home", dirs: []string{"home/proj"}, configs: []string{"."}, run: "home/proj"},
+		{name: "outside home, up to the root", dirs: []string{"srv/proj/a"}, configs: []string{"srv"}, run: "srv/proj/a", root: "srv"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			top := t.TempDir()
+			for _, d := range tc.dirs {
+				if err := os.MkdirAll(filepath.Join(top, d), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.gitFile != "" {
+				if err := os.WriteFile(filepath.Join(top, tc.gitFile, ".git"), []byte("gitdir: /elsewhere\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, c := range tc.configs {
+				if err := os.WriteFile(filepath.Join(top, c, ConfigFile), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c, err := loadConfig(filepath.Join(top, tc.run), filepath.Join(top, "home"))
+			if tc.root == "" {
+				if !errors.Is(err, ErrNoConfig) {
+					t.Fatalf("loadConfig(%s) = %+v, %v; want not found", tc.run, c, err)
+				}
+				return
+			}
+			if err != nil || c.Root != filepath.Join(top, tc.root) {
+				t.Fatalf("loadConfig(%s) = %+v, %v; want root %s", tc.run, c, err, tc.root)
+			}
+		})
+	}
+}
+
+// A config another user could have written is refused, with a fix.
+func TestLoadConfigRefusesOthersFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix owner or mode bits; see LoadConfig")
+	}
+	body := "project: " + testProject + "\nserver:\n  host: starfix.example.com\n  host_key: " + testFpr + "\n"
+	tests := []struct {
+		name  string
+		mode  fs.FileMode
+		owner int // -1: ours
+		want  string
+		dir   bool
+	}{
+		{name: "group writable", mode: 0o664, owner: -1, want: "writable by other users"},
+		{name: "world writable", mode: 0o646, owner: -1, want: "writable by other users"},
+		{name: "another user's", mode: 0o644, owner: 65534, want: "owned by another user"},
+		{name: "not a file", owner: -1, dir: true, want: "not a regular file"},
+		{name: "ours, read-only to others", mode: 0o644, owner: -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, ConfigFile)
+			if tc.dir {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, tc.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.owner >= 0 {
+				if err := os.Chown(path, tc.owner, tc.owner); err != nil {
+					t.Skipf("cannot give the file to another user here: %v", err)
+				}
+			}
+			_, err := loadConfig(root, "")
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("loadConfig = %v", err)
+				}
+				return
+			}
+			var pe *proto.Error
+			if !errors.As(err, &pe) || !strings.Contains(err.Error(), tc.want) || pe.Fix == "" || errors.Is(err, ErrNoConfig) {
+				t.Fatalf("loadConfig = %v; want a refusal saying %q, with a fix", err, tc.want)
+			}
+		})
 	}
 }

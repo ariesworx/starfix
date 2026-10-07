@@ -19,9 +19,11 @@ import (
 // session's source exactly, so it gets one group per source. Cursor and
 // VS Code put the hook straight in the event's list (hookStyle.flat).
 //
-// A hook is starfix's when its command runs prime --hook, with or without
-// =AGENT, through sfx or through the program setup was given; other hooks
-// are left alone.
+// A hook is starfix's when its whole command is one that setup writes:
+// a single program word, bare or single-quoted as shellQuote writes it,
+// naming sfx or the program setup was given, then prime --hook with or
+// without =AGENT. Any other hook, a person's compound command that ends
+// in `sfx prime --hook` included, is left alone.
 
 // hookStyle is how one harness writes its SessionStart hook.
 type hookStyle struct {
@@ -58,8 +60,9 @@ var (
 
 var (
 	shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
-	// hookCmd splits a prime hook's command into its program and harness.
-	hookCmd = regexp.MustCompile(`^(.+) prime --hook(?:=[a-z][a-z-]*)?$`)
+	// hookCmd splits a prime hook's command into its program, one word
+	// as shellQuote writes it, and the rest.
+	hookCmd = regexp.MustCompile(`^([A-Za-z0-9_./:@%+=,-]+|'(?:[^']|'\\'')*') prime --hook(?:=[a-z][a-z-]*)?$`)
 )
 
 // shellQuote quotes s for the POSIX shell the harness runs hooks with.
@@ -103,7 +106,9 @@ func Hooks() []string {
 
 // program is a command's program name, without directory, quotes or .exe.
 func program(cmd string) string {
-	cmd = strings.Trim(cmd, `'"`)
+	if len(cmd) >= 2 && cmd[0] == '\'' {
+		cmd = strings.ReplaceAll(cmd[1:len(cmd)-1], `'\''`, "'")
+	}
 	if i := strings.LastIndexAny(cmd, `/\`); i >= 0 {
 		cmd = cmd[i+1:]
 	}

@@ -2,226 +2,633 @@ package agentsetup
 
 import (
 	"errors"
-	"regexp"
+	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Codex's config is TOML. Rather than take a TOML library for one table,
-// these edit the text: the [mcp_servers.starfix] table's command and args
-// lines are replaced or added, as is the HarnessEnv line of its
-// [mcp_servers.starfix.env] table, and everything else, comments
-// included, is left as it was.
+// setup scans the file's structure: table headers and key/value pairs,
+// with every kind of string, multi-line arrays, inline tables and
+// comments, so that a header inside a string or a bracket inside an
+// array is never mistaken for structure. It does not check values
+// beyond that. The starfix entry ([mcp_servers.starfix], its env table
+// and any other subtable) is replaced wholesale, at the place of the
+// first of them; everything else, comments included, is left as it was.
+// A file the scanner cannot read, or one that defines starfix in a form
+// it does not edit (an inline table, dotted keys), is refused, and setup
+// prints the snippet to add by hand.
 
-var (
-	headerRE  = regexp.MustCompile(`^\s*\[`)
-	ourHeader = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*("starfix"|'starfix'|starfix)\s*\]\s*(#.*)?$`)
-	ourSub    = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*("starfix"|'starfix'|starfix)\s*\.`)
-	keyRE     = regexp.MustCompile(`^\s*(command|args)\s*=`)
-	envHeader = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*("starfix"|'starfix'|starfix)\s*\.\s*("env"|'env'|env)\s*\]\s*(#.*)?$`)
-	envKeyRE  = regexp.MustCompile(`^\s*env\s*=`)
-	harnessRE = regexp.MustCompile(`^\s*("` + HarnessEnv + `"|'` + HarnessEnv + `'|` + HarnessEnv + `)\s*=`)
+// tomlItem is one statement of a TOML file: a table header, a key/value
+// pair (possibly over several lines), or a blank or comment line.
+type tomlItem struct {
+	kind       tomlKind
+	start, end int      // byte offsets; end is past the line's newline
+	path       []string // a header's table, or a pair's full key
+	array      bool     // a [[header]]
+}
+
+type tomlKind int
+
+const (
+	tomlBlank  tomlKind = iota // empty or whitespace only
+	tomlNote                   // a comment line
+	tomlHeader                 // [table] or [[array]]
+	tomlPair                   // key = value
 )
 
-// errInlineEnv: the starfix table has env as an inline table, which a
-// [mcp_servers.starfix.env] table may not sit beside.
-var errInlineEnv = errors.New("[mcp_servers.starfix] sets env inline; move it to a [mcp_servers.starfix.env] table and run setup again")
+// tomlScanner reads a document's statements.
+type tomlScanner struct {
+	s   string
+	pos int
+}
+
+func (sc *tomlScanner) errf(format string, a ...any) error {
+	line := 1 + strings.Count(sc.s[:min(sc.pos, len(sc.s))], "\n")
+	return fmt.Errorf("TOML line %d: %s", line, fmt.Sprintf(format, a...))
+}
+
+func (sc *tomlScanner) peek(n int) string {
+	if sc.pos+n > len(sc.s) {
+		return sc.s[sc.pos:]
+	}
+	return sc.s[sc.pos : sc.pos+n]
+}
+
+func (sc *tomlScanner) eof() bool { return sc.pos >= len(sc.s) }
+
+func (sc *tomlScanner) skipSpace() {
+	for !sc.eof() && (sc.s[sc.pos] == ' ' || sc.s[sc.pos] == '\t') {
+		sc.pos++
+	}
+}
+
+// eol consumes a newline (LF or CRLF), reporting whether there was one.
+func (sc *tomlScanner) eol() bool {
+	switch {
+	case sc.peek(1) == "\n":
+		sc.pos++
+	case sc.peek(2) == "\r\n":
+		sc.pos += 2
+	default:
+		return false
+	}
+	return true
+}
+
+// comment consumes a comment to the end of its line, newline excluded.
+func (sc *tomlScanner) comment() error {
+	for !sc.eof() && sc.s[sc.pos] != '\n' {
+		c := sc.s[sc.pos]
+		if c == '\r' && sc.peek(2) == "\r\n" {
+			return nil
+		}
+		if c < 0x20 && c != '\t' || c == 0x7f {
+			return sc.errf("control character in a comment")
+		}
+		sc.pos++
+	}
+	return nil
+}
+
+// endLine consumes optional space and comment, then a newline or the
+// end of the document.
+func (sc *tomlScanner) endLine() error {
+	sc.skipSpace()
+	if sc.peek(1) == "#" {
+		if err := sc.comment(); err != nil {
+			return err
+		}
+	}
+	if sc.eof() || sc.eol() {
+		return nil
+	}
+	return sc.errf("unexpected %q", sc.peek(1))
+}
+
+// gap skips space, newlines and comments inside an array or inline
+// table.
+func (sc *tomlScanner) gap() error {
+	for {
+		sc.skipSpace()
+		switch {
+		case sc.peek(1) == "#":
+			if err := sc.comment(); err != nil {
+				return err
+			}
+		case sc.eol():
+		default:
+			return nil
+		}
+	}
+}
+
+func bareKeyByte(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+}
+
+// key reads a dotted key.
+func (sc *tomlScanner) key() ([]string, error) {
+	var path []string
+	for {
+		sc.skipSpace()
+		var part string
+		switch c := sc.peek(1); {
+		case c == `"`:
+			if sc.peek(3) == `"""` {
+				return nil, sc.errf("a multi-line string cannot be a key")
+			}
+			raw, err := sc.basic()
+			if err != nil {
+				return nil, err
+			}
+			if part, err = unquoteBasic(raw); err != nil {
+				return nil, sc.errf("key %s: %v", raw, err)
+			}
+		case c == "'":
+			if sc.peek(3) == "'''" {
+				return nil, sc.errf("a multi-line string cannot be a key")
+			}
+			raw, err := sc.literal()
+			if err != nil {
+				return nil, err
+			}
+			part = raw[1 : len(raw)-1]
+		case c != "" && bareKeyByte(c[0]):
+			start := sc.pos
+			for !sc.eof() && bareKeyByte(sc.s[sc.pos]) {
+				sc.pos++
+			}
+			part = sc.s[start:sc.pos]
+		default:
+			return nil, sc.errf("expected a key, found %q", c)
+		}
+		path = append(path, part)
+		sc.skipSpace()
+		if sc.peek(1) != "." {
+			return path, nil
+		}
+		sc.pos++
+	}
+}
+
+// basic reads a one-line basic string, quotes included.
+func (sc *tomlScanner) basic() (string, error) {
+	start := sc.pos
+	sc.pos++
+	for !sc.eof() {
+		switch sc.s[sc.pos] {
+		case '"':
+			sc.pos++
+			return sc.s[start:sc.pos], nil
+		case '\\':
+			sc.pos += 2
+		case '\n', '\r':
+			return "", sc.errf("newline in a string")
+		default:
+			sc.pos++
+		}
+	}
+	return "", sc.errf("unterminated string")
+}
+
+// literal reads a one-line literal string, quotes included.
+func (sc *tomlScanner) literal() (string, error) {
+	start := sc.pos
+	end := strings.IndexAny(sc.s[sc.pos+1:], "'\n")
+	if end < 0 || sc.s[sc.pos+1+end] != '\'' {
+		return "", sc.errf("unterminated string")
+	}
+	sc.pos += end + 2
+	return sc.s[start:sc.pos], nil
+}
+
+// multiline reads a multi-line string whose delimiter is q (""" or ”').
+// Up to two more quote characters may end its content.
+func (sc *tomlScanner) multiline(q string) error {
+	sc.pos += 3
+	for !sc.eof() {
+		if q == `"""` && sc.s[sc.pos] == '\\' {
+			sc.pos += 2
+			continue
+		}
+		if sc.peek(3) == q {
+			sc.pos += 3
+			for i := 0; i < 2 && sc.peek(1) == q[:1]; i++ {
+				sc.pos++
+			}
+			return nil
+		}
+		sc.pos++
+	}
+	return sc.errf("unterminated multi-line string")
+}
+
+// value reads one value: a string, an array, an inline table or a
+// scalar (number, boolean, date or time).
+func (sc *tomlScanner) value() error {
+	switch c := sc.peek(1); c {
+	case `"`:
+		if sc.peek(3) == `"""` {
+			return sc.multiline(`"""`)
+		}
+		_, err := sc.basic()
+		return err
+	case "'":
+		if sc.peek(3) == "'''" {
+			return sc.multiline("'''")
+		}
+		_, err := sc.literal()
+		return err
+	case "[":
+		sc.pos++
+		for {
+			if err := sc.gap(); err != nil {
+				return err
+			}
+			if sc.peek(1) == "]" {
+				sc.pos++
+				return nil
+			}
+			if err := sc.value(); err != nil {
+				return err
+			}
+			if err := sc.gap(); err != nil {
+				return err
+			}
+			switch sc.peek(1) {
+			case ",":
+				sc.pos++
+			case "]":
+				sc.pos++
+				return nil
+			default:
+				return sc.errf("expected , or ] in an array, found %q", sc.peek(1))
+			}
+		}
+	case "{":
+		sc.pos++
+		for {
+			if err := sc.gap(); err != nil {
+				return err
+			}
+			if sc.peek(1) == "}" {
+				sc.pos++
+				return nil
+			}
+			if _, err := sc.key(); err != nil {
+				return err
+			}
+			if sc.peek(1) != "=" {
+				return sc.errf("expected = in an inline table")
+			}
+			sc.pos++
+			sc.skipSpace()
+			if err := sc.value(); err != nil {
+				return err
+			}
+			if err := sc.gap(); err != nil {
+				return err
+			}
+			switch sc.peek(1) {
+			case ",":
+				sc.pos++
+			case "}":
+				sc.pos++
+				return nil
+			default:
+				return sc.errf("expected , or } in an inline table, found %q", sc.peek(1))
+			}
+		}
+	}
+	start := sc.pos
+	for !sc.eof() && !strings.ContainsRune(" \t\r\n,]}#", rune(sc.s[sc.pos])) {
+		sc.pos++
+	}
+	if sc.pos == start {
+		return sc.errf("expected a value, found %q", sc.peek(1))
+	}
+	// A date and a time may be separated by a space.
+	if isDate(sc.s[start:sc.pos]) && sc.peek(1) == " " && len(sc.peek(4)) == 4 && isDigit(sc.peek(4)[1]) {
+		sc.pos++
+		for !sc.eof() && !strings.ContainsRune(" \t\r\n,]}#", rune(sc.s[sc.pos])) {
+			sc.pos++
+		}
+	}
+	return nil
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isDate(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	for _, i := range []int{0, 1, 2, 3, 5, 6, 8, 9} {
+		if !isDigit(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// scanTOML splits a document into its statements.
+func scanTOML(content []byte) ([]tomlItem, error) {
+	if !utf8.Valid(content) {
+		return nil, errors.New("TOML: not UTF-8")
+	}
+	sc := &tomlScanner{s: string(content)}
+	var items []tomlItem
+	var table []string
+	for !sc.eof() {
+		it := tomlItem{start: sc.pos}
+		sc.skipSpace()
+		switch sc.peek(1) {
+		case "", "\n", "\r":
+			if err := sc.endLine(); err != nil {
+				return nil, err
+			}
+			it.kind = tomlBlank
+		case "#":
+			if err := sc.endLine(); err != nil {
+				return nil, err
+			}
+			it.kind = tomlNote
+		case "[":
+			sc.pos++
+			it.kind, it.array = tomlHeader, sc.peek(1) == "["
+			if it.array {
+				sc.pos++
+			}
+			path, err := sc.key()
+			if err != nil {
+				return nil, err
+			}
+			closing := "]"
+			if it.array {
+				closing = "]]"
+			}
+			if sc.peek(len(closing)) != closing {
+				return nil, sc.errf("unterminated table header")
+			}
+			sc.pos += len(closing)
+			if err := sc.endLine(); err != nil {
+				return nil, err
+			}
+			it.path, table = path, path
+		default:
+			key, err := sc.key()
+			if err != nil {
+				return nil, err
+			}
+			if sc.peek(1) != "=" {
+				return nil, sc.errf("expected = after a key")
+			}
+			sc.pos++
+			sc.skipSpace()
+			if err := sc.value(); err != nil {
+				return nil, err
+			}
+			if err := sc.endLine(); err != nil {
+				return nil, err
+			}
+			it.kind, it.path = tomlPair, append(append([]string{}, table...), key...)
+		}
+		it.end = sc.pos
+		items = append(items, it)
+	}
+	return items, nil
+}
+
+// unquoteBasic decodes a basic string, quotes included.
+func unquoteBasic(raw string) (string, error) {
+	s := raw[1 : len(raw)-1]
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 >= len(s) {
+			return "", errors.New("bad escape")
+		}
+		i++
+		switch s[i] {
+		case 'b':
+			b.WriteByte('\b')
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'f':
+			b.WriteByte('\f')
+		case 'r':
+			b.WriteByte('\r')
+		case 'e':
+			b.WriteByte(0x1b)
+		case '"':
+			b.WriteByte('"')
+		case '\\':
+			b.WriteByte('\\')
+		case 'x', 'u', 'U':
+			n := map[byte]int{'x': 2, 'u': 4, 'U': 8}[s[i]]
+			if i+1+n > len(s) {
+				return "", errors.New("bad escape")
+			}
+			r, err := strconv.ParseInt(s[i+1:i+1+n], 16, 32)
+			if err != nil || !utf8.ValidRune(rune(r)) { //nolint:gosec // 32 bits parsed, so it fits a rune
+				return "", errors.New("bad escape")
+			}
+			b.WriteRune(rune(r)) //nolint:gosec // as above
+			i += n
+		default:
+			return "", fmt.Errorf("bad escape \\%c", s[i])
+		}
+	}
+	return b.String(), nil
+}
+
+// tomlString quotes s as a TOML basic string, with only TOML's escapes.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
 
 func harnessLine(harness string) string { return HarnessEnv + " = " + tomlString(harness) }
 
-// tomlString quotes s as a TOML basic string. Go's quoting agrees with
-// TOML's for every printable string, which commands and arguments are.
-func tomlString(s string) string { return strconv.Quote(s) }
-
-func tomlLines(e Entry) (command, args string) {
+func tomlTable(e Entry, harness string) []string {
 	quoted := make([]string, len(e.Args))
 	for i, a := range e.Args {
 		quoted[i] = tomlString(a)
 	}
-	return "command = " + tomlString(e.Command), "args = [" + strings.Join(quoted, ", ") + "]"
-}
-
-func tomlTable(e Entry, harness string) []string {
-	c, a := tomlLines(e)
-	return []string{"[mcp_servers." + ServerName + "]", c, a, "",
+	return []string{"[mcp_servers." + ServerName + "]", "command = " + tomlString(e.Command),
+		"args = [" + strings.Join(quoted, ", ") + "]", "",
 		"[mcp_servers." + ServerName + ".env]", harnessLine(harness)}
 }
 
-// tomlEnvSection finds the starfix env table, as tomlSection does.
-func tomlEnvSection(lines []string) (start, end int, ok bool) {
-	for i, l := range lines {
-		if !envHeader.MatchString(l) {
-			continue
-		}
-		end = i + 1
-		for end < len(lines) && !headerRE.MatchString(lines[end]) {
-			end++
-		}
-		return i, end, true
-	}
-	return 0, 0, false
+// starfixPath reports whether a table or key path is inside the starfix
+// entry.
+func starfixPath(p []string) bool {
+	return len(p) >= 2 && p[0] == "mcp_servers" && p[1] == ServerName
 }
 
-// applyTOMLEnv sets HarnessEnv in the starfix env table, adding the table
-// after the starfix table when there is none.
-func applyTOMLEnv(lines []string, harness string) ([]string, error) {
-	want := harnessLine(harness)
-	if start, end, ok := tomlEnvSection(lines); ok {
-		section := []string{lines[start]}
-		found := false
-		for _, l := range lines[start+1 : end] {
-			if harnessRE.MatchString(l) {
-				if !found {
-					section = append(section, want)
-				}
-				found = true // a duplicate is dropped
-				continue
-			}
-			section = append(section, l)
-		}
-		if !found {
-			section = append(section[:1], append([]string{want}, section[1:]...)...)
-		}
-		return append(append(append([]string{}, lines[:start]...), section...), lines[end:]...), nil
-	}
-	start, end, _ := tomlSection(lines)
-	for _, l := range lines[start+1 : end] {
-		if envKeyRE.MatchString(l) {
-			return nil, errInlineEnv
-		}
-	}
-	at := end
-	for at > start+1 && strings.TrimSpace(lines[at-1]) == "" {
-		at--
-	}
-	table := []string{"", "[mcp_servers." + ServerName + ".env]", want}
-	return append(append(append([]string{}, lines[:at]...), table...), lines[at:]...), nil
-}
+// tomlSpan is a byte range of the document.
+type tomlSpan struct{ start, end int }
 
-// tomlSection finds the starfix table: its header line and the line after
-// its last key (the next header, or the end).
-func tomlSection(lines []string) (start, end int, ok bool) {
-	for i, l := range lines {
-		if !ourHeader.MatchString(l) {
-			continue
-		}
-		end = i + 1
-		for end < len(lines) && !headerRE.MatchString(lines[end]) {
-			end++
-		}
-		return i, end, true
-	}
-	return 0, 0, false
-}
-
-// splitLines splits content into lines without the final newline's empty
-// tail.
-func splitLines(content []byte) []string {
-	s := strings.TrimSuffix(string(content), "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
-}
-
-func joinLines(lines []string) []byte {
-	if len(lines) == 0 {
-		return nil
-	}
-	return []byte(strings.Join(lines, "\n") + "\n")
-}
-
-func applyTOML(content []byte, e Entry, harness string) ([]byte, error) {
-	lines := splitLines(content)
-	start, end, ok := tomlSection(lines)
-	if !ok {
-		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
-			lines = append(lines, "")
-		}
-		return joinLines(append(lines, tomlTable(e, harness)...)), nil
-	}
-	c, a := tomlLines(e)
-	want := map[string]string{"command": c, "args": a}
-	section := []string{lines[start]}
-	inArray := false // inside a multi-line value being replaced
-	for _, l := range lines[start+1 : end] {
-		if inArray {
-			inArray = !strings.Contains(l, "]")
-			continue
-		}
-		if m := keyRE.FindStringSubmatch(l); m != nil {
-			v := l[strings.Index(l, "=")+1:]
-			inArray = strings.Contains(v, "[") && !strings.Contains(v, "]")
-			if w, pending := want[m[1]]; pending {
-				section = append(section, w)
-				delete(want, m[1])
-			}
-			continue // replaced above, or a duplicate dropped
-		}
-		section = append(section, l)
-	}
-	// Keys the table lacked go straight after the header.
-	var missing []string
-	for _, k := range []string{"command", "args"} {
-		if w, ok := want[k]; ok {
-			missing = append(missing, w)
-		}
-	}
-	section = append(section[:1], append(missing, section[1:]...)...)
-	out := append(append(append([]string{}, lines[:start]...), section...), lines[end:]...)
-	out, err := applyTOMLEnv(out, harness)
+// tomlEntry finds the starfix entry's tables: for each, from its header
+// to its last key/value pair, with any blank lines after it, so that
+// removing the spans leaves no gap. It refuses a starfix entry, or a
+// servers table, defined in a form it does not edit.
+func tomlEntry(content []byte) ([]tomlSpan, error) {
+	items, err := scanTOML(content)
 	if err != nil {
 		return nil, err
 	}
-	return joinLines(out), nil
-}
-
-func removeTOML(content []byte) []byte {
-	lines := splitLines(content)
-	var out []string
-	skip := false
-	for _, l := range lines {
-		if headerRE.MatchString(l) {
-			skip = ourHeader.MatchString(l) || ourSub.MatchString(l)
-		}
-		if !skip {
-			out = append(out, l)
+	var spans []tomlSpan
+	inEntry, seen := false, false
+	for i, it := range items {
+		switch it.kind {
+		case tomlHeader:
+			if len(it.path) == 1 && it.path[0] == "mcp_servers" && it.array {
+				return nil, errors.New("mcp_servers is an array of tables; setup edits only [mcp_servers.starfix] tables")
+			}
+			inEntry = starfixPath(it.path)
+			if !inEntry {
+				continue
+			}
+			if len(it.path) == 2 {
+				if seen {
+					return nil, errors.New("[mcp_servers.starfix] is defined twice")
+				}
+				seen = true
+			}
+			end := it.end
+			for _, next := range items[i+1:] {
+				if next.kind == tomlHeader {
+					break
+				}
+				if next.kind == tomlPair {
+					end = next.end
+				}
+			}
+			for _, next := range items[i+1:] {
+				if next.start == end && next.kind == tomlBlank {
+					end = next.end
+				}
+			}
+			spans = append(spans, tomlSpan{it.start, end})
+		case tomlPair:
+			if inEntry {
+				continue
+			}
+			if len(it.path) == 1 && it.path[0] == "mcp_servers" {
+				return nil, errors.New("mcp_servers is an inline table; make it [mcp_servers.NAME] tables and run setup again")
+			}
+			if starfixPath(it.path) {
+				return nil, errors.New("starfix is defined with dotted keys or an inline table; make it a [mcp_servers.starfix] table and run setup again")
+			}
 		}
 	}
-	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
-		out = out[:len(out)-1]
-	}
-	return joinLines(out)
+	return spans, nil
 }
 
+// cut removes the spans from content and returns the rest, and where the
+// first span began (-1 when there was none).
+func cut(content []byte, spans []tomlSpan) (rest []byte, at int) {
+	at = -1
+	prev := 0
+	for _, s := range spans {
+		if at < 0 {
+			at = s.start
+		}
+		rest = append(rest, content[prev:s.start]...)
+		prev = s.end
+	}
+	return append(rest, content[prev:]...), at
+}
+
+func applyTOML(content []byte, e Entry, harness string) ([]byte, error) {
+	spans, err := tomlEntry(content)
+	if err != nil {
+		return nil, err
+	}
+	block := strings.Join(tomlTable(e, harness), "\n") + "\n"
+	rest, at := cut(content, spans)
+	if at < 0 {
+		// A new entry goes at the end, after a blank line.
+		s := string(rest)
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		if t := strings.TrimRight(s, "\r\n \t"); t != "" {
+			s = t + "\n\n"
+		} else {
+			s = ""
+		}
+		return []byte(s + block), nil
+	}
+	// The entry replaces the first of its tables, with a blank line
+	// before whatever follows; the file ends in one newline.
+	after := strings.TrimRight(string(rest[at:]), "\r\n \t")
+	if after != "" {
+		block += "\n"
+		after += "\n"
+	}
+	return []byte(string(rest[:at]) + block + after), nil
+}
+
+// removeTOML takes the starfix entry out, with the blank lines at the
+// end of the file.
+func removeTOML(content []byte) ([]byte, bool, error) {
+	spans, err := tomlEntry(content)
+	if err != nil || len(spans) == 0 {
+		return content, false, err
+	}
+	rest, _ := cut(content, spans)
+	s := strings.TrimRight(string(rest), "\r\n \t")
+	if s == "" {
+		return nil, true, nil
+	}
+	return []byte(s + "\n"), true, nil
+}
+
+// tomlRegistered reports whether content holds exactly the entry setup
+// writes, in place: applying it again would change nothing.
 func tomlRegistered(content []byte, e Entry, harness string) bool {
-	lines := splitLines(content)
-	start, end, ok := tomlSection(lines)
-	if !ok {
-		return false
-	}
-	c, a := tomlLines(e)
-	var gotC, gotA bool
-	for _, l := range lines[start+1 : end] {
-		switch strings.TrimSpace(l) {
-		case c:
-			gotC = true
-		case a:
-			gotA = true
-		}
-	}
-	if !gotC || !gotA {
-		return false
-	}
-	start, end, ok = tomlEnvSection(lines)
-	if !ok {
-		return false
-	}
-	want := harnessLine(harness)
-	for _, l := range lines[start+1 : end] {
-		if strings.TrimSpace(l) == want {
-			return true
-		}
-	}
-	return false
+	out, err := applyTOML(content, e, harness)
+	return err == nil && string(out) == string(content)
+}
+
+// tomlHas reports whether content has a starfix entry.
+func tomlHas(content []byte) bool {
+	spans, err := tomlEntry(content)
+	return err == nil && len(spans) > 0
 }

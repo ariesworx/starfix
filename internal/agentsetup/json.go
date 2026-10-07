@@ -31,12 +31,20 @@ func parseObject(b []byte) (object, error) {
 		return nil, errors.New("not a JSON object")
 	}
 	var o object
+	seen := map[string]bool{}
 	for dec.More() {
 		tok, err := dec.Token()
 		if err != nil {
 			return nil, fmt.Errorf("not JSON: %w", err)
 		}
 		key, _ := tok.(string)
+		if seen[key] {
+			// Harnesses read JSON as JavaScript's JSON.parse does, which
+			// keeps the last copy: editing the first would leave the
+			// harness running the other.
+			return nil, fmt.Errorf("duplicate key %q; keep one and run setup again", key)
+		}
+		seen[key] = true
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
 			return nil, fmt.Errorf("not JSON: %w", err)
@@ -116,7 +124,7 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// owned are the entry keys starfix writes, in order; other keys are left.
+// owned are the entry keys starfix writes, in order, env aside.
 func owned(f format, e Entry) object {
 	o := object{}
 	if f == jsonClaude || f == jsonVSCode {
@@ -146,41 +154,32 @@ func applyJSON(content []byte, f format, e Entry, harness string) ([]byte, error
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 	}
-	name := e.server()
-	entry := object{}
-	if raw, ok := servers.get(name); ok {
-		if entry, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", key, name, err)
-		}
-	}
-	for _, m := range owned(f, e) {
-		entry = entry.set(m.key, m.val)
-	}
-	env := object{}
-	if raw, ok := entry.get("env"); ok {
-		if env, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("%s.%s.env: %w", key, name, err)
-		}
-	}
-	entry = entry.set("env", env.set(HarnessEnv, mustJSON(harness)).marshal())
-	servers = servers.set(name, entry.marshal())
+	// The entry is replaced wholesale, in its place among the servers.
+	entry := owned(f, e).set("env", object{}.set(HarnessEnv, mustJSON(harness)).marshal())
+	servers = servers.set(e.server(), entry.marshal())
 	root = root.set(key, servers.marshal())
 	return indent(root.marshal())
 }
 
-func removeJSON(content []byte, f format, name string) ([]byte, error) {
+// removeJSON takes out the named server; found is false when there is
+// none.
+func removeJSON(content []byte, f format, name string) (out []byte, found bool, err error) {
 	root, err := parseObject(content)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	key := serversKey(f)
 	raw, _ := root.get(key)
 	servers, err := parseObject(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
+		return nil, false, fmt.Errorf("%s: %w", key, err)
+	}
+	if _, ok := servers.get(name); !ok {
+		return content, false, nil
 	}
 	root = root.set(key, servers.del(name).marshal())
-	return indent(root.marshal())
+	out, err = indent(root.marshal())
+	return out, err == nil, err
 }
 
 // jsonEntry returns the named server's entry, if content has one.
@@ -205,20 +204,36 @@ func jsonEntry(content []byte, f format, name string) (object, bool) {
 	return entry, err == nil
 }
 
+// jsonRegistered reports whether the entry is exactly the one setup
+// writes, in any key order: no key, and no env variable, besides.
 func jsonRegistered(content []byte, f format, e Entry, harness string) bool {
-	entry, ok := jsonEntry(content, f, e.server())
+	root, err := parseObject(content)
+	if err != nil {
+		return false
+	}
+	raw, _ := root.get(serversKey(f))
+	servers, err := parseObject(raw)
+	if err != nil {
+		return false
+	}
+	raw, ok := servers.get(e.server())
 	if !ok {
 		return false
 	}
-	for _, m := range owned(f, e) {
+	entry, err := parseObject(raw)
+	want := owned(f, e)
+	if err != nil || len(entry) != len(want)+1 {
+		return false
+	}
+	for _, m := range want {
 		got, ok := entry.get(m.key)
 		if !ok || !sameJSON(got, m.val) {
 			return false
 		}
 	}
-	raw, _ := entry.get("env")
+	raw, _ = entry.get("env")
 	env, err := parseObject(raw)
-	if err != nil || len(raw) == 0 {
+	if err != nil || len(raw) == 0 || len(env) != 1 {
 		return false
 	}
 	got, ok := env.get(HarnessEnv)
