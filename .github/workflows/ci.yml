@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml runs this same gate on the tagged commit before it builds.
+  workflow_call:
 permissions:
   contents: read
 concurrency:
@@ -46,6 +48,10 @@ jobs:
   # The store tests run against a real dolt sql-server, pinned and verified.
   test:
     runs-on: ubuntu-24.04
+    env:
+      # A Dolt-backed test fails rather than skips when dolt is missing, so
+      # the job cannot pass without running them (internal/dolttest).
+      STARFIX_REQUIRE_DOLT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,6 +66,16 @@ jobs:
           echo "${DOLT_SHA256}  dolt.tgz" | sha256sum -c -
           tar xzf dolt.tgz && sudo install -m 0755 dolt-linux-amd64/bin/dolt /usr/local/bin/dolt
           dolt config --global --add metrics.disabled true
-      - run: go test -race -coverprofile=coverage.out ./...
+      - name: go test
+        # -shuffle=on randomizes test order; the seed is in the log, and
+        # -shuffle=SEED replays a failure.
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+      - name: peer check as another user
+        # TestCheckPeerOtherUID dials the daemon's socket from a process
+        # running as nobody, which needs root; the step above skips it. A
+        # separate GOCACHE keeps root-owned files out of the runner's cache.
+        run: |
+          sudo env "PATH=$PATH" "GOCACHE=$RUNNER_TEMP/gocache-root" "GOMODCACHE=$(go env GOMODCACHE)" \
+            STARFIX_REQUIRE_DOLT=1 go test -race -count=1 -run '^TestCheckPeer' ./internal/server
       - name: coverage
         run: go tool cover -func=coverage.out | tail -1 | tee -a "$GITHUB_STEP_SUMMARY"

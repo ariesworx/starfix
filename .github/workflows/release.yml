@@ -1,6 +1,8 @@
 name: release
-# A pushed vMAJOR.MINOR.PATCH tag builds every archive and checksums.txt and
-# attests their provenance (build, no secrets), then, once the maintainer
+# A pushed vMAJOR.MINOR.PATCH tag first runs the full CI gate on the tagged
+# commit (gate: ci.yml, the same lint, tests and builds a pull request
+# runs). Only then does it build every archive and checksums.txt and
+# attest their provenance (build, no secrets), then, once the maintainer
 # approves the `release` environment, signs checksums.txt with the release
 # key and publishes the GitHub release (sign-and-publish). `sfx upgrade` and
 # `starfixd upgrade` refuse a release whose checksums.txt.sig does not
@@ -14,7 +16,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A tag is never built, let alone signed, unless the gate passes on the
+  # tagged commit itself, whatever CI said about the branch.
+  gate:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
+    needs: gate
     runs-on: ubuntu-24.04
     permissions:
       contents: read

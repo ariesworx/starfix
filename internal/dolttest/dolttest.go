@@ -11,30 +11,79 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // driver for the readiness check
 )
 
-// ErrNoDolt means dolt is not on PATH; callers skip their tests.
+// ErrNoDolt means dolt is not on PATH; callers skip their tests. Start
+// never returns it when RequireEnv is set.
 var ErrNoDolt = errors.New("dolt not found on PATH")
 
-// Server is a running dolt sql-server on a loopback port.
+// RequireEnv names the environment variable that makes a missing dolt a
+// failure rather than a skip. CI sets it to 1, so a Dolt-backed test can
+// never pass by skipping.
+const RequireEnv = "STARFIX_REQUIRE_DOLT"
+
+func required() bool {
+	v := os.Getenv(RequireEnv)
+	return v != "" && v != "0"
+}
+
+// Server is a running dolt sql-server on a loopback port. Connections go
+// through its unix socket, which only this server can have created.
 type Server struct {
-	Port int
-	dir  string
-	cmd  *exec.Cmd
-	exit chan error
-	n    atomic.Int64
+	Port   int
+	socket string
+	dir    string
+	cmd    *exec.Cmd
+	exit   chan error
+	n      atomic.Int64
+}
+
+// pickPort chooses the TCP port for the next launch; tests replace it.
+var pickPort = freePort
+
+// lookDolt finds dolt on PATH, or reports why there is none.
+func lookDolt() (string, error) {
+	bin, err := exec.LookPath("dolt")
+	if err == nil {
+		return bin, nil
+	}
+	if required() {
+		return "", fmt.Errorf("dolttest: %s is set but dolt is not on PATH: install the Dolt release in internal/version.Dolt", RequireEnv)
+	}
+	return "", ErrNoDolt
+}
+
+// Version returns the version of the dolt on PATH, such as "2.4.2".
+func Version(ctx context.Context) (string, error) {
+	bin, err := lookDolt()
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.CommandContext(ctx, bin, "version").Output() //nolint:gosec // fixed args, dolt from PATH
+	if err != nil {
+		return "", fmt.Errorf("dolttest: dolt version: %w", err)
+	}
+	// The first line is "dolt version X.Y.Z"; later lines may warn about
+	// a newer release.
+	line, _, _ := strings.Cut(string(out), "\n")
+	v, ok := strings.CutPrefix(strings.TrimSpace(line), "dolt version ")
+	if !ok || v == "" {
+		return "", fmt.Errorf("dolttest: unexpected dolt version output %q", line)
+	}
+	return v, nil
 }
 
 // Start runs dolt sql-server with its data and config under dir, on a free
 // port, and waits until it accepts connections.
 func Start(ctx context.Context, dir string) (*Server, error) {
-	bin, err := exec.LookPath("dolt")
+	bin, err := lookDolt()
 	if err != nil {
-		return nil, ErrNoDolt
+		return nil, err
 	}
 	root := filepath.Join(dir, "home")
 	data := filepath.Join(dir, "data")
@@ -51,13 +100,17 @@ func Start(ctx context.Context, dir string) (*Server, error) {
 			return nil, fmt.Errorf("dolttest: dolt config: %w: %s", err, out)
 		}
 	}
+	// The port is free when picked but not held, so another process can
+	// take it before dolt binds it (T-8). Dolt then exits, and the next
+	// attempt picks another port. Readiness is checked over this launch's
+	// own socket, so another server on the port is never mistaken for it.
 	var lastErr error
-	for range 3 {
-		port, err := freePort()
+	for i := range 3 {
+		port, err := pickPort()
 		if err != nil {
 			return nil, err
 		}
-		s, err := launch(ctx, bin, env, data, port, dir)
+		s, err := launch(ctx, bin, env, data, port, dir, filepath.Join(dir, fmt.Sprintf("dolt%d.sock", i)))
 		if err == nil {
 			return s, nil
 		}
@@ -66,12 +119,13 @@ func Start(ctx context.Context, dir string) (*Server, error) {
 	return nil, lastErr
 }
 
-func launch(ctx context.Context, bin string, env []string, data string, port int, dir string) (*Server, error) {
+func launch(ctx context.Context, bin string, env []string, data string, port int, dir, socket string) (*Server, error) {
 	logf, err := os.Create(filepath.Join(dir, "server.log")) //nolint:gosec // test temp dir
 	if err != nil {
 		return nil, fmt.Errorf("dolttest: %w", err)
 	}
-	cmd := exec.Command(bin, "sql-server", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--data-dir", data) //nolint:gosec // dolt from PATH
+	cmd := exec.Command(bin, "sql-server", "--host", "127.0.0.1", "--port", strconv.Itoa(port), //nolint:gosec // dolt from PATH
+		"--socket", socket, "--data-dir", data)
 	cmd.Env = env
 	cmd.Stdout = logf
 	cmd.Stderr = logf
@@ -79,7 +133,7 @@ func launch(ctx context.Context, bin string, env []string, data string, port int
 		_ = logf.Close()
 		return nil, fmt.Errorf("dolttest: start dolt: %w", err)
 	}
-	s := &Server{Port: port, dir: dir, cmd: cmd, exit: make(chan error, 1)}
+	s := &Server{Port: port, socket: socket, dir: dir, cmd: cmd, exit: make(chan error, 1)}
 	go func() { s.exit <- cmd.Wait(); _ = logf.Close() }()
 
 	db, err := sql.Open("mysql", s.rootDSN(""))
@@ -115,7 +169,7 @@ func freePort() (int, error) {
 }
 
 func (s *Server) rootDSN(db string) string {
-	return fmt.Sprintf("root@tcp(127.0.0.1:%d)/%s", s.Port, db)
+	return fmt.Sprintf("root@unix(%s)/%s", s.socket, db)
 }
 
 // NewDatabase creates an empty database with a unique name and returns its
