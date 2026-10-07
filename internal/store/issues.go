@@ -235,48 +235,56 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 				return fmt.Errorf("idempotency lookup: %w", err)
 			}
 		}
-		if ok, err := exists(ctx, w.tx, id); err != nil {
-			return err
-		} else if ok {
-			return fmt.Errorf("issue %s: %w", id, ErrExists)
-		}
-		if in.ParentID != "" {
-			if err := mustExist(ctx, w.tx, in.ParentID); err != nil {
-				return fmt.Errorf("parent: %w", err)
-			}
-		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
-		if _, err := w.exec(ctx, `INSERT INTO issues (id, parent_id, title, body, design, acceptance, notes,
-  status, priority, type, assignee, owner, due_at, defer_until, ephemeral, expires_at, pinned, template,
-  metadata, created_by, created_at, updated_at, rev, write_id)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-			string(id), nullStr(in.ParentID), in.Title, in.Body, in.Design, in.Acceptance, in.Notes,
-			string(in.Status), int(*in.Priority), string(in.Type), nullStr(in.Assignee), nullStr(in.Owner),
-			nullTime(in.DueAt), nullTime(in.DeferUntil), in.Ephemeral, nullTime(in.ExpiresAt), in.Pinned, in.Template,
-			meta, w.actor.Principal, w.now, w.now, wid); err != nil {
-			if isDuplicate(err) {
-				return fmt.Errorf("issue %s: %w", id, ErrExists)
-			}
-			return fmt.Errorf("insert issue: %w", err)
-		}
-		for _, l := range in.Labels {
-			if _, err := w.exec(ctx, `INSERT IGNORE INTO labels (issue_id, label, created_at) VALUES (?, ?, ?)`,
-				string(id), l, w.now); err != nil {
-				return fmt.Errorf("insert label: %w", err)
-			}
-		}
-		if out, err = loadIssue(ctx, w.tx, id); err != nil {
-			return err
-		}
-		return w.event(ctx, OpIssueCreate, string(id), nil, out, in.IdempotencyKey)
+		out, err = insertIssue(ctx, w, id, in, meta)
+		return err
 	})
 	if err != nil {
 		return Issue{}, err
 	}
 	return out, nil
+}
+
+// insertIssue writes a normalized new issue with the given ID and records
+// its create event.
+func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any) (Issue, error) {
+	if ok, err := exists(ctx, w.tx, id); err != nil {
+		return Issue{}, err
+	} else if ok {
+		return Issue{}, fmt.Errorf("issue %s: %w", id, ErrExists)
+	}
+	if in.ParentID != "" {
+		if err := mustExist(ctx, w.tx, in.ParentID); err != nil {
+			return Issue{}, fmt.Errorf("parent: %w", err)
+		}
+	}
+	wid, err := randomInt63()
+	if err != nil {
+		return Issue{}, err
+	}
+	if _, err := w.exec(ctx, `INSERT INTO issues (id, parent_id, title, body, design, acceptance, notes,
+  status, priority, type, assignee, owner, due_at, defer_until, ephemeral, expires_at, pinned, template,
+  metadata, created_by, created_at, updated_at, rev, write_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+		string(id), nullStr(in.ParentID), in.Title, in.Body, in.Design, in.Acceptance, in.Notes,
+		string(in.Status), int(*in.Priority), string(in.Type), nullStr(in.Assignee), nullStr(in.Owner),
+		nullTime(in.DueAt), nullTime(in.DeferUntil), in.Ephemeral, nullTime(in.ExpiresAt), in.Pinned, in.Template,
+		meta, w.actor.Principal, w.now, w.now, wid); err != nil {
+		if isDuplicate(err) {
+			return Issue{}, fmt.Errorf("issue %s: %w", id, ErrExists)
+		}
+		return Issue{}, fmt.Errorf("insert issue: %w", err)
+	}
+	for _, l := range in.Labels {
+		if _, err := w.exec(ctx, `INSERT IGNORE INTO labels (issue_id, label, created_at) VALUES (?, ?, ?)`,
+			string(id), l, w.now); err != nil {
+			return Issue{}, fmt.Errorf("insert label: %w", err)
+		}
+	}
+	out, err := loadIssue(ctx, w.tx, id)
+	if err != nil {
+		return Issue{}, err
+	}
+	return out, w.event(ctx, OpIssueCreate, string(id), nil, out, in.IdempotencyKey)
 }
 
 // UpdateIssue applies patch if the issue is still at rev expected, and
@@ -460,29 +468,38 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 		if expected != 0 && before.Rev != expected {
 			return fmt.Errorf("issue %s at rev %d, not %d: %w", id, before.Rev, expected, ErrConflict)
 		}
-		op := OpIssueClose
-		sets := []string{"status = ?", "closed_at = ?", "close_reason = ?"}
-		args := []any{string(StatusClosed), w.now, nullStr(reason)}
-		if closing && before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is already closed", ErrInvalid, id)
-		}
-		if !closing {
-			if before.Status != StatusClosed {
-				return fmt.Errorf("%w: issue %s is not closed", ErrInvalid, id)
-			}
-			op = OpIssueReopen
-			args = []any{string(StatusOpen), nil, nil}
-		}
-		if out, err = casUpdate(ctx, w, before, sets, args); err != nil {
+		if closing {
+			out, err = closeTx(ctx, w, before, reason)
 			return err
 		}
-		b, a := diff(before, out)
-		return w.event(ctx, op, string(id), b, a, "")
+		if before.Status != StatusClosed {
+			return fmt.Errorf("%w: issue %s is not closed", ErrInvalid, id)
+		}
+		out, err = setStatus(ctx, w, before, OpIssueReopen, []any{string(StatusOpen), nil, nil})
+		return err
 	})
 	if err != nil {
 		return Issue{}, err
 	}
 	return out, nil
+}
+
+// closeTx closes before, read in w, and records the event.
+func closeTx(ctx context.Context, w *wtx, before Issue, reason string) (Issue, error) {
+	if before.Status == StatusClosed {
+		return Issue{}, fmt.Errorf("%w: issue %s is already closed", ErrInvalid, before.ID)
+	}
+	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)})
+}
+
+// setStatus writes status, closed_at and close_reason and records op.
+func setStatus(ctx context.Context, w *wtx, before Issue, op Op, args []any) (Issue, error) {
+	out, err := casUpdate(ctx, w, before, []string{"status = ?", "closed_at = ?", "close_reason = ?"}, args)
+	if err != nil {
+		return Issue{}, err
+	}
+	b, a := diff(before, out)
+	return out, w.event(ctx, op, string(before.ID), b, a, "")
 }
 
 // diff returns the changed fields of an issue, old and new. Bookkeeping

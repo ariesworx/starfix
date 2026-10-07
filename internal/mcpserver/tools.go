@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/gitx"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -136,7 +137,57 @@ type PageIn struct {
 	Limit int    `json:"limit,omitempty" jsonschema:"newest N; default 10"`
 }
 
+// StartIn takes an issue.
+type StartIn struct {
+	ID string `json:"id,omitempty"`
+}
+
+// FinishIn closes an issue with what the next person needs.
+type FinishIn struct {
+	ID         string         `json:"id"`
+	Reason     string         `json:"reason,omitempty" jsonschema:"what was done"`
+	Handoff    string         `json:"handoff,omitempty"`
+	Discovered []DiscoveredIn `json:"discovered,omitempty"`
+}
+
+// DiscoveredIn is one piece of discovered work.
+type DiscoveredIn struct {
+	Title    string `json:"title"`
+	Type     string `json:"type,omitempty"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// HandoffIn records a handoff note.
+type HandoffIn struct {
+	ID      string `json:"id"`
+	Note    string `json:"note"`
+	Release bool   `json:"release,omitempty" jsonschema:"unassign so others can start it"`
+}
+
 // Outputs.
+
+// Started is the issue start took, with what working on it needs.
+type Started struct {
+	ID         string   `json:"id"`
+	Rev        int64    `json:"rev"`
+	Title      string   `json:"title"`
+	Type       string   `json:"type"`
+	Priority   int      `json:"priority"`
+	Body       string   `json:"body,omitempty"`
+	Acceptance string   `json:"acceptance,omitempty"`
+	Handoff    *Handoff `json:"handoff,omitempty"`
+	// Branch is the suggested git branch; start does not create it.
+	Branch string `json:"branch"`
+	// Truncated: long text was cut; show with full: true has it all.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Handoff is the latest handoff note on an issue.
+type Handoff struct {
+	By   string `json:"by"`
+	At   string `json:"at"`
+	Note string `json:"note"`
+}
 
 // Ref is the result of a write that has no revision.
 type Ref struct {
@@ -185,6 +236,7 @@ type Issue struct {
 type Comment struct {
 	Author string `json:"author"`
 	At     string `json:"at"`
+	Kind   string `json:"kind,omitempty"`
 	Body   string `json:"body"`
 }
 
@@ -214,6 +266,23 @@ func (s *Server) register() {
 	add(s, tool{name: "prime", desc: "Start here: your in-progress issues, top ready work, notices.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
 			return BuildPrime(ctx, c, s.opts.Version)
+		})
+	add(s, tool{name: "start", desc: "Take an issue (default: top of ready); returns it, its last handoff and a branch.", ann: write},
+		func(ctx context.Context, c Conn, in StartIn) (Started, error) { return start(ctx, c, in) })
+	add(s, tool{name: "finish", desc: "Close your issue, with a handoff note and new work found.", ann: write,
+		enums: enums{"discovered.type": issueTypes}},
+		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
+			args := proto.FinishArgs{ID: in.ID, Reason: in.Reason, Handoff: in.Handoff}
+			for _, d := range in.Discovered {
+				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
+			}
+			var out proto.FinishResult
+			return out, c.Call(ctx, proto.OpFinish, args, &out)
+		})
+	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write},
+		func(ctx context.Context, c Conn, in HandoffIn) (proto.WriteResult, error) {
+			var out proto.WriteResult
+			return out, c.Call(ctx, proto.OpHandoff, proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release}, &out)
 		})
 	add(s, tool{name: "ready", desc: "Open issues nothing blocks, best first.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in LimitIn) (Issues, error) {
@@ -322,6 +391,23 @@ func list(ctx context.Context, c Conn, in ListIn) (Issues, error) {
 	}
 }
 
+func start(ctx context.Context, c Conn, in StartIn) (Started, error) {
+	var r proto.StartResult
+	if err := c.Call(ctx, proto.OpStart, proto.StartArgs{ID: in.ID}, &r); err != nil {
+		return Started{}, err
+	}
+	is := r.Issue
+	out := Started{ID: is.ID, Rev: is.Rev, Title: is.Title, Type: is.Type, Priority: is.Priority, Body: is.Body,
+		Acceptance: is.Acceptance, Branch: gitx.Branch(is.Type, is.ID, is.Title)}
+	fields := []*string{&out.Body, &out.Acceptance}
+	if h := r.Handoff; h != nil {
+		out.Handoff = &Handoff{By: h.Author, At: stamp(h.CreatedAt), Note: h.Body}
+		fields = append(fields, &out.Handoff.Note)
+	}
+	out.Truncated = fitTexts(func() bool { return size(out) <= MaxResultTokens }, fields...)
+	return out, nil
+}
+
 func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	var r proto.ShowResult
 	if err := c.Call(ctx, proto.OpShow, proto.ShowArgs{ID: in.ID, Full: in.Full}, &r); err != nil {
@@ -381,7 +467,7 @@ func comments(ctx context.Context, c Conn, in PageIn) (Comments, error) {
 	out := Comments{Comments: []Comment{}, Omitted: len(all) - keep}
 	for _, cm := range all[len(all)-keep:] {
 		body, _ := cut(cm.Body, maxCommentBody)
-		out.Comments = append(out.Comments, Comment{Author: cm.Author, At: stamp(cm.CreatedAt), Body: body})
+		out.Comments = append(out.Comments, Comment{Author: cm.Author, At: stamp(cm.CreatedAt), Kind: cm.Kind, Body: body})
 	}
 	for size(out) > MaxResultTokens && len(out.Comments) > 1 {
 		out.Comments, out.Omitted = out.Comments[1:], out.Omitted+1

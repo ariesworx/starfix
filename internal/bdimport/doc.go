@@ -35,7 +35,8 @@
 //   - Comments keep their author, text and time. A bd comment ID becomes a
 //     16-character ID derived from the issue and the bd ID, so re-importing
 //     finds the same comment; an ID already in that form is kept, so a
-//     starfix export re-imports unchanged.
+//     starfix export re-imports unchanged. bd has no comment kinds, so a
+//     starfix handoff note exports as a plain comment.
 //
 // Everything else is reported, never dropped silently: other dependency
 // types (replies-to, tracks, authored-by and the rest), external:

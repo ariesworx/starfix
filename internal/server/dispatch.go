@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"unicode/utf8"
 
@@ -44,6 +45,9 @@ func init() {
 		proto.OpComment:  typed(comment),
 		proto.OpComments: typed(comments),
 		proto.OpHistory:  typed(history),
+		proto.OpStart:    typed(start),
+		proto.OpFinish:   typed(finish),
+		proto.OpHandoff:  typed(handoff),
 	}
 }
 
@@ -260,8 +264,7 @@ func comments(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (a
 	}
 	out := proto.CommentsResult{Comments: []proto.Comment{}}
 	for _, c := range cs {
-		out.Comments = append(out.Comments, proto.Comment{ID: c.ID, Author: c.Author, Session: c.Session,
-			Body: c.Body, CreatedAt: c.CreatedAt.UTC()})
+		out.Comments = append(out.Comments, wireComment(c))
 	}
 	return out, nil
 }
@@ -280,6 +283,61 @@ func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (an
 			Session: e.Actor.Session, Machine: e.Actor.Machine, Op: string(e.Op), Before: e.Before, After: e.After})
 	}
 	return out, nil
+}
+
+func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (any, *proto.Error) {
+	is, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID))
+	if errors.Is(err, store.ErrNothingReady) {
+		return nil, proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue",
+			"nothing is ready to start")
+	}
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpStart, in.ID, 0, err)
+	}
+	out := proto.StartResult{Issue: wireIssue(is)}
+	h, err := s.cfg.Store.LastHandoff(ctx, is.ID)
+	if err != nil {
+		// The issue is taken; say so rather than fail the start.
+		s.cfg.Logger.Error("read handoff", "issue", is.ID, "err", err)
+	} else if h != nil {
+		c := wireComment(*h)
+		out.Handoff = &c
+	}
+	return out, nil
+}
+
+func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) (any, *proto.Error) {
+	f := store.Finish{Reason: in.Reason, Handoff: in.Handoff}
+	for _, d := range in.Discovered {
+		n := store.NewIssue{Title: d.Title, Type: store.IssueType(d.Type)}
+		if d.Priority != nil {
+			p := store.Priority(*d.Priority)
+			n.Priority = &p
+		}
+		f.Discovered = append(f.Discovered, n)
+	}
+	is, ids, err := s.cfg.Store.FinishIssue(ctx, a, store.IssueID(in.ID), f)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpFinish, in.ID, 0, err)
+	}
+	out := proto.FinishResult{ID: string(is.ID), Rev: int64(is.Rev)}
+	for _, id := range ids {
+		out.Created = append(out.Created, string(id))
+	}
+	return out, nil
+}
+
+func handoff(ctx context.Context, s *Server, a store.Actor, in proto.HandoffArgs) (any, *proto.Error) {
+	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Note, in.Release)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpHandoff, in.ID, 0, err)
+	}
+	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func wireComment(c store.Comment) proto.Comment {
+	return proto.Comment{ID: c.ID, Author: c.Author, Session: c.Session, Kind: string(c.Kind), Body: c.Body,
+		CreatedAt: c.CreatedAt.UTC()}
 }
 
 func summary(is store.Issue) proto.Summary {

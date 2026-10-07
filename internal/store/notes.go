@@ -56,29 +56,44 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body st
 	if err := id.Validate(); err != nil {
 		return Comment{}, err
 	}
-	if body == "" || len(body) > 65535 {
-		return Comment{}, fmt.Errorf("%w: comment must be 1-65535 bytes", ErrInvalid)
+	if err := validBody(body); err != nil {
+		return Comment{}, err
 	}
 	var c Comment
 	err := s.write(ctx, actor, func(w *wtx) error {
 		if err := mustExist(ctx, w.tx, id); err != nil {
 			return err
 		}
-		cid, err := newCommentID()
-		if err != nil {
-			return err
-		}
-		c = Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Body: body, CreatedAt: w.now}
-		if _, err := w.exec(ctx, `INSERT INTO comments (id, issue_id, author, session, body, created_at)
-  VALUES (?, ?, ?, ?, ?, ?)`, c.ID, string(id), c.Author, c.Session, c.Body, c.CreatedAt); err != nil {
-			return fmt.Errorf("insert comment: %w", err)
-		}
-		return w.event(ctx, OpCommentAdd, string(id), nil, c, "")
+		var err error
+		c, err = insertComment(ctx, w, id, body, CommentPlain)
+		return err
 	})
 	if err != nil {
 		return Comment{}, err
 	}
 	return c, nil
+}
+
+func validBody(body string) error {
+	if body == "" || len(body) > 65535 {
+		return fmt.Errorf("%w: comment must be 1-65535 bytes", ErrInvalid)
+	}
+	return nil
+}
+
+// insertComment appends a comment of the given kind, authored by w's actor,
+// and records the event. The issue must exist.
+func insertComment(ctx context.Context, w *wtx, id IssueID, body string, kind CommentKind) (Comment, error) {
+	cid, err := newCommentID()
+	if err != nil {
+		return Comment{}, err
+	}
+	c := Comment{ID: cid, Issue: id, Author: w.actor.Principal, Session: w.actor.Session, Kind: kind, Body: body, CreatedAt: w.now}
+	if _, err := w.exec(ctx, `INSERT INTO comments (id, issue_id, author, session, kind, body, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)`, c.ID, string(id), c.Author, c.Session, string(c.Kind), c.Body, c.CreatedAt); err != nil {
+		return Comment{}, fmt.Errorf("insert comment: %w", err)
+	}
+	return c, w.event(ctx, OpCommentAdd, string(id), nil, c, "")
 }
 
 // Comments returns an issue's comments, oldest first.
@@ -89,13 +104,26 @@ func (s *Store) Comments(ctx context.Context, id IssueID) ([]Comment, error) {
 	return s.comments(ctx, `WHERE issue_id = ? ORDER BY created_at, id`, string(id))
 }
 
+// LastHandoff returns the newest handoff note on an issue, or nil.
+func (s *Store) LastHandoff(ctx context.Context, id IssueID) (*Comment, error) {
+	if err := id.Validate(); err != nil {
+		return nil, err
+	}
+	cs, err := s.comments(ctx, `WHERE issue_id = ? AND kind = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
+		string(id), string(CommentHandoff))
+	if err != nil || len(cs) == 0 {
+		return nil, err
+	}
+	return &cs[0], nil
+}
+
 // AllComments returns every comment, by issue, then oldest first.
 func (s *Store) AllComments(ctx context.Context) ([]Comment, error) {
 	return s.comments(ctx, `ORDER BY issue_id, created_at, id`)
 }
 
 func (s *Store) comments(ctx context.Context, rest string, args ...any) ([]Comment, error) {
-	q := `SELECT id, issue_id, author, session, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers above
+	q := `SELECT id, issue_id, author, session, kind, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers above
 	rows, err := s.r.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("comments: %w", err)
@@ -104,7 +132,7 @@ func (s *Store) comments(ctx context.Context, rest string, args ...any) ([]Comme
 	var out []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.Issue, &c.Author, &c.Session, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Issue, &c.Author, &c.Session, &c.Kind, &c.Body, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("comments: %w", err)
 		}
 		c.CreatedAt = c.CreatedAt.UTC()

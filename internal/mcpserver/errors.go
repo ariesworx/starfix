@@ -45,9 +45,17 @@ func explain(err error) toolErr {
 func nextStep(pe *proto.Error) string {
 	switch pe.Code {
 	case proto.CodeNotFound:
+		if strings.HasPrefix(pe.Fix, "see what holds work back") {
+			return "nothing is ready: call blocked to see why, or create an issue"
+		}
 		return "find the id with list or ready"
 	case proto.CodeConflict:
-		if strings.HasPrefix(pe.Fix, "re-read") {
+		switch {
+		case strings.HasPrefix(pe.Fix, "take that one"):
+			return "call start with the next ready id named above"
+		case strings.HasPrefix(pe.Fix, "leave it to"):
+			return "someone else holds this issue: pick other work with start, or tell the user if it must move"
+		case strings.HasPrefix(pe.Fix, "re-read"):
 			return "call show for the current rev, then retry with that rev if your change still applies"
 		}
 		return "retry"

@@ -18,10 +18,14 @@ func command(op string) string { return strings.ReplaceAll(op, ".", " ") }
 // request's target and expected revision, when it has them.
 func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error) *proto.Error {
 	text := err.Error()
+	var held *store.HeldError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
 			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
+
+	case errors.As(err, &held):
+		return s.held(ctx, op, held)
 
 	case errors.Is(err, store.ErrConflict):
 		return s.conflict(ctx, id, rev)
@@ -83,4 +87,23 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 	}
 	return proto.Errf(proto.CodeConflict, reread,
 		fmt.Sprintf("%s changed since rev %d (now rev %d%s)", id, rev, cur.Rev, by))
+}
+
+// held explains an issue another principal has in progress. Refusing a
+// start names the next ready issue to take instead (design §12 item 5).
+func (s *Server) held(ctx context.Context, op string, h *store.HeldError) *proto.Error {
+	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
+	switch op {
+	case proto.OpHandoff:
+		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s; a note without --release needs no hold", h.By), msg)
+	case proto.OpFinish:
+		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s, or close it with `sfx close %s`", h.By, h.ID), msg)
+	}
+	next, err := s.cfg.Store.Ready(ctx, 1)
+	if err != nil || len(next) == 0 {
+		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s; nothing else is ready, so see `sfx blocked`", h.By),
+			msg+"; nothing else is ready")
+	}
+	return proto.Errf(proto.CodeConflict, fmt.Sprintf("take that one with `sfx start %s`", next[0].ID),
+		fmt.Sprintf("%s; next ready: %s", msg, next[0].ID))
 }

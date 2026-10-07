@@ -104,5 +104,6 @@ func (p *Prime) Text() string {
 	if p.More {
 		b.WriteString("(more not shown: use list and ready)\n")
 	}
+	b.WriteString("next: start (the top ready issue, or an id), then finish when done\n")
 	return b.String()
 }
