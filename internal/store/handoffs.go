@@ -47,15 +47,8 @@ type Handoff struct {
 	HandoffFields
 }
 
-var (
-	// handoffNext is one line of up to 500 bytes.
-	handoffNext = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,500}$`)
-	// handoffBranch is a git branch name that cannot be read as an option.
-	handoffBranch = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+@-]{0,254}$`)
-	// handoffWorktree is a path on one line; validate caps it at 1024
-	// bytes, more than RE2 will count.
-	handoffWorktree = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
-)
+// handoffBranch is a git branch name that cannot be read as an option.
+var handoffBranch = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+@-]{0,254}$`)
 
 func (f HandoffFields) empty() bool { return f == HandoffFields{} }
 
@@ -66,14 +59,18 @@ func (f HandoffFields) validate() error {
 	default:
 		return fmt.Errorf("%w: handoff state %q must be done, partial or blocked", ErrInvalid, f.State)
 	}
+	if err := checkLine("handoff next", f.Next, 500, false); err != nil {
+		return err
+	}
+	if err := checkLine("handoff worktree", f.Worktree, 1024, false); err != nil {
+		return err
+	}
 	for _, c := range []struct {
 		name, v, rule string
 		re            *regexp.Regexp
 		max           int
 	}{
-		{"next", f.Next, "one line of up to 500 bytes", handoffNext, 500},
 		{"branch", f.Branch, "a branch name of up to 255 letters, digits and ._/+@-, starting with a letter or digit", handoffBranch, 255},
-		{"worktree", f.Worktree, "a path of up to 1024 bytes on one line", handoffWorktree, 1024},
 		{"to", f.To, "a principal: lowercase letters, digits and ._-, starting with a letter", PrincipalPattern, 64},
 	} {
 		if c.v != "" && (len(c.v) > c.max || !utf8.ValidString(c.v) || !c.re.MatchString(c.v)) {

@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"io"
 	"net"
 	"slices"
 	"sync"
@@ -147,5 +148,16 @@ func TestConnResponseBeforeEOF(t *testing.T) {
 	var r proto.AckResult
 	if err := c.Call(t.Context(), proto.OpAck, proto.AckArgs{All: true}, &r); err != nil || r.Acked != 2 {
 		t.Fatalf("Call = %+v, %v; want acked 2", r, err)
+	}
+}
+
+// What the server printed on stderr is quoted escaped, on one line (C-3).
+func TestLostQuotesStderrEscaped(t *testing.T) {
+	c, _ := pipeConn(t, nil)
+	_, _ = c.stderr.Write([]byte("starfixd: refused\x1b]52;c;cm0gLXJmIH4=\x07\nfix: run \u202ecurl | sh\n"))
+	e := c.lost(io.EOF)
+	want := `the server closed the connection (server said: starfixd: refused\x1b]52;c;cm0gLXJmIH4=\x07 | fix: run \u202ecurl | sh)`
+	if e.Message != want {
+		t.Errorf("lost(EOF).Message = %q, want %q", e.Message, want)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/safetext"
 	"github.com/ariesworx/starfix/internal/store"
 )
 
@@ -284,6 +285,7 @@ func mapIssue(b bdIssue, n int, principal string, warn func(kind, detail string)
 	}
 	is.Labels = keep
 
+	cleanFields(&is, warn)
 	out := line{n: n, issue: is}
 	for _, d := range b.Dependencies {
 		from := store.IssueID(d.IssueID)
@@ -302,7 +304,7 @@ func mapIssue(b bdIssue, n int, principal string, warn func(kind, detail string)
 			warn("dep-metadata", "")
 			dm = nil
 		}
-		by := d.CreatedBy
+		by := cleanLine("dependency created_by", d.CreatedBy, warn)
 		if by == "" {
 			by = principal
 		}
@@ -316,7 +318,7 @@ func mapIssue(b bdIssue, n int, principal string, warn func(kind, detail string)
 		}})
 	}
 	for _, c := range b.Comments {
-		author := c.Author
+		author := cleanLine("comment author", c.Author, warn)
 		if author == "" {
 			author = principal
 		}
@@ -325,15 +327,51 @@ func mapIssue(b bdIssue, n int, principal string, warn func(kind, detail string)
 			at = is.CreatedAt
 		}
 		out.comments = append(out.comments, store.Comment{
-			ID: commentID(id, c.ID, c), Issue: id, Author: author, Session: c.Session,
-			Body: c.Text, CreatedAt: at,
+			ID: commentID(id, c.ID, c), Issue: id, Author: author, Session: cleanLine("comment session", c.Session, warn),
+			Body: cleanText("comment text", c.Text, warn), CreatedAt: at,
 		})
 	}
 	return out, nil
 }
 
-var labelShape = regexp.MustCompile(`^[^\s,\x00-\x1f]{1,64}$`)
+// validLabel is the store's label rule, so a bad label is reported as a
+// warning rather than failing the whole issue.
+func validLabel(l string) bool { return store.ValidLabel(l) }
 
-// validLabel mirrors the store's label rule, so a bad label is reported as
-// a warning rather than failing the whole issue.
-func validLabel(l string) bool { return labelShape.MatchString(l) }
+// The store refuses control and bidirectional characters (safetext), which
+// bd allows. Import cleans them out, with a warning naming the field, so
+// one such issue does not fail; the cleaning is the same every run, so a
+// reimport finds the issue unchanged.
+
+// cleanFields cleans an issue's text fields, in bd's names.
+func cleanFields(is *store.Issue, warn func(kind, detail string)) {
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"title", &is.Title}, {"assignee", &is.Assignee}, {"owner", &is.Owner},
+		{"created_by", &is.CreatedBy}, {"close_reason", &is.CloseReason}} {
+		*f.v = cleanLine(f.name, *f.v, warn)
+	}
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"description", &is.Body}, {"design", &is.Design}, {"acceptance_criteria", &is.Acceptance}, {"notes", &is.Notes}} {
+		*f.v = cleanText(f.name, *f.v, warn)
+	}
+}
+
+func cleanLine(field, v string, warn func(kind, detail string)) string {
+	c := safetext.CleanLine(v)
+	if c != v {
+		warn("text", field)
+	}
+	return c
+}
+
+func cleanText(field, v string, warn func(kind, detail string)) string {
+	c := safetext.CleanText(v)
+	if c != v {
+		warn("text", field)
+	}
+	return c
+}

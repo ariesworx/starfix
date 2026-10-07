@@ -163,7 +163,7 @@ func TestPrimeInbox(t *testing.T) {
 			},
 			unread: 5, lost: []string{"sf-2", "sf-4"},
 			text: []string{"lost claim (stop work on it): sf-2 sf-4", "inbox: 5 unread (call inbox)",
-				"  #9 claim.lost sf-2 from starfixd: lease expired", "  #8 mention sf-3 from bob: @alice look"},
+				"  #9 claim.lost sf-2 from starfixd: \"lease expired\"", "  #8 mention sf-3 from bob: \"@alice look\""},
 		},
 		{
 			name:    "empty",

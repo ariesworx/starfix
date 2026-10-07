@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/safetext"
 )
 
 // Options describe this client to the server.
@@ -258,7 +259,11 @@ func (c *Conn) lost(err error) *proto.Error {
 		msg = fmt.Sprintf("connection to the server failed: %v", err)
 	}
 	if s := strings.TrimSpace(c.stderr.String()); s != "" {
-		msg += " (server said: " + strings.ReplaceAll(s, "\n", " | ") + ")"
+		lines := strings.Split(s, "\n")
+		for i, l := range lines {
+			lines[i] = safetext.Line(strings.TrimSuffix(l, "\r"))
+		}
+		msg += " (server said: " + strings.Join(lines, " | ") + ")"
 	}
 	return proto.Errf(proto.CodeUnavailable,
 		"retry; if it persists, check that this key's authorized_keys line forces `starfixd stdio --principal NAME` and that starfixd is running", msg)

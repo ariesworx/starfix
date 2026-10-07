@@ -119,8 +119,8 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if err := id.Validate(); err != nil {
 		return Issue{}, nil, err
 	}
-	if len(f.Reason) > 2000 {
-		return Issue{}, nil, fmt.Errorf("%w: reason longer than 2000", ErrInvalid)
+	if err := checkLine("reason", f.Reason, maxReason, false); err != nil {
+		return Issue{}, nil, err
 	}
 	if err := f.Handoff.validate(); err != nil {
 		return Issue{}, nil, err

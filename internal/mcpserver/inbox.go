@@ -78,6 +78,7 @@ type InboxItem struct {
 
 // Inbox is the unread items, newest first. More says some were left out.
 type Inbox struct {
+	untrusted
 	Items  []InboxItem `json:"items"`
 	Unread int         `json:"unread"`
 	Acked  int         `json:"acked,omitempty"`

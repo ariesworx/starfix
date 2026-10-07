@@ -70,7 +70,7 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim, Items: out.Items})
 	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
-	_, _ = fmt.Fprintf(r.env.Stdout, "\nbranch: %s%s\n", out.Branch, note)
+	_, _ = fmt.Fprintf(r.env.Stdout, "\nbranch: %s%s\n", esc(out.Branch), esc(note))
 	return nil
 }
 
@@ -135,9 +135,9 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	_, _ = fmt.Fprintf(r.env.Stdout, "%s rev %d\n", out.ID, out.Rev)
+	_, _ = fmt.Fprintf(r.env.Stdout, "%s rev %d\n", esc(out.ID), out.Rev)
 	if len(out.Created) > 0 {
-		_, _ = fmt.Fprintf(r.env.Stdout, "created %s\n", strings.Join(out.Created, " "))
+		_, _ = fmt.Fprintf(r.env.Stdout, "created %s\n", strings.Join(escAll(out.Created), " "))
 	}
 	return nil
 }
@@ -224,7 +224,7 @@ func cmdAccept(ctx context.Context, r *runner, args []string) error {
 	}
 	printItems(r.env.Stdout, out.Items)
 	if len(out.Open) == 0 {
-		_, _ = fmt.Fprintf(r.env.Stdout, "\n%s: every item is ticked or waived\n", out.ID)
+		_, _ = fmt.Fprintf(r.env.Stdout, "\n%s: every item is ticked or waived\n", esc(out.ID))
 	}
 	return nil
 }
@@ -251,14 +251,14 @@ func printHandoff(w io.Writer, h *proto.Handoff) {
 	if h.To != "" {
 		tags = append(tags, "to "+h.To)
 	}
-	p("\nhandoff from %s, %s", h.Author, when(h.CreatedAt))
+	p("\nhandoff from %s, %s", esc(h.Author), when(h.CreatedAt))
 	if len(tags) > 0 {
-		p(" (%s)", strings.Join(tags, ", "))
+		p(" (%s)", esc(strings.Join(tags, ", ")))
 	}
 	p(":\n%s\n", h.Body)
 	for _, kv := range [][2]string{{"next", h.Next}, {"on branch", h.Branch}, {"in worktree", h.Worktree}} {
 		if kv[1] != "" {
-			p("%s: %s\n", kv[0], kv[1])
+			p("%s: %s\n", kv[0], esc(kv[1]))
 		}
 	}
 }
@@ -290,7 +290,7 @@ func cmdAway(ctx context.Context, r *runner, args []string) error {
 		return nil
 	}
 	for _, c := range out.Claims {
-		_, _ = fmt.Fprintf(r.env.Stdout, "%s held until %s (%s)\n", c.ID, when(c.ExpiresAt), c.Session)
+		_, _ = fmt.Fprintf(r.env.Stdout, "%s held until %s (%s)\n", esc(c.ID), when(c.ExpiresAt), esc(c.Session))
 	}
 	return nil
 }

@@ -115,8 +115,8 @@ func (s *Store) Digest(ctx context.Context, f DigestFilter) (Digest, error) {
 	case now.Sub(d.Since) > MaxDigestWindow:
 		return Digest{}, fmt.Errorf("%w: since reaches back more than %d days", ErrInvalid, MaxDigestWindow/(24*time.Hour))
 	}
-	if f.By != "" && !actorPart.MatchString(f.By) {
-		return Digest{}, fmt.Errorf("%w: by must be 1-255 printable characters", ErrInvalid)
+	if err := checkLine("by", f.By, maxName, false); err != nil {
+		return Digest{}, err
 	}
 	if f.Label != "" {
 		if err := validLabel(f.Label); err != nil {
