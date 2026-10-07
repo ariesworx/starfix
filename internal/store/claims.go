@@ -186,7 +186,7 @@ func take(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Claim, 
 	}
 	if !same {
 		if err := w.event(ctx, OpClaimTake, string(c.Issue), nil,
-			map[string]any{"epoch": c.Epoch, "expires_at": c.ExpiresAt}, ""); err != nil {
+			map[string]any{"epoch": c.Epoch, "expires_at": c.ExpiresAt}); err != nil {
 			return Claim{}, err
 		}
 	} else {
@@ -302,7 +302,7 @@ func (s *Store) ReapClaims(ctx context.Context) ([]Claim, error) {
 				return err
 			}
 			if err := w.event(ctx, OpClaimExpire, string(c.Issue),
-				map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil, ""); err != nil {
+				map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil); err != nil {
 				return err
 			}
 			if err := w.notify(ctx, InboxItem{To: c.Holder.Principal, Session: c.Holder.Session, Kind: InboxClaimLost, Issue: c.Issue,
@@ -322,7 +322,7 @@ func (s *Store) ReapClaims(ctx context.Context) ([]Claim, error) {
 					return err
 				}
 				b, a := diff(is, after)
-				if err := w.event(ctx, OpIssueUpdate, string(c.Issue), b, a, ""); err != nil {
+				if err := w.event(ctx, OpIssueUpdate, string(c.Issue), b, a); err != nil {
 					return err
 				}
 			}

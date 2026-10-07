@@ -155,7 +155,7 @@ func TestDigest(t *testing.T) {
 	}
 
 	// A comment is activity: stale is no longer stalled.
-	_, err = s.AddComment(ctx, alice, stale, "still on it")
+	_, err = s.AddComment(ctx, alice, stale, "still on it", "")
 	must(err)
 	if d, err := s.Digest(ctx, day); err != nil || d.Stalled.Total != 0 || d.InProgress.Total != 2 {
 		t.Fatalf("after a comment: stalled %+v, %v", d.Stalled, err)

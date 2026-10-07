@@ -15,6 +15,9 @@ const (
 	CodeCycle Code = "cycle"
 	// CodeInvalid: the request failed validation.
 	CodeInvalid Code = "invalid"
+	// CodeAcceptance: close or finish was refused because acceptance
+	// items are neither ticked nor waived.
+	CodeAcceptance Code = "acceptance"
 	// CodeUnavailable: the server, or the daemon behind it, cannot serve
 	// the request now.
 	CodeUnavailable Code = "unavailable"

@@ -524,7 +524,7 @@ func TestDispatchWork(t *testing.T) {
 		t.Fatalf("start after handoff: %+v %+v", st.Issue, st.Handoff)
 	}
 	p0 := 0
-	f := mustCall[proto.FinishResult](t, s, bob, proto.OpFinish, proto.FinishArgs{ID: a.ID, Reason: "done", Handoff: "all yours",
+	f := mustCall[proto.FinishResult](t, s, bob, proto.OpFinish, proto.FinishArgs{ID: a.ID, Reason: "done", Handoff: "all yours", Ticked: []int{1},
 		Discovered: []proto.Discovered{{Title: "follow-up", Type: "bug", Priority: &p0}}})
 	if f.ID != a.ID || len(f.Created) != 1 {
 		t.Fatalf("finish: %+v", f)

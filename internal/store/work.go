@@ -77,7 +77,7 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 			return err
 		}
 		b, a := diff(before, out)
-		return w.event(ctx, OpIssueUpdate, string(target), b, a, "")
+		return w.event(ctx, OpIssueUpdate, string(target), b, a)
 	})
 	if err != nil {
 		return Issue{}, Claim{}, err
@@ -95,6 +95,17 @@ type Finish struct {
 	// Discovered are new issues, each linked discovered-from the finished
 	// one. IDs are generated; ID and IdempotencyKey must be empty.
 	Discovered []NewIssue
+	// Accept ticks and waives acceptance items before the close, which
+	// refuses while any is left open.
+	Accept Acceptance
+	// IdempotencyKey makes a retried finish return the first result.
+	IdempotencyKey string
+}
+
+// finished is FinishIssue's result, as an idempotent replay returns it.
+type finished struct {
+	Issue Issue     `json:"issue"`
+	IDs   []IssueID `json:"ids"`
 }
 
 // FinishIssue closes an issue, ends its claim, records its handoff note
@@ -112,6 +123,12 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 		return Issue{}, nil, fmt.Errorf("%w: reason longer than 2000", ErrInvalid)
 	}
 	if err := f.Handoff.validate(); err != nil {
+		return Issue{}, nil, err
+	}
+	if err := validIdem(f.IdempotencyKey); err != nil {
+		return Issue{}, nil, err
+	}
+	if err := f.Accept.validate(); err != nil {
 		return Issue{}, nil, err
 	}
 	if len(f.Discovered) > MaxDiscovered {
@@ -135,8 +152,17 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 			return Issue{}, nil, err
 		}
 	}
-	var out Issue
+	// The request as the client sent it, before generated IDs.
+	req := struct {
+		ID    IssueID
+		Epoch int64
+		F     Finish
+	}{id, epoch, f}
+	var out finished
 	err := s.write(ctx, actor, func(w *wtx) error {
+		if done, err := w.replay(ctx, f.IdempotencyKey, "finish", req, &out); done || err != nil {
+			return err
+		}
 		before, err := loadIssue(ctx, w.tx, id)
 		if err != nil {
 			return err
@@ -151,6 +177,11 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 		if err := checkHold(c, before, w.actor, epoch, w.now); err != nil {
 			return err
 		}
+		if !f.Accept.empty() {
+			if _, err := applyAcceptance(ctx, w, before, f.Accept); err != nil {
+				return err
+			}
+		}
 		for i, d := range f.Discovered {
 			if _, err := insertIssue(ctx, w, ids[i], d, metas[i]); err != nil {
 				return fmt.Errorf("discovered %q: %w", d.Title, err)
@@ -164,13 +195,17 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 				return err
 			}
 		}
-		out, err = closeTx(ctx, w, before, f.Reason)
-		return err
+		closed, err := closeTx(ctx, w, before, f.Reason, false)
+		if err != nil {
+			return err
+		}
+		out = finished{Issue: closed, IDs: ids}
+		return w.settle(out)
 	})
 	if err != nil {
 		return Issue{}, nil, err
 	}
-	return out, ids, nil
+	return out.Issue, out.IDs, nil
 }
 
 // HandoffIssue records a handoff note, with its fields, on an issue
@@ -180,11 +215,21 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 // ends, in_progress becomes open and the assignee is cleared. Releasing an
 // issue another principal holds is refused with a *HeldError, a stale
 // epoch with a *StaleEpochError, and a closed issue with ErrInvalid; a
-// note alone is accepted on any issue.
-func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool) (Issue, error) {
+// note alone is accepted on any issue. With an idempotency key (idem), a
+// repeat returns the first result and writes nothing.
+func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool, idem string) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
+	if err := validIdem(idem); err != nil {
+		return Issue{}, err
+	}
+	req := struct {
+		ID      IssueID
+		Epoch   int64
+		Note    HandoffNote
+		Release bool
+	}{id, epoch, h, release}
 	if err := validBody(h.Note); err != nil {
 		return Issue{}, err
 	}
@@ -193,6 +238,9 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 	}
 	var out Issue
 	err := s.write(ctx, actor, func(w *wtx) error {
+		if done, err := w.replay(ctx, idem, "handoff", req, &out); done || err != nil {
+			return err
+		}
 		before, err := loadIssue(ctx, w.tx, id)
 		if err != nil {
 			return err
@@ -217,7 +265,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 		}
 		out = before
 		if !release || (before.Status != StatusInProgress && before.Assignee == "") {
-			return nil
+			return w.settle(out)
 		}
 		status := before.Status
 		if status == StatusInProgress {
@@ -228,7 +276,10 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 			return err
 		}
 		b, a := diff(before, out)
-		return w.event(ctx, OpIssueUpdate, string(id), b, a, "")
+		if err := w.event(ctx, OpIssueUpdate, string(id), b, a); err != nil {
+			return err
+		}
+		return w.settle(out)
 	})
 	if err != nil {
 		return Issue{}, err

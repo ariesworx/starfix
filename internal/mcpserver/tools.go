@@ -2,9 +2,9 @@ package mcpserver
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/gitx"
@@ -46,12 +46,12 @@ type LimitIn struct {
 type ListIn struct {
 	Status   []string `json:"status,omitempty" jsonschema:"default: not closed"`
 	Type     []string `json:"type,omitempty"`
-	Priority []int    `json:"priority,omitempty" jsonschema:"0 is highest"`
+	Priority []int    `json:"priority,omitempty" jsonschema:"0 highest"`
 	Assignee string   `json:"assignee,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	Labels   []string `json:"labels,omitempty" jsonschema:"must have all"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"default 10"`
-	Cursor   string   `json:"cursor,omitempty" jsonschema:"previous page's next"`
+	Cursor   string   `json:"cursor,omitempty" jsonschema:"a page's next"`
 }
 
 // CreateIn creates an issue.
@@ -59,7 +59,7 @@ type CreateIn struct {
 	Title      string   `json:"title"`
 	Body       string   `json:"body,omitempty"`
 	Type       string   `json:"type,omitempty" jsonschema:"default task"`
-	Priority   *int     `json:"priority,omitempty" jsonschema:"0 is highest; default 2"`
+	Priority   *int     `json:"priority,omitempty" jsonschema:"0 highest; default 2"`
 	Parent     string   `json:"parent,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
 	Assignee   string   `json:"assignee,omitempty"`
@@ -70,21 +70,38 @@ type CreateIn struct {
 }
 
 // prepare gives the call its idempotency key before the first attempt, so
-// a retry on a new connection returns the first attempt's issue instead of
-// creating a second.
-func (in *CreateIn) prepare() error {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Errorf("idempotency key: %w", err)
+// a retry on a new connection returns the first attempt's result instead
+// of writing twice. The comment, handoff and finish inputs do the same.
+func (in *CreateIn) prepare() (err error) {
+	in.idem, err = proto.NewIdem("mcp")
+	return err
+}
+
+func (in *CommentIn) prepare() (err error) {
+	in.idem, err = proto.NewIdem("mcp")
+	return err
+}
+
+func (in *HandoffIn) prepare() (err error) {
+	in.idem, err = proto.NewIdem("mcp")
+	return err
+}
+
+// prepare also checks waived's keys, which the schema leaves as strings.
+func (in *FinishIn) prepare() (err error) {
+	for k := range in.Waived {
+		if n, err := strconv.Atoi(k); err != nil || n < 1 || strconv.Itoa(n) != k {
+			return proto.Errf(proto.CodeInvalid, "", fmt.Sprintf("waived key %q is not an acceptance item number", k))
+		}
 	}
-	in.idem = "mcp-" + hex.EncodeToString(b[:])
-	return nil
+	in.idem, err = proto.NewIdem("mcp")
+	return err
 }
 
 // UpdateIn changes the fields given.
 type UpdateIn struct {
 	ID         string  `json:"id"`
-	Rev        int64   `json:"rev,omitempty" jsonschema:"rev you read; refused if stale. Default current"`
+	Rev        int64   `json:"rev,omitempty" jsonschema:"refused if stale; default current"`
 	Title      *string `json:"title,omitempty"`
 	Body       *string `json:"body,omitempty"`
 	Design     *string `json:"design,omitempty"`
@@ -102,13 +119,13 @@ type UpdateIn struct {
 type CloseIn struct {
 	ID     string `json:"id"`
 	Reason string `json:"reason,omitempty" jsonschema:"what was done"`
-	Rev    int64  `json:"rev,omitempty" jsonschema:"refused if changed since"`
+	Rev    int64  `json:"rev,omitempty" jsonschema:"refused if stale"`
 }
 
 // ReopenIn reopens an issue.
 type ReopenIn struct {
 	ID  string `json:"id"`
-	Rev int64  `json:"rev,omitempty" jsonschema:"refused if changed since"`
+	Rev int64  `json:"rev,omitempty" jsonschema:"refused if stale"`
 }
 
 // DepIn adds or removes an edge.
@@ -130,12 +147,14 @@ type LabelIn struct {
 type CommentIn struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`
+
+	idem string
 }
 
 // PageIn names an issue and bounds a list of its records.
 type PageIn struct {
 	ID    string `json:"id"`
-	Limit int    `json:"limit,omitempty" jsonschema:"newest; default 10"`
+	Limit int    `json:"limit,omitempty" jsonschema:"default 10"`
 }
 
 // StartIn takes an issue.
@@ -145,11 +164,15 @@ type StartIn struct {
 
 // FinishIn closes an issue with what the next person needs.
 type FinishIn struct {
-	ID         string         `json:"id"`
-	Reason     string         `json:"reason,omitempty" jsonschema:"what was done"`
-	Handoff    string         `json:"handoff,omitempty"`
-	Discovered []DiscoveredIn `json:"discovered,omitempty"`
+	ID         string            `json:"id"`
+	Reason     string            `json:"reason,omitempty" jsonschema:"what was done"`
+	Handoff    string            `json:"handoff,omitempty"`
+	Discovered []DiscoveredIn    `json:"discovered,omitempty"`
+	Ticked     []int             `json:"ticked,omitempty"`
+	Waived     map[string]string `json:"waived,omitempty" jsonschema:"item: reason"`
 	HandoffFieldsIn
+
+	idem string
 }
 
 // HandoffFieldsIn are a handoff's structured fields. The worktree field
@@ -179,11 +202,13 @@ type HandoffIn struct {
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty" jsonschema:"let others start it"`
 	HandoffFieldsIn
+
+	idem string
 }
 
 // DigestIn selects a digest.
 type DigestIn struct {
-	Since string `json:"since,omitempty" jsonschema:"24h, 7d or a time; default 24h"`
+	Since string `json:"since,omitempty" jsonschema:"24h, 7d or a time"`
 	By    string `json:"by,omitempty" jsonschema:"principal"`
 	Label string `json:"label,omitempty"`
 }
@@ -197,14 +222,17 @@ type WhoIn struct {
 
 // Started is the issue start took, with what working on it needs.
 type Started struct {
-	ID         string   `json:"id"`
-	Rev        int64    `json:"rev"`
-	Title      string   `json:"title"`
-	Type       string   `json:"type"`
-	Priority   int      `json:"priority"`
-	Body       string   `json:"body,omitempty"`
-	Acceptance string   `json:"acceptance,omitempty"`
-	Handoff    *Handoff `json:"handoff,omitempty"`
+	ID         string `json:"id"`
+	Rev        int64  `json:"rev"`
+	Title      string `json:"title"`
+	Type       string `json:"type"`
+	Priority   int    `json:"priority"`
+	Body       string `json:"body,omitempty"`
+	Acceptance string `json:"acceptance,omitempty"`
+	// Items are the acceptance criteria, "N [x] text"; finish ticks
+	// them. They replace Acceptance when the server lists them.
+	Items   []string `json:"items,omitempty"`
+	Handoff *Handoff `json:"handoff,omitempty"`
 	// Branch is the suggested git branch; start does not create it.
 	Branch string `json:"branch"`
 	// Truncated: long text was cut; show with full: true has it all.
@@ -260,10 +288,52 @@ type Issue struct {
 	Acceptance  string   `json:"acceptance,omitempty"`
 	Notes       string   `json:"notes,omitempty"`
 	CloseReason string   `json:"close_reason,omitempty"`
+	Items       []string `json:"items,omitempty"`
 	DependsOn   []string `json:"depends_on,omitempty"`
 	NeededBy    []string `json:"needed_by,omitempty"`
+	// Similar names similar closed issues: "ID title; ID title".
+	Similar string `json:"similar,omitempty"`
 	// Truncated: long text was cut; full: true returns more.
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// Created is create's result: the write's {id, rev} and similar closed
+// issues in one line.
+type Created struct {
+	ID      string `json:"id"`
+	Rev     int64  `json:"rev"`
+	Similar string `json:"similar,omitempty"`
+}
+
+// maxItemText is how much of each acceptance item start and show give.
+const maxItemText = 300
+
+// itemLines renders acceptance items one line each: "1 [x] text",
+// "2 [ ] text", "3 [waived: reason] text".
+func itemLines(items []proto.AcceptanceItem) []string {
+	var out []string
+	for _, it := range items {
+		mark := " "
+		switch it.State {
+		case "ticked":
+			mark = "x"
+		case "waived":
+			mark = "waived: " + it.Reason
+		}
+		t, _ := cut(it.Text, maxItemText)
+		out = append(out, fmt.Sprintf("%d [%s] %s", it.N, mark, t))
+	}
+	return out
+}
+
+// similarLine names similar issues in one line: "ID title; ID title".
+func similarLine(sim []proto.Summary) string {
+	parts := make([]string, len(sim))
+	for i, x := range sim {
+		t, _ := cut(x.Title, primeTitleLen)
+		parts[i] = x.ID + " " + t
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Comment is one comment, compact.
@@ -351,7 +421,7 @@ func (s *Server) register() {
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
 			return BuildPrime(ctx, c, s.opts.Version)
 		})
-	add(s, tool{name: "inbox", desc: "Unread lost claims, handoffs, mentions, assignments; ack marks ids read.", ann: idem, retry: true,
+	add(s, tool{name: "inbox", desc: "Lost claims, handoffs, mentions, assignments; ack marks read.", ann: idem, retry: true,
 		showsInbox: true},
 		func(ctx context.Context, c Conn, in InboxIn) (Inbox, error) { return inbox(ctx, c, in) })
 	add(s, tool{name: "start", desc: "Take an issue (default: top ready); returns it, its handoff and a branch.", ann: write},
@@ -362,11 +432,18 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "finish", desc: "Close your issue with a handoff note and new work found.", ann: write,
+	add(s, tool{name: "finish", desc: "Close your issue: tick items, hand off, file new work.", ann: write, retry: true,
 		enums: enums{"discovered.type": issueTypes, "state": states}},
 		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
 			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff,
-				HandoffFields: in.wire()}
+				HandoffFields: in.wire(), Ticked: in.Ticked, Idem: in.idem}
+			for k, r := range in.Waived {
+				n, _ := strconv.Atoi(k) // checked by prepare
+				if args.Waived == nil {
+					args.Waived = map[int]string{}
+				}
+				args.Waived[n] = r
+			}
 			for _, d := range in.Discovered {
 				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
 			}
@@ -377,11 +454,11 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write,
+	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write, retry: true,
 		enums: enums{"state": states}},
 		func(ctx context.Context, c Conn, in HandoffIn) (proto.WriteResult, error) {
 			var out proto.WriteResult
-			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release, HandoffFields: in.wire()}
+			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release, HandoffFields: in.wire(), Idem: in.idem}
 			if in.Release {
 				args.Epoch = s.claims.epoch(in.ID)
 			}
@@ -436,11 +513,12 @@ func (s *Server) register() {
 	add(s, tool{name: "show", desc: "One issue with its dependencies.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in ShowIn) (Issue, error) { return show(ctx, c, in) })
 	add(s, tool{name: "create", desc: "Create an issue.", ann: write, retry: true, enums: enums{"type": issueTypes}},
-		func(ctx context.Context, c Conn, in CreateIn) (proto.WriteResult, error) {
+		func(ctx context.Context, c Conn, in CreateIn) (Created, error) {
 			args := proto.CreateArgs{Idem: in.idem, Title: in.Title, Body: in.Body, Type: in.Type, Priority: in.Priority,
 				Parent: in.Parent, Labels: in.Labels, Assignee: in.Assignee, Design: in.Design, Acceptance: in.Acceptance}
-			var out proto.WriteResult
-			return out, c.Call(ctx, proto.OpCreate, args, &out)
+			var r proto.CreateResult
+			err := c.Call(ctx, proto.OpCreate, args, &r)
+			return Created{ID: r.ID, Rev: r.Rev, Similar: similarLine(r.Similar)}, err
 		})
 	add(s, tool{name: "update", desc: "Change the fields given.", ann: write,
 		enums: enums{"status": openStatuses, "type": issueTypes}},
@@ -455,7 +533,7 @@ func (s *Server) register() {
 			var out proto.WriteResult
 			return out, c.Call(ctx, proto.OpReopen, proto.ReopenArgs{ID: in.ID, Rev: in.Rev}, &out)
 		})
-	add(s, tool{name: "dep", desc: "Add or remove: id depends on depends_on. blocks keeps id out of ready.", ann: idem,
+	add(s, tool{name: "dep", desc: "id depends on depends_on; blocks keeps id out of ready.", ann: idem,
 		enums: enums{"action": actions, "type": depTypes}},
 		func(ctx context.Context, c Conn, in DepIn) (Ref, error) {
 			op := proto.OpDepAdd
@@ -480,10 +558,10 @@ func (s *Server) register() {
 			}
 			return Ref{ID: in.ID}, nil
 		})
-	add(s, tool{name: "comment", desc: "Comment: what changed, was decided or verified.", ann: write},
+	add(s, tool{name: "comment", desc: "What changed, was decided or verified.", ann: write, retry: true},
 		func(ctx context.Context, c Conn, in CommentIn) (Ref, error) {
 			var out proto.CommentResult
-			err := c.Call(ctx, proto.OpComment, proto.CommentArgs{ID: in.ID, Body: in.Body}, &out)
+			err := c.Call(ctx, proto.OpComment, proto.CommentArgs{ID: in.ID, Body: in.Body, Idem: in.idem}, &out)
 			return Ref{ID: out.ID}, err
 		})
 	add(s, tool{name: "comments", desc: "An issue's newest comments.", ann: readOnly, retry: true},
@@ -526,7 +604,10 @@ func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 	}
 	is := r.Issue
 	out := Started{ID: is.ID, Rev: is.Rev, Title: is.Title, Type: is.Type, Priority: is.Priority, Body: is.Body,
-		Acceptance: is.Acceptance, Branch: gitx.Branch(is.Type, is.ID, is.Title)}
+		Acceptance: is.Acceptance, Items: itemLines(r.Items), Branch: gitx.Branch(is.Type, is.ID, is.Title)}
+	if len(out.Items) > 0 {
+		out.Acceptance = ""
+	}
 	fields := []*string{&out.Body, &out.Acceptance}
 	if h := r.Handoff; h != nil {
 		out.Handoff = &Handoff{By: h.Author, At: stamp(h.CreatedAt), Note: h.Body, State: h.State, Next: h.Next,
@@ -549,7 +630,11 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	is := r.Issue
 	out := Issue{ID: is.ID, Title: is.Title, Status: is.Status, Priority: is.Priority, Type: is.Type, Rev: is.Rev,
 		Parent: is.ParentID, Assignee: is.Assignee, Owner: is.Owner, Labels: is.Labels, Body: is.Body,
-		Design: is.Design, Acceptance: is.Acceptance, Notes: is.Notes, CloseReason: is.CloseReason, Truncated: is.Truncated}
+		Design: is.Design, Acceptance: is.Acceptance, Notes: is.Notes, CloseReason: is.CloseReason, Truncated: is.Truncated,
+		Items: itemLines(r.Items), Similar: similarLine(r.Similar)}
+	if len(out.Items) > 0 {
+		out.Acceptance = ""
+	}
 	for _, d := range r.Deps {
 		if d.From == is.ID {
 			out.DependsOn = append(out.DependsOn, d.To+" "+d.Type)

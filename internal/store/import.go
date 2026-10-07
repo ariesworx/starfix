@@ -266,7 +266,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 					return err
 				}
 				b, a := diff(before, after)
-				if err := w.event(ctx, OpIssueImport, string(in.ID), b, a, ""); err != nil {
+				if err := w.event(ctx, OpIssueImport, string(in.ID), b, a); err != nil {
 					return err
 				}
 			}
@@ -277,7 +277,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 				return fmt.Errorf("insert label: %w", err)
 			}
 			if res.Outcome != ImportCreated {
-				if err := w.event(ctx, OpLabelAdd, string(in.ID), nil, map[string]string{"label": l}, ""); err != nil {
+				if err := w.event(ctx, OpLabelAdd, string(in.ID), nil, map[string]string{"label": l}); err != nil {
 					return err
 				}
 			}
@@ -288,7 +288,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 			if err != nil {
 				return err
 			}
-			return w.event(ctx, OpIssueImport, string(in.ID), nil, after, "")
+			return w.event(ctx, OpIssueImport, string(in.ID), nil, after)
 		}
 		return nil
 	})
@@ -380,7 +380,7 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
   VALUES (?, ?, ?, ?, ?, ?, 1, ?)`, string(d.From), string(d.To), string(d.Type), meta, d.CreatedBy, d.CreatedAt, wid); err != nil {
 			return fmt.Errorf("insert dep: %w", err)
 		}
-		return w.event(ctx, OpDepAdd, string(d.From), nil, d, "")
+		return w.event(ctx, OpDepAdd, string(d.From), nil, d)
 	})
 	if err != nil {
 		return "", err
@@ -455,7 +455,7 @@ func (s *Store) ImportComment(ctx context.Context, actor Actor, c Comment) (Impo
   VALUES (?, ?, ?, ?, ?, ?)`, c.ID, string(c.Issue), c.Author, c.Session, c.Body, c.CreatedAt); err != nil {
 			return fmt.Errorf("insert comment: %w", err)
 		}
-		return w.event(ctx, OpCommentAdd, string(c.Issue), nil, c, "")
+		return w.event(ctx, OpCommentAdd, string(c.Issue), nil, c)
 	})
 	if err != nil {
 		return "", err

@@ -144,7 +144,7 @@ func TestInboxKinds(t *testing.T) {
 				register(t, s, bob)
 				is := mustCreate(t, s, NewIssue{Title: "work"})
 				if _, err := s.AddComment(t.Context(), alice, is.ID,
-					"@bob, take a look. cc @carol (not known), alice@example.com and @alice; again @bob."); err != nil {
+					"@bob, take a look. cc @carol (not known), alice@example.com and @alice; again @bob.", ""); err != nil {
 					t.Fatal(err)
 				}
 				return is.ID
@@ -159,7 +159,7 @@ func TestInboxKinds(t *testing.T) {
 				is := mustCreate(t, s, NewIssue{Title: "work"})
 				mustStart(t, s, alice, is.ID)
 				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0,
-					HandoffNote{Note: "over to @bob, ask @carol", HandoffFields: HandoffFields{To: "bob"}}, true); err != nil {
+					HandoffNote{Note: "over to @bob, ask @carol", HandoffFields: HandoffFields{To: "bob"}}, true, ""); err != nil {
 					t.Fatal(err)
 				}
 				return is.ID
@@ -186,7 +186,7 @@ func TestInboxKinds(t *testing.T) {
 			do: func(t *testing.T, s *Store, _ *clock) IssueID {
 				is := mustCreate(t, s, NewIssue{Title: "work"})
 				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0,
-					HandoffNote{Note: "note to self", HandoffFields: HandoffFields{To: "alice"}}, false); err != nil {
+					HandoffNote{Note: "note to self", HandoffFields: HandoffFields{To: "alice"}}, false, ""); err != nil {
 					t.Fatal(err)
 				}
 				return is.ID
@@ -237,7 +237,7 @@ func TestInboxRollsBackWithItsCause(t *testing.T) {
 	}
 	// A comment whose transaction fails at commit leaves no mention.
 	s.beforeCommit = func(context.Context) error { return errors.New("injected commit failure") }
-	_, err = s.AddComment(ctx, alice, is.ID, "@bob look")
+	_, err = s.AddComment(ctx, alice, is.ID, "@bob look", "")
 	s.beforeCommit = nil
 	if err == nil {
 		t.Fatal("AddComment with a failing commit succeeded")
@@ -270,7 +270,7 @@ func TestInboxListAndAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.add(time.Second)
-	if _, err := s.AddComment(ctx, bob, b.ID, "@alice "+strings.Repeat("long ", 100)); err != nil {
+	if _, err := s.AddComment(ctx, bob, b.ID, "@alice "+strings.Repeat("long ", 100), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -359,7 +359,7 @@ func TestWatch(t *testing.T) {
 	defer wa.Close()
 
 	is := mustCreate(t, s, NewIssue{Title: "work"})
-	if _, err := s.AddComment(ctx, alice, is.ID, "@bob one"); err != nil {
+	if _, err := s.AddComment(ctx, alice, is.ID, "@bob one", ""); err != nil {
 		t.Fatal(err)
 	}
 	<-wb.Ready()
@@ -376,7 +376,7 @@ func TestWatch(t *testing.T) {
 	// More items than the queue holds: the watch says it overflowed, once,
 	// and gets nothing more until replaced.
 	for range WatchQueue + 1 {
-		if _, err := s.AddComment(ctx, alice, is.ID, "@bob again"); err != nil {
+		if _, err := s.AddComment(ctx, alice, is.ID, "@bob again", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -384,7 +384,7 @@ func TestWatch(t *testing.T) {
 	if got, over := wb.Take(); !over || len(got) != 0 {
 		t.Fatalf("Take() after overflow = %d items, overflow %v; want none and true", len(got), over)
 	}
-	if _, err := s.AddComment(ctx, alice, is.ID, "@bob after"); err != nil {
+	if _, err := s.AddComment(ctx, alice, is.ID, "@bob after", ""); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -395,7 +395,7 @@ func TestWatch(t *testing.T) {
 	}
 	w2 := s.Watch("bob", "other-session")
 	defer w2.Close()
-	if _, err := s.AddComment(ctx, alice, is.ID, "@bob fresh"); err != nil {
+	if _, err := s.AddComment(ctx, alice, is.ID, "@bob fresh", ""); err != nil {
 		t.Fatal(err)
 	}
 	<-w2.Ready()
@@ -403,7 +403,7 @@ func TestWatch(t *testing.T) {
 		t.Fatalf("a new watch Take() = %+v, %v; want one item", got, over)
 	}
 	w2.Close()
-	if _, err := s.AddComment(ctx, alice, is.ID, "@bob closed"); err != nil {
+	if _, err := s.AddComment(ctx, alice, is.ID, "@bob closed", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := w2.Take(); len(got) != 0 {
@@ -420,7 +420,7 @@ func TestStructuredHandoff(t *testing.T) {
 	mustStart(t, s, alice, is.ID)
 	f := HandoffFields{State: HandoffPartial, Next: "wire the CLI", Branch: "feature/tst-ab12-work",
 		Worktree: "/home/alice/src/work", To: "bob"}
-	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "half done", HandoffFields: f}, false); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "half done", HandoffFields: f}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	h, err := s.LastHandoff(ctx, is.ID)
@@ -428,7 +428,7 @@ func TestStructuredHandoff(t *testing.T) {
 		t.Fatalf("LastHandoff = %+v, %v; want the note with %+v", h, err, f)
 	}
 	// A later plain handoff has no fields of its own.
-	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "later"}, false); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "later"}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if h, err := s.LastHandoff(ctx, is.ID); err != nil || h.Body != "later" || h.HandoffFields != (HandoffFields{}) {
@@ -453,7 +453,7 @@ func TestStructuredHandoff(t *testing.T) {
 	}
 	seq := lastSeq(t, s)
 	for _, tc := range bad {
-		if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, tc.h, false); !errors.Is(err, ErrInvalid) {
+		if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, tc.h, false, ""); !errors.Is(err, ErrInvalid) {
 			t.Errorf("HandoffIssue(%s) = %v, want ErrInvalid", tc.name, err)
 		}
 		if _, _, err := s.FinishIssue(ctx, alice, is.ID, 0, Finish{Handoff: tc.h}); !errors.Is(err, ErrInvalid) {

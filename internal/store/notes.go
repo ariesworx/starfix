@@ -24,7 +24,7 @@ func (s *Store) AddLabel(ctx context.Context, actor Actor, id IssueID, label str
 		if n == 0 {
 			return nil
 		}
-		return w.event(ctx, OpLabelAdd, string(id), nil, map[string]string{"label": label}, "")
+		return w.event(ctx, OpLabelAdd, string(id), nil, map[string]string{"label": label})
 	})
 }
 
@@ -42,7 +42,7 @@ func (s *Store) RemoveLabel(ctx context.Context, actor Actor, id IssueID, label 
 		if n == 0 {
 			return nil
 		}
-		return w.event(ctx, OpLabelRemove, string(id), map[string]string{"label": label}, nil, "")
+		return w.event(ctx, OpLabelRemove, string(id), map[string]string{"label": label}, nil)
 	})
 }
 
@@ -54,21 +54,34 @@ func labelArgs(id IssueID, label string) error {
 }
 
 // AddComment appends a comment, authored by the actor, and tells the
-// principals it mentions (@name).
-func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body string) (Comment, error) {
+// principals it mentions (@name). With an idempotency key (idem), a repeat
+// returns the first comment and writes nothing.
+func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, idem string) (Comment, error) {
 	if err := id.Validate(); err != nil {
 		return Comment{}, err
 	}
 	if err := validBody(body); err != nil {
 		return Comment{}, err
 	}
+	if err := validIdem(idem); err != nil {
+		return Comment{}, err
+	}
 	var c Comment
 	err := s.write(ctx, actor, func(w *wtx) error {
+		if done, err := w.replay(ctx, idem, "comment", struct {
+			ID   IssueID
+			Body string
+		}{id, body}, &c); done || err != nil {
+			return err
+		}
 		if err := mustExist(ctx, w.tx, id); err != nil {
 			return err
 		}
 		var err error
 		if c, err = insertComment(ctx, w, id, body, CommentPlain); err != nil {
+			return err
+		}
+		if err := w.settle(c); err != nil {
 			return err
 		}
 		return w.notifyMentions(ctx, id, body)
@@ -126,7 +139,7 @@ func insertNote(ctx context.Context, w *wtx, id IssueID, body string, kind Comme
 			Handoff HandoffFields `json:"handoff"`
 		}{c, f}
 	}
-	return c, w.event(ctx, OpCommentAdd, string(id), nil, after, "")
+	return c, w.event(ctx, OpCommentAdd, string(id), nil, after)
 }
 
 // Comments returns an issue's comments, oldest first.

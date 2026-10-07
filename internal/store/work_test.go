@@ -249,14 +249,14 @@ func TestHandoff(t *testing.T) {
 	}
 
 	// A note alone changes nothing about who holds the issue; anyone may add one.
-	got, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "first"}, false)
+	got, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "first"}, false, "")
 	if err != nil || got.Rev != 2 || got.Assignee != "alice" {
 		t.Fatalf("note: %+v, %v", got, err)
 	}
-	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "mine now"}, true); !errors.Is(err, ErrConflict) {
+	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "mine now"}, true, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("release by a non-holder: %v", err)
 	}
-	got, err = s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "second"}, true)
+	got, err = s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "second"}, true, "")
 	if err != nil || got.Status != StatusOpen || got.Assignee != "" || got.Rev != 3 {
 		t.Fatalf("release: %+v, %v", got, err)
 	}
@@ -268,7 +268,7 @@ func TestHandoff(t *testing.T) {
 		t.Fatalf("start after release: %+v, %v", got, err)
 	}
 
-	if _, err := s.AddComment(ctx, alice, is.ID, "plain"); err != nil {
+	if _, err := s.AddComment(ctx, alice, is.ID, "plain", ""); err != nil {
 		t.Fatal(err)
 	}
 	cs, err := s.Comments(ctx, is.ID)
@@ -292,12 +292,12 @@ func TestHandoff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: tc.note}, tc.release); !errors.Is(err, tc.want) {
+			if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: tc.note}, tc.release, ""); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "after close"}, false); err != nil {
+	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "after close"}, false, ""); err != nil {
 		t.Errorf("note on a closed issue: %v", err)
 	}
 	assertGapless(t, s)
