@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/client"
+	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -32,6 +32,8 @@ type Env struct {
 	Stdout, Stderr io.Writer
 	Getenv         func(string) string
 	Hostname       func() (string, error)
+	// UserHomeDir is used only by `setup --global`. Default os.UserHomeDir.
+	UserHomeDir func() (string, error)
 	// Version is this binary's build version.
 	Version string
 }
@@ -69,6 +71,9 @@ func init() {
 		{"comment", "comment ID TEXT...|-", "add a comment", cmdComment},
 		{"comments", "comments ID", "list an issue's comments", cmdComments},
 		{"history", "history ID", "list an issue's changes", cmdHistory},
+		{"prime", "prime", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
+		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
+		{"setup", "setup claude-code|codex|gemini [--write|--check|--remove] [--global] [--command PATH]", "register starfix mcp with an agent", cmdSetup},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
 }
@@ -88,7 +93,7 @@ type runner struct {
 	env  Env
 	json bool
 	dir  string
-	conn *client.Conn
+	conn *mcpserver.RepoConn
 }
 
 // Run executes one starfix command line (without the program name) and
@@ -99,6 +104,9 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.Hostname == nil {
 		env.Hostname = os.Hostname
+	}
+	if env.UserHomeDir == nil {
+		env.UserHomeDir = os.UserHomeDir
 	}
 	if env.Stdin == nil {
 		env.Stdin = strings.NewReader("")
@@ -218,27 +226,11 @@ func (r *runner) emit(v any) {
 }
 
 // connect dials the server on first use.
-func (r *runner) connect(ctx context.Context) (*client.Conn, error) {
+func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 	if r.conn != nil {
 		return r.conn, nil
 	}
-	cfg, err := client.LoadConfig(r.dir)
-	if err != nil {
-		var pe *proto.Error
-		if errors.As(err, &pe) {
-			return nil, err
-		}
-		return nil, proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
-	}
-	host, err := r.env.Hostname()
-	if err != nil || host == "" {
-		host = "unknown"
-	}
-	session := r.env.Getenv("STARFIX_SESSION")
-	if session == "" {
-		session = r.env.Getenv("CLAUDE_SESSION_ID")
-	}
-	c, err := client.Dial(ctx, cfg, client.Options{Version: r.env.Version, Session: session, Machine: host, Getenv: r.env.Getenv})
+	c, err := mcpserver.DialRepo(ctx, r.dir, r.clientOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +239,16 @@ func (r *runner) connect(ctx context.Context) (*client.Conn, error) {
 	}
 	r.conn = c
 	return c, nil
+}
+
+// clientOptions describe this machine and session to the server.
+func (r *runner) clientOptions() client.Options {
+	host, err := r.env.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	return client.Options{Version: r.env.Version, Session: client.SessionFromEnv(r.env.Getenv),
+		Machine: host, Getenv: r.env.Getenv}
 }
 
 // call runs one operation.
@@ -324,13 +326,4 @@ func priority(s string) (int, error) {
 		return 0, errors.New("priority must be 0-4 (or P0-P4)")
 	}
 	return int(s[0] - '0'), nil
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

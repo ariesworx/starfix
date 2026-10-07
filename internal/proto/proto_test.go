@@ -186,3 +186,35 @@ func TestErrorString(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestOlderServerWarning(t *testing.T) {
+	tests := []struct{ server, latest, want string }{
+		{"v0.1.0", "v0.2.0", "the server runs starfixd v0.1.0; v0.2.0 is out: ask the admin to run `starfixd upgrade`"},
+		{"v0.2.0", "v0.2.0", ""},
+		{"v0.2.0", "", ""},
+		{"dev", "v0.2.0", ""},
+	}
+	for _, tc := range tests {
+		if got := OlderServerWarning(tc.server, tc.latest); got != tc.want {
+			t.Errorf("(%s, %s) = %q, want %q", tc.server, tc.latest, got, tc.want)
+		}
+	}
+}
+
+func TestEventChanged(t *testing.T) {
+	tests := []struct {
+		e    Event
+		want string
+	}{
+		{Event{Op: "issue.update", Before: json.RawMessage(`{"title":"a"}`), After: json.RawMessage(`{"title":"b","assignee":"x"}`)}, "assignee, title"},
+		{Event{Op: "label.add", After: json.RawMessage(`{"label":"docs"}`)}, "docs"},
+		{Event{Op: "dep.remove", Before: json.RawMessage(`{"type":"blocks","to":"sf-b"}`)}, "blocks sf-b"},
+		{Event{Op: "issue.create", After: json.RawMessage(`{"title":"Ship"}`)}, `"Ship"`},
+		{Event{Op: "comment.add"}, ""},
+	}
+	for _, tc := range tests {
+		if got := tc.e.Changed(); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.e.Op, got, tc.want)
+		}
+	}
+}

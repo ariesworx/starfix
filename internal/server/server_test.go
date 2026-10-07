@@ -292,7 +292,7 @@ func TestHandshake(t *testing.T) {
 				t.Fatalf("welcome: %+v", f)
 			}
 			if tc.code == "" {
-				if f.Err != nil || !strings.HasPrefix(f.Session, tc.session) {
+				if f.Err != nil || !strings.HasPrefix(f.Session, tc.session) || f.Principal != "alice" {
 					t.Fatalf("welcome: %+v (err %v)", f, f.Err)
 				}
 				return

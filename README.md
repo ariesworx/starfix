@@ -11,10 +11,9 @@ from the command line. It is written in Go and stores its data in
 The repository also holds the design for **Bearings**, an orchestrator that runs
 and supervises many agents on top of starfix.
 
-> **Status: stage 1 of 7 done.** Issues work end to end over SSH, and bd
-> backlogs import and export. Stage 2 (the MCP server for agents) is in
-> progress; claims, memory and the offline cache follow. Not ready for
-> production use.
+> **Status: stage 2 of 7 in progress.** Issues work end to end over SSH, bd
+> backlogs import and export, and agents use starfix through MCP. Claims,
+> memory and the offline cache follow. Not ready for production use.
 
 ## Why starfix
 
@@ -58,7 +57,7 @@ and supervises many agents on top of starfix.
 
 | Binary | Runs on | Purpose | Status |
 |---|---|---|---|
-| `starfix` | Linux, macOS, Windows | CLI for people; MCP server for agents | CLI built; MCP in stage 2 |
+| `starfix` | Linux, macOS, Windows | CLI for people; MCP server for agents | Built |
 | `starfixd` | Linux (Windows via WSL2) | Server daemon and sshd bridge | Built |
 | `bearings`, `bearingsd` | Linux, macOS (Windows via WSL2) | Agent orchestrator | Design ([spec](docs/design/bearings.md)) |
 
@@ -152,6 +151,9 @@ command's usage; `--json` prints one JSON document, errors included.
 | `label` | Add or remove labels |
 | `comment`, `comments` | Add a comment; list an issue's comments |
 | `history` | List an issue's changes |
+| `prime` | A session's orientation: your in-progress issues, top ready work, version notices |
+| `mcp` | The MCP server for agents, on stdin and stdout |
+| `setup AGENT` | Register `starfix mcp` with `claude-code`, `codex` or `gemini` |
 | `version` | Print the version |
 
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
@@ -171,13 +173,50 @@ Settings come from flags, then `STARFIXD_*` environment variables, then
 `/etc/starfix/starfixd.yaml`, then defaults. A password is refused on the
 command line, and a config file that holds one must be mode 0600.
 
+## Agents
+
+Agents use starfix through MCP; they never need a shell. Register the
+server once per repository and commit the file it writes:
+
+```sh
+starfix setup claude-code           # print the snippet and where it goes
+starfix setup claude-code --write   # write .mcp.json; safe to rerun
+starfix setup codex --write         # .codex/config.toml
+starfix setup gemini --write        # .gemini/settings.json
+starfix setup codex --check         # fails, with a fix, if it is missing
+```
+
+`--global` edits the config in your home directory instead; nothing
+outside the repository is touched without it. `--command PATH` sets how
+the agent runs starfix when it is not on PATH.
+
+The tools are `prime`, `ready`, `blocked`, `list`, `show`, `create`,
+`update`, `close`, `reopen`, `dep`, `label`, `comment`, `comments` and
+`history`; there are no admin tools. Results are compact (writes return
+`{id, rev}`, lists return id, title, status and priority) and capped at
+about 2,000 tokens, prime at 1,500. A refusal is a tool error with the
+server's code and message and a `fix:` line naming the agent's next step.
+
+The server knows who you are from your SSH key. The session id comes from
+the agent's environment:
+
+| Agent | Session id |
+|---|---|
+| Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
+| Codex, Gemini CLI | none set; `starfix mcp` picks one per process (`m-…`) |
+| any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
+
+One SSH connection serves an MCP session. It opens on the first tool call
+and is redialed if it drops; reads and creates are retried on the new
+connection, and other writes report that they may have applied.
+
 ## Roadmap
 
 | Stage | Delivers | State |
 |---|---|---|
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
-| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress |
+| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup` built) |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
 | 4 | Team and personal memory with tags; prices and `starfix cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
@@ -216,6 +255,7 @@ GOOS=windows go build ./cmd/...   # the client must build on every developer OS
 | `internal/server` | Daemon, socket, bridge, settings |
 | `internal/client`, `internal/cli` | SSH client, config discovery, CLI commands |
 | `internal/bdimport` | bd JSONL import and export |
+| `internal/mcpserver`, `internal/agentsetup` | MCP tools and `prime`; agent registration |
 | `internal/e2e` | End-to-end tests through an in-process SSH server |
 | `spike/dolt` | Stage 0 experiments (not built into the binaries) |
 | `docs/design` | Design documents |

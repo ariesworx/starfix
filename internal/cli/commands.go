@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -553,39 +552,9 @@ func cmdHistory(ctx context.Context, r *runner, args []string) error {
 	}
 	tw := tabwriter.NewWriter(r.env.Stdout, 0, 0, 2, ' ', 0)
 	for _, e := range out.Events {
-		_, _ = fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", e.Seq, when(e.At), e.Principal, e.Op, changed(e))
+		_, _ = fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", e.Seq, when(e.At), e.Principal, e.Op, e.Changed())
 	}
 	return tw.Flush()
-}
-
-// changed summarizes an event: the fields an update touched, the label, or
-// the edge.
-func changed(e proto.Event) string {
-	var before, after map[string]any
-	_ = json.Unmarshal(e.Before, &before)
-	_ = json.Unmarshal(e.After, &after)
-	pick := after
-	if pick == nil {
-		pick = before
-	}
-	switch e.Op {
-	case "issue.update", "issue.close", "issue.reopen":
-		keys := map[string]any{}
-		for k := range before {
-			keys[k] = nil
-		}
-		for k := range after {
-			keys[k] = nil
-		}
-		return strings.Join(sortedKeys(keys), ", ")
-	case "label.add", "label.remove":
-		return fmt.Sprint(pick["label"])
-	case "dep.add", "dep.remove":
-		return fmt.Sprintf("%v %v", pick["type"], pick["to"])
-	case "issue.create":
-		return fmt.Sprintf("%q", pick["title"])
-	}
-	return ""
 }
 
 func cmdVersion(_ context.Context, r *runner, _ []string) error {

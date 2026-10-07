@@ -209,6 +209,34 @@ func (c *Conn) lost(err error) *proto.Error {
 // Session is the session id the server recorded for this connection.
 func (c *Conn) Session() string { return c.Welcome.Session }
 
+// Principal is who the server says this key belongs to. It is empty with a
+// server older than the welcome's principal field.
+func (c *Conn) Principal() string { return c.Welcome.Principal }
+
+// Err reports why the connection can no longer be used, or nil while it
+// can. A refused request does not break the connection; a lost one does.
+func (c *Conn) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.broken
+}
+
+// Notices returns the one-line version notices for an agent or person: this
+// client older than the server, and the server older than the latest
+// release it knows of.
+func (c *Conn) Notices(clientVersion string) []string {
+	var out []string
+	for _, n := range []string{
+		proto.OlderClientWarning(clientVersion, c.Welcome.Version),
+		proto.OlderServerWarning(c.Welcome.Version, c.Welcome.Latest),
+	} {
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // Warning returns a one-line notice for the person when this client is
 // older than the server, or "".
 func (c *Conn) Warning(clientVersion string) string {

@@ -114,3 +114,12 @@ func OlderClientWarning(client, server string) string {
 	}
 	return ""
 }
+
+// OlderServerWarning returns the one-line warning for a server older than
+// the latest release it knows of, or "".
+func OlderServerWarning(server, latest string) string {
+	if c, ok := CompareVersions(server, latest); ok && c < 0 {
+		return fmt.Sprintf("the server runs starfixd %s; %s is out: ask the admin to run `starfixd upgrade`", server, latest)
+	}
+	return ""
+}
