@@ -402,6 +402,8 @@ commit SHA.
 
 **Contributing with an AI agent:** [AGENTS.md](AGENTS.md) holds the rules and
 the full CI gate for any coding agent; `CLAUDE.md` and `GEMINI.md` import it.
+`go-engineer`, a test-first Go engineer and reviewer, is ready to use as a
+Claude Code, Codex or Gemini CLI subagent (AGENTS.md, Agent specifications).
 
 ## Relationship to beads
 
