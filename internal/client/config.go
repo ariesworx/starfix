@@ -39,6 +39,9 @@ type Config struct {
 		User string `yaml:"user"`
 		// HostKey is the server's pinned ED25519 fingerprint, SHA256:….
 		HostKey string `yaml:"host_key"`
+		// IAP, when set, reaches the server through Google Cloud IAP TCP
+		// forwarding instead of dialing Host directly.
+		IAP *IAP `yaml:"iap"`
 	} `yaml:"server"`
 	// Key is an optional private key file, absolute, ~/-relative, or
 	// relative to the repository root. Without it, ssh-agent is used.
@@ -47,6 +50,30 @@ type Config struct {
 	// Root is the directory holding the config file (not read from YAML).
 	Root string `yaml:"-"`
 }
+
+// IAP names the Compute Engine instance that Dial reaches through
+// Identity-Aware Proxy TCP forwarding, by running `gcloud compute
+// start-iap-tunnel`. Each field becomes an argument to gcloud, so each is
+// held to Google Cloud's own naming rules.
+//
+// There is deliberately no general proxy command: .starfix.yaml is
+// committed, so a command in it would run whatever a cloned repository
+// says. IAP is the one transport supported this way; another would be
+// added the same way, as validated names rather than a command line.
+type IAP struct {
+	// Project is the Google Cloud project id.
+	Project string `yaml:"project"`
+	// Zone is the instance's zone, such as us-central1-a.
+	Zone string `yaml:"zone"`
+	// Instance is the instance name. Default: server.host.
+	Instance string `yaml:"instance"`
+}
+
+var (
+	gcpProjectRE  = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+	gcpZoneRE     = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+-[a-z]$`)
+	gcpInstanceRE = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
+)
 
 var (
 	uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -173,6 +200,9 @@ func ParseConfig(b []byte) (*Config, error) {
 	if c.Server.User == "" {
 		c.Server.User = "starfix"
 	}
+	if c.Server.IAP != nil && c.Server.IAP.Instance == "" {
+		c.Server.IAP.Instance = c.Server.Host
+	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -193,6 +223,16 @@ func (c *Config) validate() error {
 		return errors.New("server.host_key must be the server's ED25519 fingerprint (SHA256:…, from `ssh-keyscan -t ed25519 HOST | ssh-keygen -lf -`)")
 	case strings.ContainsAny(c.Key, "\x00\n"):
 		return errors.New("key is not a file path")
+	}
+	if iap := c.Server.IAP; iap != nil {
+		switch {
+		case !gcpProjectRE.MatchString(iap.Project):
+			return fmt.Errorf("server.iap.project %q is not a Google Cloud project id", iap.Project)
+		case !gcpZoneRE.MatchString(iap.Zone):
+			return fmt.Errorf("server.iap.zone %q is not a Compute Engine zone, such as us-central1-a", iap.Zone)
+		case !gcpInstanceRE.MatchString(iap.Instance):
+			return fmt.Errorf("server.iap.instance %q is not a Compute Engine instance name (it defaults to server.host)", iap.Instance)
+		}
 	}
 	return nil
 }

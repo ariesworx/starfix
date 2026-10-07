@@ -29,7 +29,7 @@ architecture. The README's status line says which stage is in progress.
 | `internal/store/migrations` | Embedded schema migrations, `NNNN_name.sql`, numbered 1..n without gaps |
 | `internal/proto` | Wire protocol: NDJSON frames, handshake, `Op` constants, `*Args` and `*Result` types, typed errors |
 | `internal/server` | Daemon: socket, peer check, sshd bridge, dispatch of ops to the store, error mapping, settings |
-| `internal/client` | In-process SSH client with a pinned host key, `.starfix.yaml` discovery, session ids |
+| `internal/client` | In-process SSH client with a pinned host key, over TCP or a Google Cloud IAP tunnel; `.starfix.yaml` discovery, session ids |
 | `internal/safetext` | Unsafe characters (controls, bidi): the store's validation, bd import cleaning, and the escaping of everything clients print |
 | `internal/cli` | `sfx` commands; writes only to the `Env` it is given |
 | `internal/mcpserver` | MCP tools, `prime`, token budgets, agent-facing error rewording |
@@ -39,6 +39,7 @@ architecture. The README's status line says which stage is in progress.
 | `internal/release`, `internal/tools/releasekey` | Release download, signature and checksum checks, binary swap; the signing tool |
 | `internal/version` | Build version, and `Dolt`, the pinned Dolt release |
 | `internal/dolttest` | Starts a throwaway `dolt sql-server` for tests |
+| `internal/iaptest` | A fake `gcloud` for tests of the IAP transport: the test binary, re-executed from `PATH` |
 | `internal/e2e` | End-to-end tests: CLI and MCP through an in-process SSH server to a real daemon and store |
 | `spike/dolt` | Stage 0 measurements, kept as evidence; not maintained and excluded from lint |
 | `docs/design` | Design documents |

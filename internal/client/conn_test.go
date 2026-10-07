@@ -161,3 +161,35 @@ func TestLostQuotesStderrEscaped(t *testing.T) {
 		t.Errorf("lost(EOF).Message = %q, want %q", e.Message, want)
 	}
 }
+
+// capBuffer keeps the first max bytes, or with tail the last max, however
+// the writes split them, and always reports the whole write taken.
+func TestCapBuffer(t *testing.T) {
+	tests := []struct {
+		name   string
+		tail   bool
+		writes []string
+		want   string
+	}{
+		{name: "head, short", writes: []string{"ab"}, want: "ab"},
+		{name: "head, across writes", writes: []string{"abc", "def"}, want: "abcd"},
+		{name: "head, one long write", writes: []string{"abcdefgh"}, want: "abcd"},
+		{name: "tail, short", tail: true, writes: []string{"ab"}, want: "ab"},
+		{name: "tail, across writes", tail: true, writes: []string{"abc", "def"}, want: "cdef"},
+		{name: "tail, one long write", tail: true, writes: []string{"abcdefgh"}, want: "efgh"},
+		{name: "tail, many small writes", tail: true, writes: []string{"a", "b", "c", "d", "e", "f"}, want: "cdef"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &capBuffer{max: 4, tail: tc.tail}
+			for _, w := range tc.writes {
+				if n, err := b.Write([]byte(w)); n != len(w) || err != nil {
+					t.Fatalf("Write(%q) = %d, %v; want %d, nil", w, n, err, len(w))
+				}
+			}
+			if got := b.String(); got != tc.want {
+				t.Errorf("after writes %q, String() = %q, want %q", tc.writes, got, tc.want)
+			}
+		})
+	}
+}
