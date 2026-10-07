@@ -199,6 +199,7 @@ func TestDispatchErrors(t *testing.T) {
 	mustCall[proto.WriteResult](t, s, alice, proto.OpClose, proto.CloseArgs{ID: b.ID})
 	stale := "stale"
 	open := "blocked"
+	missing := "sf-zzzzzzzz"
 
 	tests := []struct {
 		name    string
@@ -232,6 +233,12 @@ func TestDispatchErrors(t *testing.T) {
 		{name: "close twice", op: proto.OpClose, args: proto.CloseArgs{ID: b.ID}, code: proto.CodeInvalid, fix: "nothing to do"},
 		{name: "unknown op", op: "explode", args: struct{}{}, code: proto.CodeInvalid, msg: `unknown operation "explode"`},
 		{name: "unknown field", op: proto.OpShow, rawArgs: `{"id":"sf-aaaa","colour":1}`, code: proto.CodeInvalid, msg: "colour"},
+		// Last, so an update that wrongly succeeds moves no rev the rows
+		// above expect.
+		{name: "create under a missing parent", op: proto.OpCreate, args: proto.CreateArgs{Title: "orphan", Parent: missing},
+			code: proto.CodeNotFound, msg: "parent: issue sf-zzzzzzzz not found", fix: "find the id with `sfx list`"},
+		{name: "update to a missing parent", op: proto.OpUpdate, args: proto.UpdateArgs{ID: a.ID, Rev: 2, Parent: &missing},
+			code: proto.CodeNotFound, msg: "parent: issue sf-zzzzzzzz not found", fix: "find the id with `sfx list`"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -351,10 +351,11 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // assignee while the issue is claimed with ErrInvalid (finish, close or a
 // releasing handoff ends the claim first). An issue another principal
 // holds is refused with a [*ForbiddenError] unless the actor is an admin,
-// and a parent that would make a cycle with ErrCycle. New acceptance text
-// cannot tick items ("[x]" counts only at create), and text that drops an
-// item still open is refused with an [*AcceptanceError] (Dropped): tick
-// or waive it first, so the change is on the record.
+// a parent that does not exist with ErrNotFound, and a parent that would
+// make a cycle with ErrCycle. New acceptance text cannot tick items ("[x]"
+// counts only at create), and text that drops an item still open is
+// refused with an [*AcceptanceError] (Dropped): tick or waive it first,
+// so the change is on the record.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -399,6 +400,9 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return fmt.Errorf("%w: issue %s is claimed by %s/%s; %s", ErrInvalid, id, c.Holder.Principal, c.Holder.Session, errClaimedFields)
 		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
+			if err := mustExist(ctx, w.tx, *patch.ParentID); err != nil {
+				return fmt.Errorf("parent: %w", err)
+			}
 			if err := checkEdge(ctx, w.tx, id, *patch.ParentID); err != nil {
 				return err
 			}
