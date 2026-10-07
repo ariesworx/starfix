@@ -75,8 +75,10 @@ func init() {
 		{"comments", "comments ID", "list an issue's comments", cmdComments},
 		{"history", "history ID", "list an issue's changes", cmdHistory},
 		{"start", "start [ID] [--for DURATION] [--branch | --worktree DIR]", "claim an issue (the top ready one without ID) and show it", cmdStart},
-		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]... [--epoch N]", "close your issue with a handoff note and discovered work", cmdFinish},
-		{"handoff", "handoff ID NOTE...|- [--release] [--epoch N]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
+		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--discovered TITLE]... [--epoch N]", "close your issue with a handoff note and discovered work", cmdFinish},
+		{"handoff", "handoff ID NOTE...|- [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--release] [--epoch N]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
+		{"inbox", "inbox [--all] [-n N] [--ack ID]... [--ack-all]", "list your unread lost claims, handoffs, mentions and assignments; --ack marks read", cmdInbox},
+		{"watch", "watch", "print inbox items as they arrive, until interrupted", cmdWatch},
 		{"away", "away DURATION", "extend all your claims, e.g. before going offline (1m to 7d)", cmdAway},
 		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
 		{"who", "who [--since DURATION]", "list the agents at work and the issues each holds (seen in the last 5m)", cmdWho},
@@ -106,6 +108,9 @@ type runner struct {
 	conn *mcpserver.RepoConn
 	// session overrides the environment's session id (prime --hook).
 	session string
+	// onPush, if set before connecting, takes the events the server
+	// pushes (sfx watch).
+	onPush func(proto.Push)
 }
 
 // Run executes one starfix command line (without the program name) and
@@ -267,7 +272,8 @@ func (r *runner) clientOptions() client.Options {
 		session = client.CLISession
 	}
 	return client.Options{Version: r.env.Version, Session: session,
-		Machine: host, Harness: client.HarnessFromEnv(r.env.Getenv), Getenv: r.env.Getenv}
+		Machine: host, Harness: client.HarnessFromEnv(r.env.Getenv), Getenv: r.env.Getenv,
+		OnPush: r.onPush}
 }
 
 // call runs one operation.

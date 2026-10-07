@@ -20,6 +20,7 @@ var (
 	allStatuses  = append(append([]any{}, openStatuses...), "closed")
 	depTypes     = []any{"blocks", "conditional-blocks", "waits-for", "related", "discovered-from", "duplicates", "supersedes"}
 	actions      = []any{"add", "rm"}
+	states       = []any{"done", "partial", "blocked"}
 )
 
 // Inputs. Field tags are the schema's descriptions; keep them terse, since
@@ -148,6 +149,21 @@ type FinishIn struct {
 	Reason     string         `json:"reason,omitempty" jsonschema:"what was done"`
 	Handoff    string         `json:"handoff,omitempty"`
 	Discovered []DiscoveredIn `json:"discovered,omitempty"`
+	HandoffFieldsIn
+}
+
+// HandoffFieldsIn are a handoff's structured fields. The worktree field
+// is left to the CLI: a path on this machine means little to the next
+// agent, and the schema budget is better spent elsewhere.
+type HandoffFieldsIn struct {
+	State  string `json:"state,omitempty"`
+	Next   string `json:"next,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	To     string `json:"to,omitempty" jsonschema:"principal"`
+}
+
+func (f HandoffFieldsIn) wire() proto.HandoffFields {
+	return proto.HandoffFields{State: f.State, Next: f.Next, Branch: f.Branch, To: f.To}
 }
 
 // DiscoveredIn is one piece of discovered work.
@@ -162,6 +178,7 @@ type HandoffIn struct {
 	ID      string `json:"id"`
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty" jsonschema:"let others start it"`
+	HandoffFieldsIn
 }
 
 // DigestIn selects a digest.
@@ -194,11 +211,16 @@ type Started struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// Handoff is the latest handoff note on an issue.
+// Handoff is the latest handoff note on an issue and its fields.
 type Handoff struct {
-	By   string `json:"by"`
-	At   string `json:"at"`
-	Note string `json:"note"`
+	By       string `json:"by"`
+	At       string `json:"at"`
+	Note     string `json:"note"`
+	State    string `json:"state,omitempty"`
+	Next     string `json:"next,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	To       string `json:"to,omitempty"`
 }
 
 // Ref is the result of a write that has no revision.
@@ -324,15 +346,14 @@ type Who struct {
 }
 
 func (s *Server) register() {
-	add(s, tool{name: "prime", desc: "Start here: your work, top ready issues, notices.", ann: readOnly, retry: true},
+	add(s, tool{name: "prime", desc: "Start here: your work, inbox, top ready issues.", ann: readOnly, retry: true,
+		showsInbox: true},
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
-			p, err := BuildPrime(ctx, c, s.opts.Version)
-			if err == nil {
-				p.Lost = s.claims.takeLost()
-				p.fit()
-			}
-			return p, err
+			return BuildPrime(ctx, c, s.opts.Version)
 		})
+	add(s, tool{name: "inbox", desc: "Unread lost claims, handoffs, mentions, assignments; ack marks ids read.", ann: idem, retry: true,
+		showsInbox: true},
+		func(ctx context.Context, c Conn, in InboxIn) (Inbox, error) { return inbox(ctx, c, in) })
 	add(s, tool{name: "start", desc: "Take an issue (default: top ready); returns it, its handoff and a branch.", ann: write},
 		func(ctx context.Context, c Conn, in StartIn) (Started, error) {
 			out, epoch, err := start(ctx, c, in)
@@ -342,9 +363,10 @@ func (s *Server) register() {
 			return out, err
 		})
 	add(s, tool{name: "finish", desc: "Close your issue with a handoff note and new work found.", ann: write,
-		enums: enums{"discovered.type": issueTypes}},
+		enums: enums{"discovered.type": issueTypes, "state": states}},
 		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
-			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff}
+			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff,
+				HandoffFields: in.wire()}
 			for _, d := range in.Discovered {
 				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
 			}
@@ -355,10 +377,11 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write},
+	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write,
+		enums: enums{"state": states}},
 		func(ctx context.Context, c Conn, in HandoffIn) (proto.WriteResult, error) {
 			var out proto.WriteResult
-			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release}
+			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release, HandoffFields: in.wire()}
 			if in.Release {
 				args.Epoch = s.claims.epoch(in.ID)
 			}
@@ -506,7 +529,8 @@ func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 		Acceptance: is.Acceptance, Branch: gitx.Branch(is.Type, is.ID, is.Title)}
 	fields := []*string{&out.Body, &out.Acceptance}
 	if h := r.Handoff; h != nil {
-		out.Handoff = &Handoff{By: h.Author, At: stamp(h.CreatedAt), Note: h.Body}
+		out.Handoff = &Handoff{By: h.Author, At: stamp(h.CreatedAt), Note: h.Body, State: h.State, Next: h.Next,
+			Branch: h.Branch, Worktree: h.Worktree, To: h.To}
 		fields = append(fields, &out.Handoff.Note)
 	}
 	out.Truncated = fitTexts(func() bool { return size(out) <= MaxResultTokens }, fields...)

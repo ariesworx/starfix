@@ -33,9 +33,16 @@ type Options struct {
 	Getenv func(string) string
 	// Timeout bounds connecting and the handshake. Default 15s.
 	Timeout time.Duration
+	// OnPush receives the events the server pushes (after a watch call),
+	// in order, on the connection's reader goroutine. It must return
+	// quickly and must not call the Conn: the next response waits for it.
+	OnPush func(proto.Push)
 }
 
-// Conn is one session with starfixd. Calls are serialized.
+// Conn is one session with starfixd. Calls are serialized. A reader
+// goroutine reads every frame the server sends: responses go to the call
+// waiting for them, pushed events to Options.OnPush, and frame types it
+// does not know are skipped.
 type Conn struct {
 	// Welcome is the server's handshake reply.
 	Welcome proto.Frame
@@ -46,11 +53,57 @@ type Conn struct {
 	enc    *proto.Encoder
 	dec    *proto.Decoder
 	stderr *capBuffer
+	// kill closes the transport, ending the reader and any call.
+	kill   func() error
+	onPush func(proto.Push)
+
+	res     chan *proto.Frame // responses, from the reader to Call
+	done    chan struct{}     // closed when the reader stops
+	readErr error             // why the reader stopped; set before done closes
+	closed  chan struct{}     // closed by Close
+	once    sync.Once
 
 	mu     sync.Mutex
 	nextID uint64
 	broken error
 }
+
+// newConn returns a Conn over enc and dec, before its handshake.
+func newConn(enc *proto.Encoder, dec *proto.Decoder, kill func() error, onPush func(proto.Push)) *Conn {
+	return &Conn{enc: enc, dec: dec, kill: kill, onPush: onPush, stderr: &capBuffer{max: 4096},
+		res: make(chan *proto.Frame, 1), done: make(chan struct{}), closed: make(chan struct{})}
+}
+
+// run starts the reader. Before it, the handshake reads frames itself.
+func (c *Conn) run() { go c.read() }
+
+// read delivers frames until the stream ends.
+func (c *Conn) read() {
+	defer close(c.done)
+	for {
+		f, err := c.dec.Decode()
+		if err != nil {
+			c.readErr = err
+			return
+		}
+		switch f.T {
+		case proto.FrameRes:
+			select {
+			case c.res <- f:
+			case <-c.closed:
+				return
+			}
+		case proto.FrameEvent:
+			if p, err := proto.DecodePush(f); err == nil && c.onPush != nil {
+				c.onPush(p)
+			}
+		}
+	}
+}
+
+// Done is closed once the connection has ended, by Close or by the
+// server or network.
+func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // RemoteCommand is what the client asks sshd to run. The key's forced
 // command overrides it anyway.
@@ -136,16 +189,17 @@ func start(ctx context.Context, client *ssh.Client, cfg *Config, opts Options) (
 	if err != nil {
 		return nil, proto.Errf(proto.CodeUnavailable, "retry; if it persists, ask the server admin", fmt.Sprintf("open ssh session: %v", err))
 	}
-	c := &Conn{ssh: client, sess: sess, stderr: &capBuffer{max: 4096}}
-	sess.Stderr = c.stderr
-	if c.stdin, err = sess.StdinPipe(); err != nil {
+	stdin, err := sess.StdinPipe()
+	if err != nil {
 		return nil, fmt.Errorf("ssh stdin: %w", err)
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ssh stdout: %w", err)
 	}
-	c.enc, c.dec = proto.NewEncoder(c.stdin), proto.NewDecoder(stdout)
+	c := newConn(proto.NewEncoder(stdin), proto.NewDecoder(stdout), client.Close, opts.OnPush)
+	c.ssh, c.sess, c.stdin = client, sess, stdin
+	sess.Stderr = c.stderr
 	if err := sess.Start(RemoteCommand); err != nil {
 		return nil, proto.Errf(proto.CodeUnavailable, "check that this key's authorized_keys line forces `starfixd stdio --principal NAME`",
 			fmt.Sprintf("the server would not start starfixd: %v", err))
@@ -176,11 +230,13 @@ func start(ctx context.Context, client *ssh.Client, cfg *Config, opts Options) (
 		return nil, e
 	}
 	c.Welcome = *w
+	c.run()
 	return c, nil
 }
 
-// next reads the next frame the client understands, skipping event frames
-// and frame types added by newer servers.
+// next reads, during the handshake, the next frame the client
+// understands, skipping event frames and frame types added by newer
+// servers.
 func (c *Conn) next() (*proto.Frame, error) {
 	for {
 		f, err := c.dec.Decode()
@@ -216,10 +272,18 @@ func (c *Conn) Session() string { return c.Welcome.Session }
 func (c *Conn) Principal() string { return c.Welcome.Principal }
 
 // Err reports why the connection can no longer be used, or nil while it
-// can. A refused request does not break the connection; a lost one does.
+// can. A refused request does not break the connection; a lost one does,
+// even while no call is running.
 func (c *Conn) Err() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.broken == nil {
+		select {
+		case <-c.done:
+			c.broken = c.lost(c.readErr)
+		default:
+		}
+	}
 	return c.broken
 }
 
@@ -259,24 +323,32 @@ func (c *Conn) Call(ctx context.Context, op string, args, result any) error {
 	if err != nil {
 		return err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = c.ssh.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = c.kill() })
 	defer stop()
 	if err := c.enc.Encode(f); err != nil {
 		c.broken = c.lost(err)
 		return c.broken
 	}
 	for {
-		r, err := c.next()
-		if err != nil {
-			if ctx.Err() != nil {
-				c.broken = fmt.Errorf("%s: %w", op, ctx.Err())
-			} else {
-				c.broken = c.lost(err)
+		var r *proto.Frame
+		select {
+		case r = <-c.res:
+		case <-c.done:
+			// The reader may have queued this call's answer just before
+			// the stream ended.
+			select {
+			case r = <-c.res:
+			default:
+				if ctx.Err() != nil {
+					c.broken = fmt.Errorf("%s: %w", op, ctx.Err())
+				} else {
+					c.broken = c.lost(c.readErr)
+				}
+				return c.broken
 			}
-			return c.broken
 		}
-		if r.T != proto.FrameRes || (r.ID != id && r.ID != 0) {
-			continue
+		if r.ID != id && r.ID != 0 {
+			continue // an answer to an earlier, abandoned call
 		}
 		if r.Err != nil {
 			if r.ID == 0 {
@@ -296,9 +368,14 @@ func (c *Conn) Call(ctx context.Context, op string, args, result any) error {
 
 // Close ends the session.
 func (c *Conn) Close() error {
-	_ = c.stdin.Close()
-	_ = c.sess.Close()
-	if err := c.ssh.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	c.once.Do(func() { close(c.closed) })
+	if c.stdin != nil {
+		_ = c.stdin.Close()
+	}
+	if c.sess != nil {
+		_ = c.sess.Close()
+	}
+	if err := c.kill(); err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
 		return fmt.Errorf("close: %w", err)
 	}
 	return nil

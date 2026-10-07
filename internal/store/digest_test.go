@@ -59,7 +59,7 @@ func TestDigest(t *testing.T) {
 	a := create(bob, "a", P1, "ui")
 	_, _, err = s.StartIssue(ctx, bob, a, 0)
 	must(err)
-	_, found, err := s.FinishIssue(ctx, bob, a, 0, Finish{Reason: "done", Handoff: strings.Repeat("n", 300),
+	_, found, err := s.FinishIssue(ctx, bob, a, 0, Finish{Reason: "done", Handoff: HandoffNote{Note: strings.Repeat("n", 300)},
 		Discovered: []NewIssue{{Title: "found"}}})
 	must(err)
 	b := create(carol, "b", P0, "ui")

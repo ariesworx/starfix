@@ -49,6 +49,9 @@ type Frame struct {
 	Harness string `json:"h,omitempty"`
 
 	Principal string `json:"pr,omitempty"`
+
+	// E is an evt frame's payload, such as the inbox item it pushes.
+	E json.RawMessage `json:"e,omitempty"`
 }
 
 // Encoder writes frames. It is safe for concurrent use.

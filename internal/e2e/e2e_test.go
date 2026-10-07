@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -68,14 +69,19 @@ type world struct {
 	keys    map[string]string // authorized key fingerprint → principal
 	keysMu  sync.Mutex
 
-	connsMu sync.Mutex
-	conns   map[net.Conn]struct{} // open SSH connections
+	// fixedClock says the store runs on the test's clock (daemonOpts.now).
+	fixedClock bool
+	connsMu    sync.Mutex
+	conns      map[net.Conn]struct{} // open SSH connections
 }
 
 type daemonOpts struct {
 	protoMin, protoMax int
 	noDaemon           bool
 	latest             string
+	// now, if set, is the store's clock. The reaper and the agents'
+	// renewals are then off, so claims expire only when the test says.
+	now func() time.Time
 }
 
 func newWorld(t *testing.T, o daemonOpts) *world {
@@ -96,17 +102,21 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
 	w := &world{t: t, socket: filepath.Join(base, "run", "starfixd.sock"), keys: map[string]string{}, conns: map[net.Conn]struct{}{}}
 
+	var reap time.Duration
+	if o.now != nil {
+		w.fixedClock, reap = true, -1
+	}
 	if !o.noDaemon {
 		dsn, err := dolt.NewDatabase(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1})
+		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now})
 		if err != nil {
 			t.Fatal(err)
 		}
 		srv, err := server.New(server.Config{Store: st, Project: project, Version: "v0.2.0",
-			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest})
+			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest, ReapInterval: reap})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,13 +300,24 @@ func (u *user) run(version string, args ...string) result {
 	var out, errb bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	code := cli.Run(ctx, append([]string{"-C", sub}, args...), cli.Env{
-		Stdin: strings.NewReader("from stdin\n"), Stdout: &out, Stderr: &errb,
+	code := u.runTo(ctx, &out, &errb, version, args...)
+	return result{code: code, stdout: out.String(), stderr: errb.String()}
+}
+
+// runTo invokes the CLI as this user until ctx ends, writing to the
+// writers given.
+func (u *user) runTo(ctx context.Context, stdout, stderr io.Writer, version string, args ...string) int {
+	sub := filepath.Join(u.repo, "src")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		u.w.t.Error(err)
+		return -1
+	}
+	return cli.Run(ctx, append([]string{"-C", sub}, args...), cli.Env{
+		Stdin: strings.NewReader("from stdin\n"), Stdout: stdout, Stderr: stderr,
 		Getenv:   func(k string) string { return u.env[k] }, // no SSH_AUTH_SOCK: the key file is used
 		Hostname: func() (string, error) { return "laptop-test", nil },
 		Version:  version,
 	})
-	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
 func (u *user) ok(args ...string) string {

@@ -31,6 +31,7 @@
 //	h       agent harness, such as claude-code (hello; may be empty)
 //	latest  latest release the server knows of (welcome; may be empty)
 //	pr      principal: the bridge's claim, and the welcome's echo of it
+//	e       payload of an evt frame, such as a pushed inbox item
 //
 // # Sequence
 //
@@ -43,7 +44,16 @@
 // A client whose protocol version is outside [min,max] gets a welcome
 // carrying err with code "version", and the connection closes.
 //
-// Frame type "evt" is reserved for server-pushed events (stage 3). A client
-// ignores frame types it does not know, so the server can add them without
-// a protocol bump; the server refuses unknown types from clients.
+// Frame type "evt" is a server-pushed event: no id, an op naming the
+// event (EvInbox, EvResync) and its payload in e. The server sends them
+// only to a connection that asked with the watch op, so a client that
+// never watches sees none:
+//
+//	client → daemon:  {"t":"req","id":2,"op":"watch"}
+//	daemon → client:  {"t":"res","id":2,"ok":{"unread":0}}
+//	daemon → client:  {"t":"evt","op":"inbox","e":{"id":9,"kind":"claim.lost",…}}
+//
+// A client ignores frame types, and event ops, it does not know, so the
+// server can add them without a protocol bump; the server refuses unknown
+// types from clients.
 package proto

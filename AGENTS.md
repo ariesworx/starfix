@@ -126,7 +126,7 @@ server or protocol. Tests that need `git` skip without it too.
     the principal comes from the SSH key and the session from the
     environment, never from a tool argument. Results are capped
     (`budget.go`: 2,000 tokens, prime and digest 1,500) and the whole tool
-    schema set at about 2,200 estimated tokens; the tests enforce both and
+    schema set at about 2,400 estimated tokens; the tests enforce both and
     pin the tool list. Keep schema descriptions terse.
 13. **Output stays terse.** Writes return `{id, rev}`; lists return the
     compact summary. `sfx --json` prints exactly one JSON document, errors

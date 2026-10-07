@@ -11,7 +11,12 @@ import (
 )
 
 // command is the CLI spelling of an op, for fix lines.
-func command(op string) string { return strings.ReplaceAll(op, ".", " ") }
+func command(op string) string {
+	if op == proto.OpAck {
+		return "inbox" // sfx inbox --ack
+	}
+	return strings.ReplaceAll(op, ".", " ")
+}
 
 // mapErr turns a store error into a typed protocol error whose message
 // names the cause and whose fix names the next action. id and rev are the

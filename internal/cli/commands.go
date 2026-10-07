@@ -142,6 +142,7 @@ func cmdShow(ctx context.Context, r *runner, args []string) error {
 		return nil
 	}
 	printIssue(r.env.Stdout, out)
+	printHandoff(r.env.Stdout, out.Handoff)
 	return nil
 }
 

@@ -210,10 +210,10 @@ func TestClaimEndsOnCloseAndRelease(t *testing.T) {
 	}
 	// Release with a stale epoch is refused; with the current one it ends
 	// the claim and lets bob start it.
-	if _, err := s.HandoffIssue(ctx, alice, b.ID, 7, "n", true); !errors.As(err, new(*StaleEpochError)) {
+	if _, err := s.HandoffIssue(ctx, alice, b.ID, 7, HandoffNote{Note: "n"}, true); !errors.As(err, new(*StaleEpochError)) {
 		t.Fatalf("stale release: %v", err)
 	}
-	if _, err := s.HandoffIssue(ctx, alice, b.ID, 1, "over to you", true); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, b.ID, 1, HandoffNote{Note: "over to you"}, true); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []IssueID{a.ID, b.ID} {
