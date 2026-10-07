@@ -312,7 +312,7 @@ Agreed 6 Oct 2026; each item lands in the stage shown in §13.
 | 4 | **Acceptance checklist** | Acceptance criteria are items, not prose. The agent ticks them; `close` refuses until all are ticked or waived with a reason. |
 | 5 | **Errors that say what to do next** | Every refusal names the cause and the next action, for example `sf-a1b2 claimed by ed/codex 3m ago; next ready: sf-c3d4`. Typed error codes for programs. |
 | 6 | **Similar closed issues** | `show` and `create` list up to three similar closed issues: full-text first, vectors when §10 lands. |
-| 7 | **Live board** | `sfx tui` (terminal) and an optional read-only web view served by `starfixd`, both driven by the event stream. |
+| 7 | **Live board** | `sfx tui` (terminal), driven by the event stream. A web view served by `starfixd` is dropped for now (7 Oct 2026): starfixd opens no port, and a TUI over the existing SSH connection keeps it that way. |
 | 8 | **`starfixd --dev`** | A throwaway local server with a temporary Dolt database and seeded sample data, for trying starfix, demos and agent tests. |
 | 9 | **Token budget in CI** | Scripted agent sessions measure tokens for each tool schema, each result shape and prime; CI fails when one exceeds its budget. |
 | 10 | **Time and token reporting** | Optional: the client records wall time per claim and, where the harness exposes it, tokens per issue. Shown in `show` and `digest`. |

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 
 	"github.com/go-sql-driver/mysql"
 	"go.yaml.in/yaml/v3"
@@ -33,6 +35,11 @@ type Settings struct {
 	// upgrade installs the binary and leaves the restart to the admin,
 	// unless --restart is given.
 	SystemdUnit string `yaml:"systemd_unit"`
+	// LogLevel is the least severe level logged: debug, info, warn or
+	// error. Default info; debug adds a line per request.
+	LogLevel string `yaml:"log_level"`
+	// LogFormat is text (slog's key=value) or json. Default text.
+	LogFormat string `yaml:"log_format"`
 }
 
 // UnitPattern is what a systemd unit name may look like. It cannot start
@@ -45,6 +52,9 @@ const (
 	EnvSocket  = "STARFIXD_SOCKET"
 	EnvProject = "STARFIXD_PROJECT"
 	EnvConfig  = "STARFIXD_CONFIG"
+	// EnvLogLevel and EnvLogFormat set LogLevel and LogFormat.
+	EnvLogLevel  = "STARFIXD_LOG_LEVEL"
+	EnvLogFormat = "STARFIXD_LOG_FORMAT"
 )
 
 // ResolveSettings merges, highest precedence first: flags, the environment,
@@ -71,8 +81,9 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 	if err != nil {
 		return Settings{}, err
 	}
-	env := Settings{DSN: getenv(EnvDSN), Socket: getenv(EnvSocket), Project: getenv(EnvProject)}
-	out := Settings{Socket: DefaultSocket, Prefix: "sf"}
+	env := Settings{DSN: getenv(EnvDSN), Socket: getenv(EnvSocket), Project: getenv(EnvProject),
+		LogLevel: getenv(EnvLogLevel), LogFormat: getenv(EnvLogFormat)}
+	out := Settings{Socket: DefaultSocket, Prefix: "sf", LogLevel: "info", LogFormat: "text"}
 	for _, s := range []Settings{file, env, flags} {
 		for _, f := range []struct {
 			dst *string
@@ -80,6 +91,7 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 		}{
 			{&out.DSN, s.DSN}, {&out.Socket, s.Socket}, {&out.Project, s.Project},
 			{&out.Prefix, s.Prefix}, {&out.Latest, s.Latest}, {&out.SystemdUnit, s.SystemdUnit},
+			{&out.LogLevel, s.LogLevel}, {&out.LogFormat, s.LogFormat},
 		} {
 			if f.v != "" {
 				*f.dst = f.v
@@ -89,7 +101,27 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 	if out.SystemdUnit != "" && !UnitPattern.MatchString(out.SystemdUnit) {
 		return Settings{}, fmt.Errorf("systemd_unit %q is not a unit name; fix: set it to the service's name, for example starfixd.service", out.SystemdUnit)
 	}
+	if _, err := NewLogger(io.Discard, out.LogLevel, out.LogFormat); err != nil {
+		return Settings{}, err
+	}
 	return out, nil
+}
+
+// NewLogger returns a logger writing to w at level (debug, info, warn or
+// error) in format (text or json).
+func NewLogger(w io.Writer, level, format string) (*slog.Logger, error) {
+	var l slog.Level
+	if err := l.UnmarshalText([]byte(level)); err != nil || !slices.Contains([]string{"debug", "info", "warn", "error"}, level) {
+		return nil, fmt.Errorf("log level %q is not debug, info, warn or error; fix: set log_level: or %s to one of them", level, EnvLogLevel)
+	}
+	opts := &slog.HandlerOptions{Level: l}
+	switch format {
+	case "text":
+		return slog.New(slog.NewTextHandler(w, opts)), nil
+	case "json":
+		return slog.New(slog.NewJSONHandler(w, opts)), nil
+	}
+	return nil, fmt.Errorf("log format %q is not text or json; fix: set log_format: or %s to text or json", format, EnvLogFormat)
 }
 
 func loadSettings(path string, required bool) (Settings, error) {

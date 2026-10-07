@@ -208,7 +208,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		return
 	}
 	log = log.With("principal", sess.actor.Principal, "session", sess.actor.Session, "machine", sess.actor.Machine)
-	log.Info("connected")
+	log.Debug("connected")
 	s.touch(ctx, log, sess.actor, sess.harness)
 	for {
 		f, err := sess.dec.Decode()
@@ -233,9 +233,12 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		cancel()
 		attrs := []any{"op", f.Op, "ms", time.Since(start).Milliseconds()}
 		if perr != nil {
-			attrs = append(attrs, "code", string(perr.Code))
+			// A refusal is worth seeing at the default level; a success is
+			// one line per request, so only at debug.
+			log.Info("request", append(attrs, "code", string(perr.Code))...)
+		} else {
+			log.Debug("request", attrs...)
 		}
-		log.Info("request", attrs...)
 		if err := s.send(sess, f.ID, res, perr); err != nil {
 			log.Info("write failed", "err", err)
 			return
