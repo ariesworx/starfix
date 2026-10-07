@@ -67,6 +67,25 @@ func TestFrameTerseOnTheWire(t *testing.T) {
 	}
 }
 
+// The hello's harness is "h" on the wire, and absent when empty, so an
+// older server, which decodes frames leniently, never sees it.
+func TestHelloHarness(t *testing.T) {
+	for _, tc := range []struct {
+		harness, want string
+	}{
+		{"claude-code", `{"t":"hello","p":2,"h":"claude-code"}`},
+		{"", `{"t":"hello","p":2}`},
+	} {
+		var buf bytes.Buffer
+		if err := NewEncoder(&buf).Encode(&Frame{T: FrameHello, Proto: 2, Harness: tc.harness}); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(buf.String()); got != tc.want {
+			t.Errorf("hello with harness %q = %s, want %s", tc.harness, got, tc.want)
+		}
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
 	tests := map[string]struct {
 		in   string

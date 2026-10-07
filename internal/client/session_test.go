@@ -23,6 +23,28 @@ func TestSessionFromEnv(t *testing.T) {
 	}
 }
 
+func TestHarnessFromEnv(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"none", nil, ""},
+		{"claude code", map[string]string{"CLAUDECODE": "1"}, "claude-code"},
+		{"gemini cli", map[string]string{"GEMINI_CLI": "1"}, "gemini"},
+		{"only the value 1 counts", map[string]string{"CLAUDECODE": "0", "GEMINI_CLI": "yes"}, ""},
+		{"claude code over gemini", map[string]string{"GEMINI_CLI": "1", "CLAUDECODE": "1"}, "claude-code"},
+		{"starfix wins", map[string]string{"STARFIX_HARNESS": "codex", "CLAUDECODE": "1"}, "codex"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HarnessFromEnv(func(k string) string { return tc.env[k] }); got != tc.want {
+				t.Errorf("HarnessFromEnv(%v) = %q, want %q", tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewSessionID(t *testing.T) {
 	a, b := NewSessionID(), NewSessionID()
 	if len(a) != 18 || a[:2] != "m-" || a == b {

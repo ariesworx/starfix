@@ -33,7 +33,7 @@ type IDIn struct {
 // ShowIn reads one issue.
 type ShowIn struct {
 	ID   string `json:"id"`
-	Full bool   `json:"full,omitempty" jsonschema:"all text; default cuts long fields"`
+	Full bool   `json:"full,omitempty" jsonschema:"all text, uncut"`
 }
 
 // LimitIn bounds a list.
@@ -43,14 +43,14 @@ type LimitIn struct {
 
 // ListIn filters issues.
 type ListIn struct {
-	Status   []string `json:"status,omitempty" jsonschema:"default: all but closed"`
+	Status   []string `json:"status,omitempty" jsonschema:"default: not closed"`
 	Type     []string `json:"type,omitempty"`
 	Priority []int    `json:"priority,omitempty" jsonschema:"0 is highest"`
 	Assignee string   `json:"assignee,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	Labels   []string `json:"labels,omitempty" jsonschema:"must have all"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"default 10"`
-	Cursor   string   `json:"cursor,omitempty" jsonschema:"next from the previous page"`
+	Cursor   string   `json:"cursor,omitempty" jsonschema:"previous page's next"`
 }
 
 // CreateIn creates an issue.
@@ -113,7 +113,7 @@ type ReopenIn struct {
 // DepIn adds or removes an edge.
 type DepIn struct {
 	Action    string `json:"action"`
-	ID        string `json:"id" jsonschema:"the issue that depends"`
+	ID        string `json:"id" jsonschema:"the dependent issue"`
 	DependsOn string `json:"depends_on"`
 	Type      string `json:"type,omitempty" jsonschema:"default blocks"`
 }
@@ -134,7 +134,7 @@ type CommentIn struct {
 // PageIn names an issue and bounds a list of its records.
 type PageIn struct {
 	ID    string `json:"id"`
-	Limit int    `json:"limit,omitempty" jsonschema:"newest N; default 10"`
+	Limit int    `json:"limit,omitempty" jsonschema:"newest; default 10"`
 }
 
 // StartIn takes an issue.
@@ -161,7 +161,7 @@ type DiscoveredIn struct {
 type HandoffIn struct {
 	ID      string `json:"id"`
 	Note    string `json:"note"`
-	Release bool   `json:"release,omitempty" jsonschema:"unassign so others can start it"`
+	Release bool   `json:"release,omitempty" jsonschema:"let others start it"`
 }
 
 // DigestIn selects a digest.
@@ -169,6 +169,11 @@ type DigestIn struct {
 	Since string `json:"since,omitempty" jsonschema:"24h, 7d or a time; default 24h"`
 	By    string `json:"by,omitempty" jsonschema:"principal"`
 	Label string `json:"label,omitempty"`
+}
+
+// WhoIn widens who's window.
+type WhoIn struct {
+	Since string `json:"since,omitempty" jsonschema:"default 5m"`
 }
 
 // Outputs.
@@ -301,8 +306,25 @@ type Digest struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
+// Agent is one session in who. Seen is how long ago it was last seen.
+type Agent struct {
+	Principal string   `json:"principal"`
+	Session   string   `json:"session"`
+	Machine   string   `json:"machine"`
+	Harness   string   `json:"harness,omitempty"`
+	Seen      string   `json:"seen"`
+	Claims    []string `json:"claims,omitempty"`
+}
+
+// Who lists the agents seen recently, most recently first. More says
+// some were left out to fit.
+type Who struct {
+	Agents []Agent `json:"agents"`
+	More   bool    `json:"more,omitempty"`
+}
+
 func (s *Server) register() {
-	add(s, tool{name: "prime", desc: "Start here: your in-progress issues, top ready work, notices.", ann: readOnly, retry: true},
+	add(s, tool{name: "prime", desc: "Start here: your work, top ready issues, notices.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
 			p, err := BuildPrime(ctx, c, s.opts.Version)
 			if err == nil {
@@ -311,7 +333,7 @@ func (s *Server) register() {
 			}
 			return p, err
 		})
-	add(s, tool{name: "start", desc: "Take an issue (default: top of ready); returns it, its last handoff and a branch.", ann: write},
+	add(s, tool{name: "start", desc: "Take an issue (default: top ready); returns it, its handoff and a branch.", ann: write},
 		func(ctx context.Context, c Conn, in StartIn) (Started, error) {
 			out, epoch, err := start(ctx, c, in)
 			if err == nil && epoch > 0 {
@@ -319,7 +341,7 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "finish", desc: "Close your issue, with a handoff note and new work found.", ann: write,
+	add(s, tool{name: "finish", desc: "Close your issue with a handoff note and new work found.", ann: write,
 		enums: enums{"discovered.type": issueTypes}},
 		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
 			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff}
@@ -346,9 +368,25 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "digest", desc: "Recent work: closed, started, in progress, stalled, blocked, handed off.",
+	add(s, tool{name: "digest", desc: "Recent work: closed, started, stalled, blocked, handed off.",
 		ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in DigestIn) (Digest, error) { return digest(ctx, c, in) })
+	add(s, tool{name: "who", desc: "Agents at work and what they hold.", ann: readOnly, retry: true},
+		func(ctx context.Context, c Conn, in WhoIn) (Who, error) {
+			var r proto.WhoResult
+			if err := c.Call(ctx, proto.OpWho, proto.WhoArgs{Since: in.Since}, &r); err != nil {
+				return Who{}, err
+			}
+			out := Who{Agents: []Agent{}}
+			for _, a := range r.Agents {
+				out.Agents = append(out.Agents, Agent{Principal: a.Principal, Session: a.Session, Machine: a.Machine,
+					Harness: a.Harness, Seen: proto.Span(max(r.Now.Sub(a.LastSeen), 0)), Claims: a.Claims})
+			}
+			for size(out) > MaxResultTokens && len(out.Agents) > 1 {
+				out.Agents, out.More = out.Agents[:len(out.Agents)-1], true
+			}
+			return out, nil
+		})
 	add(s, tool{name: "ready", desc: "Open issues nothing blocks, best first.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in LimitIn) (Issues, error) {
 			var r proto.ListResult

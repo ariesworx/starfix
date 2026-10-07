@@ -47,6 +47,9 @@ func TestRunWithoutServer(t *testing.T) {
 		{name: "handoff needs a note", args: []string{"handoff", "sf-a"}, code: ExitUsage, stderr: "handoff needs an issue id and a note"},
 		{name: "help for digest", args: []string{"help", "digest"}, code: ExitOK, stdout: "usage: sfx digest [--since 24h|7d|DATE|TIME]"},
 		{name: "digest takes no arguments", args: []string{"digest", "7d"}, code: ExitUsage, stderr: "digest takes no arguments"},
+		{name: "help for who", args: []string{"help", "who"}, code: ExitOK, stdout: "usage: sfx who [--since DURATION]"},
+		{name: "who takes no arguments", args: []string{"who", "alice"}, code: ExitUsage, stderr: "who takes no arguments"},
+		{name: "who checks its window", args: []string{"who", "--since", "soon"}, code: ExitUsage, stderr: `"soon": not a duration`},
 		{name: "no config", args: []string{"-C", empty, "ready"}, code: ExitFailure,
 			stderr: "sfx: .starfix.yaml not found here or in any parent directory\nfix: run starfix inside a repository"},
 	}

@@ -209,6 +209,15 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 - An issue `in_progress` with no claim row (imported, set by hand, or taken before claims) stays held by its assignee with no lease, as in stage 2.
 - Protocol 2 carries these fields; servers still accept protocol 1 clients, whose `start` gets the 15-minute default.
 
+**As built (stage 3, agents registry, 7 Oct 2026).** Where the build differs from the above:
+- `agents` is keyed (`principal`, `session`) with `machine`, `harness`, `started`, `last_seen`, `rev` and `write_id`, indexed on `last_seen` (migration 0005). `labels` waits until something reads it (label affinity).
+- The server touches a session's row after every successful handshake, and on every `renew`; a failure is logged and never refuses the connection or the request. A touch rewrites the row only when it is new, the machine or harness changed, or `last_seen` is a minute old, and records no event: presence is not history, as with renewals. An empty harness keeps the one recorded; a harness the server would refuse is dropped and the session still registered.
+- `sfx mcp`'s renew loop now runs while connected even when the session holds no claims, so an idle agent stays present; it does not dial just for that, so a session whose connection dropped leaves `who` after 5 minutes until its next tool call.
+- The harness comes from the hello frame's `h` field: `STARFIX_HARNESS`, which `sfx setup` writes into the MCP config's `env` for every agent (Codex: a `[mcp_servers.starfix.env]` table; an inline `env = {…}` is refused with a fix), else `claude-code` for `CLAUDECODE=1`, else `gemini` for `GEMINI_CLI=1`. Values are the `sfx setup` agent names. Old servers ignore the field, so it needs no protocol bump.
+- `who` (CLI, MCP tool and protocol op) lists sessions seen within `since` (default 5 minutes, at most 7 days) on the server's clock, most recently seen first, each with the issues it holds under an active claim; the result carries the server's `now`. The MCP tool drops the least recently seen to fit 2,000 tokens and says `more`. A person's own commands appear as session `cli`.
+- The op is part of protocol 2 without another bump: protocol 2 had not shipped in a release (v0.1.0 speaks 1), so no client or server speaks a protocol 2 that lacks it.
+- Fitting `who` under the 2,200-token schema budget took trimming a few existing tool descriptions; the set is at the limit.
+
 ## 8. Offline and conflicts
 
 The client keeps a SQLite read cache of everything you can see, plus an outbox of operations. Each operation carries the `rev` it was based on, a hybrid logical clock stamp and an idempotency key. On reconnect the outbox replays in order; the server applies each operation or parks it as a conflict. Sync never blocks on a conflict.

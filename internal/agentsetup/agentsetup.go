@@ -6,7 +6,9 @@
 //
 // Edits are idempotent and minimal: an existing file keeps its other
 // servers, its other keys and their order, and an existing starfix entry
-// keeps keys starfix does not own (an env block, a timeout). Applying a
+// keeps keys starfix does not own (a timeout, other env variables). The
+// entry's env sets HarnessEnv to the agent's name, so the agents registry
+// knows which harness each session runs under. Applying a
 // registration that is already in place changes nothing, byte for byte.
 // The functions here work on file contents; reading and writing the files
 // is the caller's.
@@ -20,6 +22,10 @@ import (
 
 // ServerName is the name the MCP server is registered under.
 const ServerName = "starfix"
+
+// HarnessEnv is the variable setup sets, in the server's env, to the
+// agent's Name; `sfx mcp` sends it to the server (client.HarnessFromEnv).
+const HarnessEnv = "STARFIX_HARNESS"
 
 // Agent is one supported harness.
 type Agent struct {
@@ -125,9 +131,9 @@ func (r Result) String() string {
 // Snippet is the registration on its own, to paste by hand.
 func (a Agent) Snippet(e Entry) string {
 	if a.format == tomlCodex {
-		return strings.Join(tomlTable(e), "\n") + "\n"
+		return strings.Join(tomlTable(e, a.Name), "\n") + "\n"
 	}
-	b, err := applyJSON(nil, a.format, e)
+	b, err := applyJSON(nil, a.format, e, a.Name)
 	if err != nil {
 		panic(fmt.Sprintf("agentsetup: snippet: %v", err)) // only on a programming error
 	}
@@ -141,13 +147,14 @@ func (a Agent) Apply(content []byte, e Entry) ([]byte, Result, error) {
 		return content, Unchanged, nil
 	}
 	var out []byte
+	var err error
 	if a.format == tomlCodex {
-		out = applyTOML(content, e)
+		out, err = applyTOML(content, e, a.Name)
 	} else {
-		var err error
-		if out, err = applyJSON(content, a.format, e); err != nil {
-			return nil, Unchanged, err
-		}
+		out, err = applyJSON(content, a.format, e, a.Name)
+	}
+	if err != nil {
+		return nil, Unchanged, err
 	}
 	if a.has(content) {
 		return out, Updated, nil
@@ -173,9 +180,9 @@ func (a Agent) Remove(content []byte) ([]byte, Result, error) {
 // Registered reports whether content already starts the server as e does.
 func (a Agent) Registered(content []byte, e Entry) bool {
 	if a.format == tomlCodex {
-		return tomlRegistered(content, e)
+		return tomlRegistered(content, e, a.Name)
 	}
-	return jsonRegistered(content, a.format, e)
+	return jsonRegistered(content, a.format, e, a.Name)
 }
 
 // has reports whether content has any starfix entry.

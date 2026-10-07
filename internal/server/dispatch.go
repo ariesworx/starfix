@@ -51,6 +51,7 @@ func init() {
 		proto.OpHandoff:  typed(handoff),
 		proto.OpDigest:   typed(digest),
 		proto.OpRenew:    typed(renew),
+		proto.OpWho:      typed(who),
 	}
 }
 
@@ -373,6 +374,9 @@ func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (a
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpRenew, "", 0, err)
 	}
+	// A running agent renews every minute, which keeps it in `who`. The
+	// harness was recorded at the handshake; empty keeps it.
+	s.touch(ctx, s.cfg.Logger.With("principal", a.Principal, "session", a.Session), a, "")
 	out := proto.ClaimsResult{Claims: []proto.Claim{}}
 	for _, c := range cs {
 		out.Claims = append(out.Claims, wireClaim(c))

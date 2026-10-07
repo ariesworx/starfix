@@ -11,9 +11,10 @@ from the command line. It is written in Go and stores its data in
 The repository also holds the design for **Bearings**, an orchestrator that runs
 and supervises many agents on top of starfix.
 
-> **Status: stage 2 of 7 in progress.** Issues work end to end over SSH, bd
-> backlogs import and export, and agents use starfix through MCP. Claims,
-> memory and the offline cache follow. Not ready for production use.
+> **Status: stage 3 of 7 in progress.** Issues work end to end over SSH, bd
+> backlogs import and export, and agents use starfix through MCP, with
+> leased claims and a registry of who is at work. The inbox, memory and the
+> offline cache follow. Not ready for production use.
 
 ## Why starfix
 
@@ -199,6 +200,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim |
 | `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it |
 | `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline |
+| `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds |
 | `create` | Create an issue and print its id |
 | `show` | Show an issue and its dependencies (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
@@ -213,7 +215,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `digest` | Summarize a window (`--since 24h`, `7d`, a date or a time): closed, started, in progress, stalled, blocked, handed off, created and discovered; `--by P`, `--label L` filter it |
 | `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook` for a SessionStart hook |
 | `mcp` | The MCP server for agents, on stdin and stdout |
-| `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini` or `vscode`: MCP config, instruction pointer, SessionStart hook |
+| `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini` or `vscode`: MCP config (with `STARFIX_HARNESS` in its env), instruction pointer, SessionStart hook |
 | `upgrade` | Replace `sfx` with the latest release after verifying its signature and checksum; `--check` prints one line and changes nothing; `--rollback` restores the binary the last upgrade replaced. Never runs by itself |
 | `version` | Print the version |
 
@@ -302,9 +304,17 @@ other than the current one (`--epoch N`; `sfx mcp` passes it), so a
 session that lost its claim cannot close work someone has since taken.
 `show` prints the claim.
 
+`sfx who` (and the `who` tool) lists who is at work: every session that
+connected or renewed in the last 5 minutes, with its machine, its harness
+and the issues it holds. The server records a session when it connects,
+and `sfx mcp` keeps it present by renewing every minute while connected.
+The harness is `STARFIX_HARNESS`, which `sfx setup` writes into the MCP
+config's `env`; failing that, `claude-code` when `CLAUDECODE=1` and
+`gemini` when `GEMINI_CLI=1`.
+
 The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
 `list`, `show`, `create`, `update`, `close`, `reopen`, `dep`, `label`,
-`comment`, `comments`, `history` and `digest`; there are no admin tools. Results are compact (writes return
+`comment`, `comments`, `history`, `digest` and `who`; there are no admin tools. Results are compact (writes return
 `{id, rev}`, lists return id, title, status and priority) and capped at
 about 2,000 tokens, prime and digest at 1,500. `digest` is structured data
 from the event log, for a standup or status report; the agent writes any
@@ -332,7 +342,7 @@ connection, and other writes report that they may have applied.
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
-| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims built) |
+| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims, agents registry built) |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |

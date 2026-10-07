@@ -11,8 +11,9 @@ import (
 // one forward once there is more than one.
 //
 // Protocol 2 adds claims: start's lease and claim, the epoch on finish and
-// handoff, show's claim, and renew. A protocol 1 client sends none of
-// them and gets the default lease.
+// handoff, show's claim, renew, and who (the agents registry; added
+// before protocol 2 shipped in a release, so without another bump). A
+// protocol 1 client sends none of them and gets the default lease.
 const (
 	Proto    = 2
 	ProtoMin = 1

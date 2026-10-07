@@ -28,7 +28,32 @@ const (
 	OpHandoff  = "handoff"   // HandoffArgs → WriteResult
 	OpDigest   = "digest"    // DigestArgs → DigestResult
 	OpRenew    = "renew"     // RenewArgs → ClaimsResult (protocol 2)
+	OpWho      = "who"       // WhoArgs → WhoResult (protocol 2)
 )
+
+// WhoArgs selects the agents seen within Since, a duration such as 5m,
+// 2h or 1d (empty takes 5m, at most 7d).
+type WhoArgs struct {
+	Since string `json:"since,omitempty"`
+}
+
+// Agent is one session in the registry and the issues it holds.
+type Agent struct {
+	Principal string    `json:"principal"`
+	Session   string    `json:"session"`
+	Machine   string    `json:"machine"`
+	Harness   string    `json:"harness,omitempty"`
+	Started   time.Time `json:"started"`
+	LastSeen  time.Time `json:"last_seen"`
+	Claims    []string  `json:"claims,omitempty"`
+}
+
+// WhoResult lists agents, most recently seen first, as of the server's
+// Now.
+type WhoResult struct {
+	Now    time.Time `json:"now"`
+	Agents []Agent   `json:"agents"`
+}
 
 // Issue is the full form of an issue, returned by show.
 type Issue struct {

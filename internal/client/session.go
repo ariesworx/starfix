@@ -24,6 +24,23 @@ func SessionFromEnv(getenv func(string) string) string {
 	return ""
 }
 
+// HarnessFromEnv names the agent harness this process runs under, as an
+// `sfx setup` agent name, for the agents registry: STARFIX_HARNESS (which
+// setup writes into every MCP config) wins; else CLAUDECODE=1 means
+// claude-code and GEMINI_CLI=1 means gemini, the markers those harnesses
+// set for the commands they run; else "".
+func HarnessFromEnv(getenv func(string) string) string {
+	switch {
+	case getenv("STARFIX_HARNESS") != "":
+		return getenv("STARFIX_HARNESS")
+	case getenv("CLAUDECODE") == "1":
+		return "claude-code"
+	case getenv("GEMINI_CLI") == "1":
+		return "gemini"
+	}
+	return ""
+}
+
 // CLISession is the session of a person's own `sfx` commands: one per
 // principal and machine, so a claim taken in one command is the same
 // session's in the next.

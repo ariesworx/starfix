@@ -85,7 +85,7 @@ func TestMCPAgentSession(t *testing.T) {
 	ag := alice.mcp("v0.2.0")
 
 	tools, err := ag.cs.ListTools(context.Background(), nil)
-	if err != nil || len(tools.Tools) != 18 {
+	if err != nil || len(tools.Tools) != 19 {
 		t.Fatalf("tools: %v %d", err, len(tools.Tools))
 	}
 	if ag.dials != 0 {

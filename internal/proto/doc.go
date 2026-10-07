@@ -28,6 +28,7 @@
 //	proj    project UUID (hello)
 //	s       session id: the client's (hello), the effective one (welcome)
 //	m       machine name (hello)
+//	h       agent harness, such as claude-code (hello; may be empty)
 //	latest  latest release the server knows of (welcome; may be empty)
 //	pr      principal: the bridge's claim, and the welcome's echo of it
 //
