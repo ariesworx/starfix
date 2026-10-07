@@ -64,9 +64,9 @@ type Conn struct {
 	closed  chan struct{}     // closed by Close
 	once    sync.Once
 
-	mu     sync.Mutex
+	mu     sync.Mutex // held for each Call, which serializes them; guards nextID and broken
 	nextID uint64
-	broken error
+	broken error // why the Conn can no longer be used; nil while it can
 }
 
 // newConn returns a Conn over enc and dec, before its handshake.
@@ -111,8 +111,9 @@ func (c *Conn) Done() <-chan struct{} { return c.done }
 const RemoteCommand = "starfixd stdio"
 
 // Dial connects to the server named in cfg, verifies its pinned host key,
-// authenticates, and completes the version handshake. A refusal comes back
-// as a *proto.Error.
+// authenticates, and completes the version handshake, all within
+// opts.Timeout. A refusal comes back as a *proto.Error. The caller must
+// Close the Conn.
 func Dial(ctx context.Context, cfg *Config, opts Options) (*Conn, error) {
 	if opts.Getenv == nil {
 		opts.Getenv = os.Getenv
@@ -160,6 +161,8 @@ func Dial(ctx context.Context, cfg *Config, opts Options) (*Conn, error) {
 		if hostKeyErr != nil {
 			return nil, hostKeyErr
 		}
+		// x/crypto/ssh reports a refused key only as text: it has no
+		// error value to match with errors.Is.
 		if strings.Contains(err.Error(), "unable to authenticate") {
 			return nil, proto.Errf(proto.CodeAuth,
 				"send your public key (`ssh-add -L`, or the .pub next to your key file) to the starfix admin",
@@ -202,6 +205,8 @@ func dialTransport(ctx context.Context, cfg *Config, addr string) (net.Conn, err
 	return nc, nil
 }
 
+// plural ends "refused your SSH key" for n keys tried: "" for one, else
+// "s (tried n)".
 func plural(n int) string {
 	if n == 1 {
 		return ""
@@ -209,6 +214,9 @@ func plural(n int) string {
 	return fmt.Sprintf("s (tried %d)", n)
 }
 
+// start opens the SSH session that runs the bridge and completes the
+// handshake on it, within ctx. On success the Conn's reader is running;
+// on failure the caller closes client.
 func start(ctx context.Context, client *ssh.Client, cfg *Config, opts Options) (*Conn, error) {
 	sess, err := client.NewSession()
 	if err != nil {
@@ -333,7 +341,11 @@ func (c *Conn) Warning(clientVersion string) string {
 }
 
 // Call sends one request and decodes its result into result (which may be
-// nil). A server refusal is returned as a *proto.Error.
+// nil). A server refusal is returned as a *proto.Error and leaves the
+// Conn usable. Calls are serialized. Cancelling ctx closes the connection.
+// A cancelled or lost connection, or an error frame that answers no
+// request (as when the server closes an idle connection), breaks the Conn:
+// later calls fail at once, and Err says why.
 func (c *Conn) Call(ctx context.Context, op string, args, result any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -389,7 +401,8 @@ func (c *Conn) Call(ctx context.Context, op string, args, result any) error {
 	}
 }
 
-// Close ends the session.
+// Close ends the session and closes the connection, which ends a call in
+// progress and the reader. It may be called more than once.
 func (c *Conn) Close() error {
 	c.once.Do(func() { close(c.closed) })
 	if c.stdin != nil {
@@ -404,7 +417,10 @@ func (c *Conn) Close() error {
 	return nil
 }
 
-// signers collects the keys to offer: ssh-agent's, then the key file's.
+// signers collects the keys to offer: ssh-agent's, then the key file's. A
+// passphrase-protected key file is skipped when the agent has keys. The
+// caller calls the returned func, which closes the agent connection, once
+// the SSH handshake is done.
 func signers(cfg *Config, getenv func(string) string) ([]ssh.Signer, func(), error) {
 	var out []ssh.Signer
 	closeAgent := func() {}

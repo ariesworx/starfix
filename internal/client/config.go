@@ -1,10 +1,3 @@
-// Package client connects to starfixd over SSH and speaks the protocol.
-//
-// The SSH client runs in-process (golang.org/x/crypto/ssh); no system ssh
-// is used. The server's ED25519 host key is pinned in .starfix.yaml and
-// checked on every connection: a mismatch is refused, and an unpinned host
-// is never trusted on first use. The developer authenticates with a key
-// from ssh-agent (SSH_AUTH_SOCK, or the OpenSSH named pipe on Windows) or the key file named in the config.
 package client
 
 import (
@@ -32,6 +25,8 @@ type Config struct {
 	// Project is the project's UUID.
 	Project string `yaml:"project"`
 	Server  struct {
+		// Host is the server's host name or address. Through IAP it is
+		// not dialed, and names the instance unless IAP.Instance does.
 		Host string `yaml:"host"`
 		// Port defaults to 22.
 		Port int `yaml:"port"`
@@ -87,6 +82,8 @@ var (
 // *proto.Error for errors.As.
 var ErrNoConfig = errors.New(ConfigFile + " not found")
 
+// noConfigError is LoadConfig's error when it finds no config: a
+// *proto.Error through Unwrap, which also matches ErrNoConfig.
 type noConfigError struct{ pe *proto.Error }
 
 func (e noConfigError) Error() string { return e.pe.Error() }
@@ -110,6 +107,8 @@ func LoadConfig(dir string) (*Config, error) {
 	return loadConfig(dir, home)
 }
 
+// loadConfig is LoadConfig with the home directory as a parameter, so
+// tests can place it; "" sets no home boundary.
 func loadConfig(dir, home string) (*Config, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
