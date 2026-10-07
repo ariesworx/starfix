@@ -1,13 +1,17 @@
 // Command releasekey makes and uses the starfix release signing key. It is
 // not part of sfx or starfixd.
 //
-//	releasekey gen KEYFILE            new key pair: private key to KEYFILE (0600), public key to stdout
-//	releasekey sign FILE              sign FILE into FILE.sig with $STARFIX_RELEASE_KEY
-//	releasekey verify FILE [SIG]      check SIG (default FILE.sig) against the keys in keys.go
+//	releasekey gen KEYFILE
+//		new key pair: private key to KEYFILE (0600), public key to stdout
+//	releasekey sign FILE
+//		sign FILE into FILE.sig with $STARFIX_RELEASE_KEY
+//	releasekey verify [--key BASE64]... FILE [SIG]
+//		check SIG (default FILE.sig) against the keys in keys.go, or the --key ones
 //
 // The private key is the standard base64 of the 32-byte Ed25519 seed. It
 // never appears in argv or output: gen writes it only to KEYFILE, and sign
-// reads it only from the environment. See RELEASING.md.
+// reads it only from the environment. sign refuses a key whose public half
+// keys.go does not list. See RELEASING.md.
 package main
 
 import (
@@ -35,6 +39,7 @@ const usage = `usage:
   releasekey sign FILE                (private key in $STARFIX_RELEASE_KEY)
   releasekey verify [--key BASE64]... FILE [SIG]`
 
+// env is what run needs from the process, so tests can supply their own.
 type env struct {
 	getenv         func(string) string
 	stdout, stderr io.Writer
@@ -42,6 +47,8 @@ type env struct {
 	keys func() ([]ed25519.PublicKey, error)
 }
 
+// usageError is a mistake in the command line: run prints the usage after
+// it and exits 2.
 type usageError string
 
 func (e usageError) Error() string { return string(e) }
@@ -50,6 +57,8 @@ func main() {
 	os.Exit(run(os.Args[1:], env{getenv: os.Getenv, stdout: os.Stdout, stderr: os.Stderr, keys: release.Keys}))
 }
 
+// run runs the command in args and returns the exit code: 0 on success,
+// 1 on failure and 2 on a usage error.
 func run(args []string, e env) int {
 	var err error
 	switch {
@@ -143,6 +152,8 @@ func sign(args []string, e env) error {
 	return nil
 }
 
+// privateKey parses v, a base64 Ed25519 seed or whole private key. Its
+// errors never quote v.
 func privateKey(v string) (ed25519.PrivateKey, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -161,6 +172,7 @@ func privateKey(v string) (ed25519.PrivateKey, error) {
 	return nil, fmt.Errorf("$%s holds %d bytes, not a 32-byte Ed25519 seed; fix: set it to the contents of the file `releasekey gen` wrote", EnvKey, len(b))
 }
 
+// keyList collects the repeatable --key flag.
 type keyList []string
 
 func (k *keyList) String() string     { return strings.Join(*k, ",") }
