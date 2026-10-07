@@ -484,10 +484,18 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 	return out, nil
 }
 
-// closeTx closes before, read in w, and records the event.
+// closeTx closes before, read in w, ends any claim on it and records the
+// event.
 func closeTx(ctx context.Context, w *wtx, before Issue, reason string) (Issue, error) {
 	if before.Status == StatusClosed {
 		return Issue{}, fmt.Errorf("%w: issue %s is already closed", ErrInvalid, before.ID)
+	}
+	c, err := loadClaim(ctx, w.tx, before.ID)
+	if err != nil {
+		return Issue{}, err
+	}
+	if err := releaseClaim(ctx, w, c); err != nil {
+		return Issue{}, err
 	}
 	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)})
 }

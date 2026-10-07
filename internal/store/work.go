@@ -5,37 +5,40 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
-// Taking work, before stage 3's leased claims: an issue is held by the
-// principal it is assigned to while it is in_progress. StartIssue takes an
-// issue with a compare-and-swap on its rev, so of two principals racing
-// for one issue exactly one gets it; FinishIssue and a releasing
-// HandoffIssue refuse an issue another principal holds.
+// Taking work: StartIssue leases an issue to the actor (claims.go) and
+// marks it in_progress, assigned to the actor's principal, in one
+// transaction, so of two principals racing for one issue exactly one gets
+// it. FinishIssue and a releasing HandoffIssue refuse an issue another
+// principal holds, or a stale epoch, and end the claim.
 
 // MaxDiscovered bounds the issues one FinishIssue may file.
 const MaxDiscovered = 20
 
-// holder returns who holds is, if that is someone other than principal.
-func holder(is Issue, principal string) string {
-	if is.Status == StatusInProgress && is.Assignee != "" && is.Assignee != principal {
-		return is.Assignee
-	}
-	return ""
-}
-
-// StartIssue takes an issue for the actor: status in_progress, assigned to
-// the actor's principal. With an empty id it takes the first issue Ready
-// would list, or returns ErrNothingReady. An issue the actor already holds
-// is returned unchanged; one another principal holds is refused with a
-// *HeldError; a closed one with ErrInvalid.
-func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID) (Issue, error) {
+// StartIssue takes an issue for the actor for lease (DefaultLease when
+// zero): it claims it and sets it in_progress, assigned to the actor's
+// principal. With an empty id it takes the first issue Ready would list,
+// or returns ErrNothingReady. Taking an issue the actor's own session
+// holds extends the lease and changes nothing else; taking one another
+// session of the same principal holds takes it over under a new epoch;
+// one another principal holds is refused with a *HeldError, and a closed
+// one with ErrInvalid.
+func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease time.Duration) (Issue, Claim, error) {
 	if id != "" {
 		if err := id.Validate(); err != nil {
-			return Issue{}, err
+			return Issue{}, Claim{}, err
 		}
 	}
+	if lease == 0 {
+		lease = DefaultLease
+	}
+	if err := checkLease(lease); err != nil {
+		return Issue{}, Claim{}, err
+	}
 	var out Issue
+	var claim Claim
 	err := s.write(ctx, actor, func(w *wtx) error {
 		target := id
 		if target == "" {
@@ -51,13 +54,21 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID) (Issue,
 		if err != nil {
 			return err
 		}
-		switch {
-		case before.Status == StatusClosed:
+		if before.Status == StatusClosed {
 			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, target)
-		case holder(before, w.actor.Principal) != "":
-			return &HeldError{ID: target, By: before.Assignee}
-		case before.Status == StatusInProgress && before.Assignee == w.actor.Principal:
-			out = before
+		}
+		c, err := loadClaim(ctx, w.tx, target)
+		if err != nil {
+			return err
+		}
+		if by := heldBy(c, before, w.now); by != "" && by != w.actor.Principal {
+			return &HeldError{ID: target, By: by}
+		}
+		if claim, err = take(ctx, w, c, lease); err != nil {
+			return err
+		}
+		out = before
+		if before.Status == StatusInProgress && before.Assignee == w.actor.Principal {
 			return nil
 		}
 		out, err = casUpdate(ctx, w, before, []string{"status = ?", "assignee = ?"},
@@ -69,9 +80,9 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID) (Issue,
 		return w.event(ctx, OpIssueUpdate, string(target), b, a, "")
 	})
 	if err != nil {
-		return Issue{}, err
+		return Issue{}, Claim{}, err
 	}
-	return out, nil
+	return out, claim, nil
 }
 
 // Finish is what FinishIssue records besides closing the issue.
@@ -85,12 +96,14 @@ type Finish struct {
 	Discovered []NewIssue
 }
 
-// FinishIssue closes an issue, records its handoff note and files the work
-// discovered while doing it, all in one transaction: either everything is
-// written or nothing is. It returns the closed issue and the new IDs, in
-// the order given. An issue another principal holds is refused with a
-// *HeldError (close overrides that); a closed one with ErrInvalid.
-func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, f Finish) (Issue, []IssueID, error) {
+// FinishIssue closes an issue, ends its claim, records its handoff note
+// and files the work discovered while doing it, all in one transaction:
+// either everything is written or nothing is. It returns the closed issue
+// and the new IDs, in the order given. An issue another principal holds
+// is refused with a *HeldError (close overrides that); a non-zero epoch
+// that is not the claim's current one with a *StaleEpochError; a closed
+// issue with ErrInvalid.
+func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, f Finish) (Issue, []IssueID, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, nil, err
 	}
@@ -132,8 +145,12 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, f Fini
 		if before.Status == StatusClosed {
 			return fmt.Errorf("%w: issue %s is already closed", ErrInvalid, id)
 		}
-		if by := holder(before, w.actor.Principal); by != "" {
-			return &HeldError{ID: id, By: by}
+		c, err := loadClaim(ctx, w.tx, id)
+		if err != nil {
+			return err
+		}
+		if err := checkHold(c, before, w.actor, epoch, w.now); err != nil {
+			return err
 		}
 		for i, d := range f.Discovered {
 			if _, err := insertIssue(ctx, w, ids[i], d, metas[i]); err != nil {
@@ -158,11 +175,12 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, f Fini
 }
 
 // HandoffIssue records a handoff note on an issue without closing it. With
-// release it also lets the issue go, so another can start it: in_progress
-// becomes open and the assignee is cleared. Releasing an issue another
-// principal holds is refused with a *HeldError, and a closed one with
-// ErrInvalid; a note alone is accepted on any issue.
-func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, note string, release bool) (Issue, error) {
+// release it also lets the issue go, so another can start it: the claim
+// ends, in_progress becomes open and the assignee is cleared. Releasing an
+// issue another principal holds is refused with a *HeldError, a stale
+// epoch with a *StaleEpochError, and a closed issue with ErrInvalid; a
+// note alone is accepted on any issue.
+func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, note string, release bool) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
@@ -179,8 +197,15 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, note 
 			if before.Status == StatusClosed {
 				return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
 			}
-			if by := holder(before, w.actor.Principal); by != "" {
-				return &HeldError{ID: id, By: by}
+			c, err := loadClaim(ctx, w.tx, id)
+			if err != nil {
+				return err
+			}
+			if err := checkHold(c, before, w.actor, epoch, w.now); err != nil {
+				return err
+			}
+			if err := releaseClaim(ctx, w, c); err != nil {
+				return err
 			}
 		}
 		if _, err := insertComment(ctx, w, id, note, CommentHandoff); err != nil {

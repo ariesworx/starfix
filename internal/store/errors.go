@@ -62,3 +62,21 @@ func (e *HeldError) Error() string { return fmt.Sprintf("issue %s is in progress
 
 // Unwrap makes errors.Is(err, ErrConflict) hold.
 func (e *HeldError) Unwrap() error { return ErrConflict }
+
+// StaleEpochError refuses a finish or release that names a claim epoch
+// other than the current one: the issue was taken again since. It wraps
+// ErrConflict.
+type StaleEpochError struct {
+	ID      IssueID
+	Epoch   int64
+	Current int64
+	// By is the current holder, if the issue is held.
+	By Actor
+}
+
+func (e *StaleEpochError) Error() string {
+	return fmt.Sprintf("claim epoch %d on %s is stale (now %d)", e.Epoch, e.ID, e.Current)
+}
+
+// Unwrap makes errors.Is(err, ErrConflict) hold.
+func (e *StaleEpochError) Unwrap() error { return ErrConflict }

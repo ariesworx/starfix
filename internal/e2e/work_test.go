@@ -57,7 +57,7 @@ func TestStartHandoffFinish(t *testing.T) {
 	out := alice.ok("start", "--branch")
 	branch := "fix/" + id + "-fix-the-login-redirect"
 	for _, want := range []string{id + "  P1  in_progress  bug  rev 2", "assignee: alice", "acceptance:\nlands on /home",
-		"branch: " + branch + " (checked out)"} {
+		"claimed by alice (cli on laptop-test), epoch 1, until ", "branch: " + branch + " (checked out)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("start lacks %q:\n%s", want, out)
 		}
@@ -80,7 +80,14 @@ func TestStartHandoffFinish(t *testing.T) {
 		t.Fatalf("bob start: exit %d\n%s", r.code, r.stderr)
 	}
 
-	if got := alice.ok("handoff", id, "--release", "-"); got != id+" rev 3\n" {
+	if out := alice.ok("away", "2d"); !strings.HasPrefix(out, id+" held until ") || !strings.HasSuffix(out, " (cli)\n") {
+		t.Fatalf("away: %q", out)
+	}
+	if r := alice.run("v0.2.0", "handoff", id, "--release", "--epoch", "9", "note"); r.code != cli.ExitFailure ||
+		!strings.Contains(r.stderr, "(epoch 9) was lost; it is now epoch 1") {
+		t.Fatalf("stale release: exit %d\n%s", r.code, r.stderr)
+	}
+	if got := alice.ok("handoff", id, "--release", "--epoch", "1", "-"); got != id+" rev 3\n" {
 		t.Fatalf("handoff: %q", got)
 	}
 	wt := filepath.Join(t.TempDir(), "wt")
@@ -123,7 +130,7 @@ func TestStartHandoffFinish(t *testing.T) {
 	for _, e := range h.Events {
 		ops = append(ops, e.Op+"/"+e.Principal)
 	}
-	want := "issue.create/alice issue.update/alice comment.add/alice issue.update/alice issue.update/bob comment.add/bob issue.close/bob"
+	want := "issue.create/alice claim.take/alice issue.update/alice comment.add/alice issue.update/alice claim.take/bob issue.update/bob comment.add/bob issue.close/bob"
 	if got := strings.Join(ops, " "); got != want {
 		t.Fatalf("history:\n got %s\nwant %s", got, want)
 	}

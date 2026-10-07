@@ -25,9 +25,12 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Conn is the part of *client.Conn the server uses, so tests can stand in
@@ -53,12 +56,19 @@ type Options struct {
 	// Dial opens a connection. It is called on the first tool call and
 	// again after a connection is lost.
 	Dial func(ctx context.Context) (Conn, error)
+	// RenewEvery is how often the claims this session took are renewed
+	// while it runs. Default 60s; negative turns renewal off.
+	RenewEvery time.Duration
 }
+
+// Lease is the claim an agent's start takes. Serve renews it every
+// RenewEvery, so a session that ends lets its issues go within a lease.
+const Lease = "15m"
 
 // Instructions is what an agent reads when it connects.
 const Instructions = "Issue tracker shared by every agent and person on this project. " +
 	"Call prime at the start of a session. Take work with start (the top ready issue, or an id): " +
-	"it returns the issue, its last handoff and a branch name. Comment as you go. " +
+	"it claims the issue while this session runs and returns it, its last handoff and a branch name. Comment as you go. " +
 	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
 	"To stop without closing, call handoff (release lets another start it). " +
 	"For a standup or status report, call digest and write the narrative from it. " +
@@ -67,14 +77,81 @@ const Instructions = "Issue tracker shared by every agent and person on this pro
 
 // Server is one MCP server and its connection to starfixd.
 type Server struct {
-	mcp  *mcp.Server
-	link *link
-	opts Options
+	mcp    *mcp.Server
+	link   *link
+	opts   Options
+	claims claims
+}
+
+// claims are the issues this session took and their epochs, so finish and
+// handoff are fenced, and the renewer knows what to keep alive.
+type claims struct {
+	mu   sync.Mutex
+	held map[string]int64
+	// lost are issues whose claim lapsed or was taken over, reported once
+	// by the next prime.
+	lost []string
+}
+
+func (c *claims) take(id string, epoch int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.held[id] = epoch
+}
+
+// epoch returns the epoch this session took id at, or 0.
+func (c *claims) epoch(id string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.held[id]
+}
+
+func (c *claims) drop(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.held, id)
+}
+
+func (c *claims) any() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.held) > 0
+}
+
+// keep replaces the held set with what the server says this session still
+// holds; anything else is lost.
+func (c *claims) keep(still []proto.Claim) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := map[string]int64{}
+	for _, cl := range still {
+		if e, ok := c.held[cl.ID]; ok && e == cl.Epoch {
+			now[cl.ID] = e
+		}
+	}
+	for id := range c.held {
+		if _, ok := now[id]; !ok {
+			c.lost = append(c.lost, id)
+		}
+	}
+	c.held = now
+}
+
+// takeLost returns and clears the lost claims.
+func (c *claims) takeLost() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	l := c.lost
+	c.lost = nil
+	return l
 }
 
 // New returns the server. Call Close when done with it.
 func New(opts Options) *Server {
-	s := &Server{opts: opts, link: &link{dial: opts.Dial}}
+	if opts.RenewEvery == 0 {
+		opts.RenewEvery = time.Minute
+	}
+	s := &Server{opts: opts, link: &link{dial: opts.Dial}, claims: claims{held: map[string]int64{}}}
 	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "starfix", Version: opts.Version},
 		&mcp.ServerOptions{Instructions: Instructions, Capabilities: &mcp.ServerCapabilities{}})
 	s.register()
@@ -91,10 +168,44 @@ func (s *Server) Close() error { return s.link.close() }
 // Nothing else may write to out: it carries the protocol.
 func (s *Server) Serve(ctx context.Context, in io.ReadCloser, out io.WriteCloser) error {
 	defer func() { _ = s.Close() }()
+	if s.opts.RenewEvery > 0 {
+		rctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go s.renewLoop(rctx)
+	}
 	if err := s.mcp.Run(ctx, &mcp.IOTransport{Reader: in, Writer: out}); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("mcp: %w", err)
 	}
 	return nil
+}
+
+func (s *Server) renewLoop(ctx context.Context) {
+	t := time.NewTicker(s.opts.RenewEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Renew(ctx)
+		}
+	}
+}
+
+// Renew extends the claims this session holds, if any, and notes the ones
+// it no longer holds. A failure is left for the next tick: the lease is
+// many ticks long.
+func (s *Server) Renew(ctx context.Context) {
+	if !s.claims.any() {
+		return
+	}
+	var r proto.ClaimsResult
+	err := s.link.with(ctx, true, func(c Conn) error {
+		return c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease}, &r)
+	})
+	if err == nil {
+		s.claims.keep(r.Claims)
+	}
 }
 
 // link holds the session's one connection, redialing after a loss.

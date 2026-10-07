@@ -163,6 +163,9 @@ func printIssue(w io.Writer, s proto.ShowResult) {
 	if len(is.Labels) > 0 {
 		p("labels: %s\n", strings.Join(is.Labels, ", "))
 	}
+	if c := s.Claim; c != nil {
+		p("claimed by %s (%s on %s), epoch %d, until %s\n", c.By, c.Session, c.Machine, c.Epoch, when(c.ExpiresAt))
+	}
 	p("created %s by %s; updated %s\n", when(is.CreatedAt), is.CreatedBy, when(is.UpdatedAt))
 	if is.ClosedAt != nil {
 		p("closed %s", when(*is.ClosedAt))

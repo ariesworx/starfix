@@ -27,6 +27,7 @@ const (
 	OpFinish   = "finish"    // FinishArgs → FinishResult
 	OpHandoff  = "handoff"   // HandoffArgs → WriteResult
 	OpDigest   = "digest"    // DigestArgs → DigestResult
+	OpRenew    = "renew"     // RenewArgs → ClaimsResult (protocol 2)
 )
 
 // Issue is the full form of an issue, returned by show.
@@ -135,6 +136,8 @@ type ShowArgs struct {
 type ShowResult struct {
 	Issue Issue `json:"issue"`
 	Deps  []Dep `json:"deps,omitempty"`
+	// Claim is the issue's active claim, if any (protocol 2).
+	Claim *Claim `json:"claim,omitempty"`
 }
 
 // ListArgs filters issues. Empty fields match everything; all Labels must
@@ -246,15 +249,44 @@ type HistoryResult struct {
 	Events []Event `json:"events"`
 }
 
-// StartArgs takes an issue: the one named, or the top ready one.
+// StartArgs takes an issue: the one named, or the top ready one. Lease is
+// how long the claim lasts unless renewed, as a duration such as 15m, 8h
+// or 2d (1m to 7d); empty takes the server's default, 15m.
 type StartArgs struct {
-	ID string `json:"id,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Lease string `json:"lease,omitempty"`
 }
 
-// StartResult is the issue taken, in full, and its latest handoff note.
+// StartResult is the issue taken, in full, its latest handoff note, and
+// the claim (protocol 2).
 type StartResult struct {
 	Issue   Issue    `json:"issue"`
 	Handoff *Comment `json:"handoff,omitempty"`
+	Claim   *Claim   `json:"claim,omitempty"`
+}
+
+// Claim is a lease on an issue. Epoch rises each time a new holder takes
+// it; finish and handoff may pass it to refuse acting on a claim since
+// lost.
+type Claim struct {
+	ID        string    `json:"id"`
+	By        string    `json:"by"`
+	Session   string    `json:"session"`
+	Machine   string    `json:"machine"`
+	Epoch     int64     `json:"epoch"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// RenewArgs extends the caller's claims to at least now plus Lease (empty
+// takes 15m). All renews every session's claims, not only this one's.
+type RenewArgs struct {
+	Lease string `json:"lease,omitempty"`
+	All   bool   `json:"all,omitempty"`
+}
+
+// ClaimsResult lists claims, soonest to expire first.
+type ClaimsResult struct {
+	Claims []Claim `json:"claims"`
 }
 
 // Discovered is work found while doing an issue, filed by finish. Zero
@@ -268,7 +300,9 @@ type Discovered struct {
 // FinishArgs closes an issue with an optional handoff note and the work
 // discovered while doing it, in one transaction.
 type FinishArgs struct {
-	ID         string       `json:"id"`
+	ID string `json:"id"`
+	// Epoch, if set, must be the issue's current claim epoch.
+	Epoch      int64        `json:"epoch,omitempty"`
 	Reason     string       `json:"reason,omitempty"`
 	Handoff    string       `json:"handoff,omitempty"`
 	Discovered []Discovered `json:"discovered,omitempty"`
@@ -285,7 +319,9 @@ type FinishResult struct {
 // HandoffArgs records a handoff note. Release also lets the issue go, so
 // another can start it.
 type HandoffArgs struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Epoch, if set, must be the issue's current claim epoch.
+	Epoch   int64  `json:"epoch,omitempty"`
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty"`
 }
