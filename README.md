@@ -7,7 +7,8 @@ from the command line. It is written in Go and stores its data in
 
 **Status: stage 1 in progress.** The server-side store (`internal/store`) is
 built; the server, transport and CLI are not. Read the
-[design](docs/design/starfix.md) and the [database choice](docs/design/database.md).
+[design](docs/design/starfix.md), the [database choice](docs/design/database.md), and the
+draft [Bearing orchestrator spec](docs/design/bearing.md).
 
 starfix is an independent project, inspired by and able to import from
 [beads](https://github.com/gastownhall/beads) (`bd`). It is not part of, or
