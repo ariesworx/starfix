@@ -119,11 +119,19 @@ func mustJSON(v any) json.RawMessage {
 // owned are the entry keys starfix writes, in order; other keys are left.
 func owned(f format, e Entry) object {
 	o := object{}
-	if f == jsonClaude {
+	if f == jsonClaude || f == jsonVSCode {
 		o = o.set("type", mustJSON("stdio"))
 	}
 	o = o.set("command", mustJSON(e.Command))
 	return o.set("args", mustJSON(e.Args))
+}
+
+// serversKey is the top-level key that holds the servers.
+func serversKey(f format) string {
+	if f == jsonVSCode {
+		return "servers"
+	}
+	return "mcpServers"
 }
 
 func applyJSON(content []byte, f format, e Entry) ([]byte, error) {
@@ -131,47 +139,49 @@ func applyJSON(content []byte, f format, e Entry) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	key := serversKey(f)
 	servers := object{}
-	if raw, ok := root.get("mcpServers"); ok {
+	if raw, ok := root.get(key); ok {
 		if servers, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("mcpServers: %w", err)
+			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 	}
 	entry := object{}
 	if raw, ok := servers.get(ServerName); ok {
 		if entry, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("mcpServers.%s: %w", ServerName, err)
+			return nil, fmt.Errorf("%s.%s: %w", key, ServerName, err)
 		}
 	}
 	for _, m := range owned(f, e) {
 		entry = entry.set(m.key, m.val)
 	}
 	servers = servers.set(ServerName, entry.marshal())
-	root = root.set("mcpServers", servers.marshal())
+	root = root.set(key, servers.marshal())
 	return indent(root.marshal())
 }
 
-func removeJSON(content []byte) ([]byte, error) {
+func removeJSON(content []byte, f format) ([]byte, error) {
 	root, err := parseObject(content)
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := root.get("mcpServers")
+	key := serversKey(f)
+	raw, _ := root.get(key)
 	servers, err := parseObject(raw)
 	if err != nil {
-		return nil, fmt.Errorf("mcpServers: %w", err)
+		return nil, fmt.Errorf("%s: %w", key, err)
 	}
-	root = root.set("mcpServers", servers.del(ServerName).marshal())
+	root = root.set(key, servers.del(ServerName).marshal())
 	return indent(root.marshal())
 }
 
 // jsonEntry returns the starfix entry, if content has one.
-func jsonEntry(content []byte) (object, bool) {
+func jsonEntry(content []byte, f format) (object, bool) {
 	root, err := parseObject(content)
 	if err != nil {
 		return nil, false
 	}
-	raw, ok := root.get("mcpServers")
+	raw, ok := root.get(serversKey(f))
 	if !ok {
 		return nil, false
 	}
@@ -188,7 +198,7 @@ func jsonEntry(content []byte) (object, bool) {
 }
 
 func jsonRegistered(content []byte, f format, e Entry) bool {
-	entry, ok := jsonEntry(content)
+	entry, ok := jsonEntry(content, f)
 	if !ok {
 		return false
 	}
