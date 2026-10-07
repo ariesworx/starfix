@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,9 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 			"status in_progress is set only by start")
 
 	case errors.Is(err, store.ErrInvalid):
+		// These refusals have no typed error in the store, so its
+		// messages are matched: a change to one of them must change
+		// this too.
 		switch {
 		case strings.Contains(text, " is claimed by "):
 			return proto.Errf(proto.CodeInvalid,
@@ -152,10 +156,9 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 	// Only issue.* events move rev; labels, deps and comments do not.
 	by := ""
 	if page, err := s.cfg.Store.HistoryPage(ctx, store.IssueID(id), "", 50); err == nil {
-		evs := page.Events
-		for i := len(evs) - 1; i >= 0; i-- {
-			if strings.HasPrefix(string(evs[i].Op), "issue.") {
-				by = " by " + evs[i].Actor.Principal
+		for _, ev := range slices.Backward(page.Events) {
+			if strings.HasPrefix(string(ev.Op), "issue.") {
+				by = " by " + ev.Actor.Principal
 				break
 			}
 		}

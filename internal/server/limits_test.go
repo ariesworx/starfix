@@ -261,21 +261,18 @@ func TestShowAndBlockedCapEdges(t *testing.T) {
 	}
 }
 
-// handshakeAs connects a over a pipe and returns the welcome.
+// handshakeAs connects a over a pipe and returns the welcome, which may be
+// a refusal.
 func handshakeAs(t *testing.T, s *Server, a store.Actor) (*proto.Frame, *conn) {
 	t.Helper()
 	srv, cli := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.handle(t.Context(), srv)
-	}()
-	t.Cleanup(func() { _ = cli.Close(); <-done })
 	c := &conn{t: t, enc: proto.NewEncoder(cli), dec: proto.NewDecoder(cli), nc: cli}
-	go func() {
+	t.Cleanup(func() { _ = cli.Close(); c.wg.Wait() })
+	c.wg.Go(func() { s.handle(t.Context(), srv) })
+	c.wg.Go(func() {
 		_ = c.enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: a.Principal})
 		_ = c.enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: a.Session, Machine: a.Machine})
-	}()
+	})
 	return c.read(), c
 }
 

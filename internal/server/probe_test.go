@@ -10,6 +10,7 @@ import (
 
 func TestProbe(t *testing.T) {
 	s := newServer(t)
+	// Not t.TempDir, whose path can be too long for a unix socket.
 	dir, err := os.MkdirTemp("", "sfp")
 	if err != nil {
 		t.Fatal(err)

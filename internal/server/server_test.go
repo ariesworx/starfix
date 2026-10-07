@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -254,26 +255,25 @@ func TestDispatchErrors(t *testing.T) {
 	}
 }
 
-// pipeConn wires a handshake through net.Pipe, playing the bridge and the
-// client.
+// handshake plays the bridge and the client over net.Pipe: it sends frames
+// to a connection s handles, and returns the first frame s writes back.
 func handshake(t *testing.T, s *Server, frames ...*proto.Frame) (*proto.Frame, error) {
 	t.Helper()
 	srv, cli := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	defer func() { _ = cli.Close(); wg.Wait() }()
+	wg.Go(func() {
 		defer func() { _ = srv.Close() }()
 		s.handle(t.Context(), srv)
-	}()
-	defer func() { _ = cli.Close(); <-done }()
+	})
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
-	go func() {
+	wg.Go(func() {
 		for _, f := range frames {
 			if enc.Encode(f) != nil {
 				return
 			}
 		}
-	}()
+	})
 	_ = cli.SetReadDeadline(time.Now().Add(10 * time.Second))
 	return dec.Decode()
 }
@@ -372,17 +372,18 @@ func TestServeRefusesPeer(t *testing.T) {
 func TestBridgeFrameOnlyFirst(t *testing.T) {
 	s := newServer(t)
 	srv, cli := net.Pipe()
-	go func() { s.handle(t.Context(), srv); _ = srv.Close() }()
-	defer func() { _ = cli.Close() }()
+	var wg sync.WaitGroup
+	defer func() { _ = cli.Close(); wg.Wait() }()
+	wg.Go(func() { s.handle(t.Context(), srv); _ = srv.Close() })
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
-	go func() {
+	wg.Go(func() {
 		_ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "alice"})
 		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 1, Project: project})
-	}()
+	})
 	if f, err := dec.Decode(); err != nil || f.Err != nil {
 		t.Fatalf("welcome: %v %+v", err, f)
 	}
-	go func() { _ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "root"}) }()
+	wg.Go(func() { _ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "root"}) })
 	f, err := dec.Decode()
 	if err != nil {
 		t.Fatal(err)
@@ -396,6 +397,7 @@ func TestBridgeFrameOnlyFirst(t *testing.T) {
 }
 
 func TestListen(t *testing.T) {
+	// Not t.TempDir, whose path can be too long for a unix socket.
 	base, err := os.MkdirTemp("", "sfl")
 	if err != nil {
 		t.Fatal(err)

@@ -15,7 +15,11 @@ import (
 
 // Dispatch runs one operation for actor. args is the raw JSON of the op's
 // *Args type; unknown fields are refused, since every field of every
-// protocol version in range is known here.
+// protocol version in range is known here. It returns the op's *Result,
+// or a refusal: invalid for an unknown op or bad arguments, else the
+// store's error as mapErr words it. Dispatch is safe for concurrent use.
+// It applies no write rate limit, and refuses watch, which needs a
+// connection to push to.
 func (s *Server) Dispatch(ctx context.Context, actor store.Actor, op string, args json.RawMessage) (any, *proto.Error) {
 	h, ok := handlers[op]
 	if !ok {
@@ -25,38 +29,36 @@ func (s *Server) Dispatch(ctx context.Context, actor store.Actor, op string, arg
 	return h(ctx, s, actor, args)
 }
 
+// handler runs one op, as Dispatch does, for actor a.
 type handler func(ctx context.Context, s *Server, a store.Actor, args json.RawMessage) (any, *proto.Error)
 
-var handlers map[string]handler
-
-func init() {
-	handlers = map[string]handler{
-		proto.OpCreate:   typed(create),
-		proto.OpShow:     typed(show),
-		proto.OpList:     typed(list),
-		proto.OpReady:    typed(ready),
-		proto.OpBlocked:  typed(blocked),
-		proto.OpUpdate:   typed(update),
-		proto.OpClose:    typed(closeIssue),
-		proto.OpReopen:   typed(reopen),
-		proto.OpDepAdd:   typed(depAdd),
-		proto.OpDepRm:    typed(depRm),
-		proto.OpLabelAdd: typed(labelAdd),
-		proto.OpLabelRm:  typed(labelRm),
-		proto.OpComment:  typed(comment),
-		proto.OpComments: typed(comments),
-		proto.OpHistory:  typed(history),
-		proto.OpStart:    typed(start),
-		proto.OpFinish:   typed(finish),
-		proto.OpHandoff:  typed(handoff),
-		proto.OpDigest:   typed(digest),
-		proto.OpRenew:    typed(renew),
-		proto.OpWho:      typed(who),
-		proto.OpInbox:    typed(inbox),
-		proto.OpAck:      typed(ack),
-		proto.OpWatch:    typed(watchOp),
-		proto.OpAccept:   typed(accept),
-	}
+// handlers maps each op to its handler.
+var handlers = map[string]handler{
+	proto.OpCreate:   typed(create),
+	proto.OpShow:     typed(show),
+	proto.OpList:     typed(list),
+	proto.OpReady:    typed(ready),
+	proto.OpBlocked:  typed(blocked),
+	proto.OpUpdate:   typed(update),
+	proto.OpClose:    typed(closeIssue),
+	proto.OpReopen:   typed(reopen),
+	proto.OpDepAdd:   typed(depAdd),
+	proto.OpDepRm:    typed(depRm),
+	proto.OpLabelAdd: typed(labelAdd),
+	proto.OpLabelRm:  typed(labelRm),
+	proto.OpComment:  typed(comment),
+	proto.OpComments: typed(comments),
+	proto.OpHistory:  typed(history),
+	proto.OpStart:    typed(start),
+	proto.OpFinish:   typed(finish),
+	proto.OpHandoff:  typed(handoff),
+	proto.OpDigest:   typed(digest),
+	proto.OpRenew:    typed(renew),
+	proto.OpWho:      typed(who),
+	proto.OpInbox:    typed(inbox),
+	proto.OpAck:      typed(ack),
+	proto.OpWatch:    typed(watchOp),
+	proto.OpAccept:   typed(accept),
 }
 
 // typed decodes args strictly into A and calls fn.
@@ -179,7 +181,8 @@ func show(ctx context.Context, s *Server, a store.Actor, in proto.ShowArgs) (any
 	return out, nil
 }
 
-// truncate cuts s to at most n bytes on a rune boundary, adding "…".
+// truncate cuts s to at most n bytes, on a rune boundary, and appends "…".
+// It reports whether it cut anything.
 func truncate(s string, n int) (string, bool) {
 	if len(s) <= n {
 		return s, false
@@ -282,6 +285,7 @@ func reopen(ctx context.Context, s *Server, a store.Actor, in proto.ReopenArgs) 
 	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
 }
 
+// depType is a request's dependency type, blocks when it gives none.
 func depType(t string) store.DepType {
 	if t == "" {
 		return store.DepBlocks
@@ -358,8 +362,9 @@ func history(ctx context.Context, s *Server, a store.Actor, in proto.PageArgs) (
 	return out, nil
 }
 
-// lease reads a start or renew lease of at most most (store.MaxClaimLease
-// or store.MaxLease); empty is the default.
+// lease parses the lease a start or renew asks for. Empty means
+// store.DefaultLease; anything else must be from store.MinLease to most,
+// which is store.MaxClaimLease, or store.MaxLease for a renew with All.
 func lease(op, s string, most time.Duration) (time.Duration, *proto.Error) {
 	if s == "" {
 		return store.DefaultLease, nil
@@ -391,14 +396,13 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 	}
 	c := wireClaim(claim)
 	out := proto.StartResult{Issue: wireIssue(is), Claim: &c}
-	// The issue is taken; a failed read says so in the log rather than
-	// fail the start.
+	// The issue is taken: a failed read of its items or its handoff is
+	// logged rather than failing the start.
 	if out.Items, err = s.items(ctx, is); err != nil {
 		s.cfg.Logger.Error("read acceptance items", "issue", is.ID, "err", err)
 	}
 	h, err := s.cfg.Store.LastHandoff(ctx, is.ID)
 	if err != nil {
-		// The issue is taken; say so rather than fail the start.
 		s.cfg.Logger.Error("read handoff", "issue", is.ID, "err", err)
 	} else if h != nil {
 		w := wireHandoff(*h, a)
