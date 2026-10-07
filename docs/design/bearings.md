@@ -1,12 +1,15 @@
-# Bearing: an agent orchestrator on starfix
+# Bearings: an agent orchestrator on starfix
 
 Status: **draft specification**, open for review. Companion to
 [starfix.md](starfix.md).
 
-Bearing runs and supervises many AI coding agents across sessions and machines.
+Bearings runs and supervises many AI coding agents across sessions and machines.
 starfix holds all state: issues, claims, leases, memory, events and costs.
-Bearing holds none. It is the deterministic Go layer that starts agents, keeps
+Bearings holds none. It is the deterministic Go layer that starts agents, keeps
 their claims honest, routes work to them and lands their output safely.
+
+The name follows starfix: a navigator fixes a position from several star
+bearings, as Bearings lands one change from many agents.
 
 The design draws on Gas Town and its successor Gas City, which proved the idea
 and exposed its failure modes: claims that never release, reapers that kill live
@@ -19,9 +22,9 @@ removes.
 1. **Go supervises; LLMs judge.** Spawning, reaping, routing, budgeting and
    merging are deterministic Go reacting to events. A model is called only for
    a question that needs judgment, such as "why is this agent stuck?".
-2. **Stateless.** Every fact lives in starfix. A Bearing restart loses nothing
+2. **Stateless.** Every fact lives in starfix. A Bearings restart loses nothing
    and adopts its running children.
-3. **Event-driven, never polling.** Bearing subscribes to the starfix event
+3. **Event-driven, never polling.** Bearings subscribes to the starfix event
    stream (SSE). No status loops, no per-operation CLI processes.
 4. **Identity is the SSH principal plus the session**, as in starfix. Never a
    path, a working directory or an environment variable.
@@ -29,7 +32,7 @@ removes.
    green CI, never a force-push, never a push to a protected branch. Agents run
    in their harness's allowlist mode; unrestricted permissions only inside a
    sandbox.
-6. **Provider allowlist.** Bearing launches only providers and models an
+6. **Provider allowlist.** Bearings launches only providers and models an
    operator has allowed, and refuses everything else at config load.
 7. **One static binary, Go only.** No Node, Python or TypeScript components. No
    hard dependency on tmux.
@@ -39,31 +42,31 @@ removes.
 ## 2. Architecture
 
 ```
-            operator: bearing CLI · TUI · HTML status page
+            operator: bearings CLI · TUI · HTML status page
                                 │
- ┌──────────────── bearingd (one per machine) ─────────────────┐
+ ┌──────────────── bearingsd (one per machine) ────────────────┐
  │ supervisor ─ patrol ─ dispatcher ─ governor ─ merge train   │
  │     │                                                       │
  │  agent CLIs (Claude Code, Codex, Gemini), one process group │
  │  and one git worktree each, optionally sandboxed            │
  └──────┬──────────────────────────────────────────────────────┘
-        │ starfix client: MCP for agents, RPC + SSE for bearingd
+        │ starfix client: MCP for agents, RPC + SSE for bearingsd
         ▼
      starfixd ─── Dolt
 ```
 
-- `bearingd` runs on every machine that runs agents, because it owns their
+- `bearingsd` runs on every machine that runs agents, because it owns their
   processes and worktrees: a developer's laptop, a headless server, or both.
   Several can share one starfix server; that is the multi-machine story, and it
   mostly falls out of starfix's single authority and leases.
-- **Deployment order.** Developer machines first, until Bearing is proven:
+- **Deployment order.** Developer machines first, until Bearings is proven:
   supervise agents on the developer's machine under their own logins. Then a
-  server `bearingd` that keeps working when no developer is online. The merge
+  server `bearingsd` that keeps working when no developer is online. The merge
   train (§3.5) holds push credentials and the branch lock, so it runs in
   exactly one place, on that server.
-- Agents talk to starfix through its MCP server. Bearing never types into an
+- Agents talk to starfix through its MCP server. Bearings never types into an
   agent's terminal.
-- `bearing` is the operator CLI. It talks to the local `bearingd` over a unix
+- `bearings` is the operator CLI. It talks to the local `bearingsd` over a unix
   socket.
 
 ## 3. Components
@@ -96,7 +99,7 @@ addresses.
 - On exit: if the agent finished, the issue is already closed. Otherwise
   release the claim, or mark it `stalled` with a handoff (§3.6) when work is in
   the worktree.
-- On `bearingd` restart, adopt live children by PID and session ID; reap the
+- On `bearingsd` restart, adopt live children by PID and session ID; reap the
   rest. Teardown kills the whole process group.
 - A fenced epoch on every claim means a recycled agent with the same name can
   never act on a stale claim.
@@ -129,7 +132,7 @@ Every agent works in its own worktree and branch, and conflicts are resolved at
 the pull request by rebasing. That is the safety net, and the first stages
 rely on it alone.
 
-- **Log every conflict.** When a branch conflicts, `bearingd` records an event
+- **Log every conflict.** When a branch conflicts, `bearingsd` records an event
   with the issues and files involved, and the rework it cost in tokens.
 - **Reservations are deferred.** If the log shows rework is expensive, add
   reservations: before dispatch, reserve the paths an issue will touch, and hold
@@ -147,7 +150,7 @@ rely on it alone.
   human approval.
 - **Queue only until the server runs.** The train orders, tests and opens pull
   requests; a human merges. Merging by the train waits for the server
-  `bearingd`, is then opt-in per project, and still requires green CI. The
+  `bearingsd`, is then opt-in per project, and still requires green CI. The
   one exception is an epic branch: from B3 the train may merge a child with
   green CI into `epic/*`, never `main` (§3.13). Never force-push; never push to
   a protected branch.
@@ -174,20 +177,20 @@ forking.
 
 starfix owns the accounting: token usage per issue, session and `account`, the
 price table, list-price and amortized cost, `starfix cost`, `starfix log` and
-the MCP `cost` tool (starfix §12.1). Bearing keeps no ledger. It does two
+the MCP `cost` tool (starfix §12.1). Bearings keeps no ledger. It does two
 things:
 
-- **Capture.** Because it launches each agent, Bearing reads the harness's
+- **Capture.** Because it launches each agent, Bearings reads the harness's
   usage output at the end of each turn or session and reports it to starfix
   against the claimed issue. This covers harnesses whose hooks cannot report
   usage.
 - **Enforce.** The governor reads cost back from starfix to apply budgets.
 
-The numbers are the same whether work ran under Bearing or by hand.
+The numbers are the same whether work ran under Bearings or by hand.
 
 ### 3.7.2 Plans and credentials
 
-Bearing never calls a model API itself. It launches the providers' own CLIs
+Bearings never calls a model API itself. It launches the providers' own CLIs
 under whatever login they have, an API key or a subscription plan. Judgment
 calls (§3.3) go through the same CLI in headless mode.
 
@@ -219,9 +222,9 @@ require a gate: CI, a human approval, or a named reviewer.
 
 ### 3.11 Observability
 
-- `bearing who`: agents, state, claim, lease remaining, spend.
-- `bearing board`: live TUI (bubbletea) over the event stream.
-- `bearingd --http`: a server-rendered status page (`html/template`), no
+- `bearings who`: agents, state, claim, lease remaining, spend.
+- `bearings board`: live TUI (bubbletea) over the event stream.
+- `bearingsd --http`: a server-rendered status page (`html/template`), no
   JavaScript framework.
 - The starfix `digest` covers "what happened in the last N hours".
 - OpenTelemetry traces and metrics, optional.
@@ -237,9 +240,9 @@ agent permissions are allowed only here.
 ### 3.13 Epics: distributed work on one goal
 
 An epic is a starfix issue of type `epic` whose children point to it with
-`parent_id`. Bearing never dispatches the epic itself; it runs the children,
+`parent_id`. Bearings never dispatches the epic itself; it runs the children,
 possibly on several machines at once, and lands them as one change. That is the
-hardest coordination problem Bearing has, because siblings share a goal, often
+hardest coordination problem Bearings has, because siblings share a goal, often
 share files, and depend on each other's code, not just each other's status.
 
 **What goes wrong without a design**
@@ -250,7 +253,7 @@ share files, and depend on each other's code, not just each other's status.
 | A child builds on code that isn't there | Its blocker is *closed* but not yet *merged* where the child branches from |
 | Siblings disagree on an interface | Each agent decides alone; nothing carries the decision to the others |
 | Conflicts pile up late | Siblings touch the same area in parallel |
-| Scope and spend creep | Agents file new children mid-epic and Bearing dispatches them |
+| Scope and spend creep | Agents file new children mid-epic and Bearings dispatches them |
 | One failing child stalls the epic silently | Retries loop; siblings keep building on a broken base |
 | The epic branch drifts from `main` | Long-lived branch, no one merges `main` back |
 
@@ -277,7 +280,7 @@ share files, and depend on each other's code, not just each other's status.
 4. **Shared epic context.** `prime` for a child includes the epic's `design`, the
    epic's decision log, and short handoffs from landed siblings. When an agent
    makes a decision others must follow (an interface, a name, a schema), it
-   records it with the starfix MCP tools as an epic decision; Bearing pushes it
+   records it with the starfix MCP tools as an epic decision; Bearings pushes it
    to the inboxes of running siblings, whose next prompt sees it.
 5. **Lower parallelism, measured conflicts.** Siblings collide more than
    unrelated issues, so each epic has its own cap (`max_parallel`, default 3)
@@ -301,7 +304,7 @@ share files, and depend on each other's code, not just each other's status.
    issue at the head of the queue, and dispatch on that epic pauses until it
    lands.
 10. **Close-out.** When every child has landed and the epic branch is green,
-    Bearing opens the epic pull request to `main` and marks the epic
+    Bearings opens the epic pull request to `main` and marks the epic
     close-eligible. The epic closes when that pull request merges. Cancelling an
     epic stops its agents, releases claims and keeps every branch.
 
@@ -318,7 +321,7 @@ from its handoff and the branch.
 
 ## 4. Configuration
 
-One TOML file per project, `bearing.toml`, plus a per-machine file for local
+One TOML file per project, `bearings.toml`, plus a per-machine file for local
 limits. Sketch:
 
 ```toml
@@ -348,7 +351,7 @@ require = ["ci", "human"]
 mode = "none"          # "none" or "container"
 ```
 
-## 5. What Bearing does not build
+## 5. What Bearings does not build
 
 | Not built | Why |
 |---|---|
@@ -367,16 +370,16 @@ mode = "none"          # "none" or "container"
 
 ## 6. Plan
 
-Bearing stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
+Bearings stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
 
 | Stage | Delivers | Needs starfix |
 |---|---|---|
-| B0 | Supervisor (§3.1), typed state (§3.2), `bearing who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
+| B0 | Supervisor (§3.1), typed state (§3.2), `bearings who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
 | B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), conflict log (§3.4), Codex and Gemini | 3 |
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
 | B3 | Merge train in queue mode, merging only into `epic/*` (§3.5), formula runner (§3.10), epics (§3.13) | 6 (locks, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
-| B5 | Server `bearingd` running unattended; merge train may merge (opt-in) | 6 |
+| B5 | Server `bearingsd` running unattended; merge train may merge (opt-in) | 6 |
 | — | Reservations (§3.4), only if the conflict log shows rework is expensive | 6 (reservations) |
 | — | Gas City shim: an `exec:` beads provider backed by starfix, so Gas City users can try it | 1 (issues, deps, ready) |
 
@@ -387,12 +390,12 @@ claims, no orphaned processes and no reaped live agents.
 
 | # | Decision |
 |---|---|
-| 1 | Developer machines first; a server `bearingd` follows once proven, for work while no developer is online (§2). |
+| 1 | Developer machines first; a server `bearingsd` follows once proven, for work while no developer is online (§2). |
 | 2 | The merge train only queues, tests and opens pull requests until the server runs (§3.5). |
 | 3 | Sandboxes are containers, on macOS and Linux (§3.12). |
 | 4 | Build the Gas City shim (§6). |
 | 5 | Worktrees and pull requests handle conflicts; log them, and defer reservations until the log justifies them (§3.4). |
-| 6 | Bearing lives in this repository as `cmd/bearing` and `cmd/bearingd`, in the same Go module, released under one tag with starfix, so it never ships against a protocol starfix does not speak. |
+| 6 | Bearings lives in this repository as `cmd/bearings` and `cmd/bearingsd`, in the same Go module, released under one tag with starfix, so it never ships against a protocol starfix does not speak. |
 | 7 | Epics integrate on an `epic/<id>` branch by default; small epics may opt into `integration = "trunk"` (§3.13). |
 | 8 | A human accepts discovered children; a per-epic policy may come later, once spend forecasts are trustworthy (§3.13). |
 | 9 | A person or a planning agent may plan an epic; dispatch always waits for a human to approve the plan (§3.13). |
