@@ -259,6 +259,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 			"session and machine must be 1-255 printable characters"))
 	}
 	w.Session = sess.actor.Session
+	w.Principal = sess.actor.Principal
 	if err := sess.enc.Encode(w); err != nil {
 		return nil, err
 	}

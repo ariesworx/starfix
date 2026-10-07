@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/client"
@@ -234,11 +233,8 @@ func (r *runner) connect(ctx context.Context) (*client.Conn, error) {
 	if err != nil || host == "" {
 		host = "unknown"
 	}
-	session := r.env.Getenv("STARFIX_SESSION")
-	if session == "" {
-		session = r.env.Getenv("CLAUDE_SESSION_ID")
-	}
-	c, err := client.Dial(ctx, cfg, client.Options{Version: r.env.Version, Session: session, Machine: host, Getenv: r.env.Getenv})
+	c, err := client.Dial(ctx, cfg, client.Options{Version: r.env.Version, Session: client.SessionFromEnv(r.env.Getenv),
+		Machine: host, Getenv: r.env.Getenv})
 	if err != nil {
 		return nil, err
 	}
@@ -324,13 +320,4 @@ func priority(s string) (int, error) {
 		return 0, errors.New("priority must be 0-4 (or P0-P4)")
 	}
 	return int(s[0] - '0'), nil
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
