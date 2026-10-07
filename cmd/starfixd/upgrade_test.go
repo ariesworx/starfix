@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -216,7 +217,7 @@ func TestUpgradeServerRefusals(t *testing.T) {
 		{name: "rollback with --to", current: "v0.2.0", args: []string{"--rollback", "--to", "v0.3.0"}, usage: true, want: "cannot be combined"},
 		{name: "unsigned", current: "v0.2.0", edit: func(_ *testing.T, r *upgradeRig) { r.gh.Omit[release.SignatureName] = true }, want: "failed verification"},
 		{name: "no release key", current: "v0.2.0", edit: func(_ *testing.T, r *upgradeRig) {
-			r.d.releases = r.gh.Client(release.Ed25519{Keys: nil}) // the built-in list, empty in this build
+			r.d.releases = r.gh.Client(release.Ed25519{Keys: []ed25519.PublicKey{}}) // a build with no keys
 		}, want: "this build cannot verify releases"},
 		{name: "tampered archive", current: "v0.2.0", edit: func(t *testing.T, r *upgradeRig) {
 			s := r.gh.Checksums()
