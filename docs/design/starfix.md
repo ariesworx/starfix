@@ -374,3 +374,9 @@ Maintainer, 6 Oct 2026:
 5. Dolt stays the backend. `sfx upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
 6. All ten developer-experience features in §12 are in scope, and `digest` is an agent tool.
 7. Track input and output tokens per issue, with cost estimates even on subscription plans (§12.1); accounts default to `internal`.
+
+Maintainer, 7 Oct 2026, from the unattended-operation review ([bearings.md §3.14](bearings.md#314-unattended-operation)):
+
+8. starfixd gains an autonomy window, narrower default rights, distinct agent identities, parking of a person's lapsed claim during a window, and git push fencing by claim epoch. They are staged after the security review, before any release that enables unattended work.
+9. SSH stays the only transport; an HTTPS transport waits.
+10. WireGuard is a documented, optional layer in front of the server's SSH port; nothing in starfix requires it.
