@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -49,6 +50,7 @@ func init() {
 		proto.OpFinish:   typed(finish),
 		proto.OpHandoff:  typed(handoff),
 		proto.OpDigest:   typed(digest),
+		proto.OpRenew:    typed(renew),
 	}
 }
 
@@ -99,7 +101,15 @@ func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
 	}
+	claim, err := s.cfg.Store.ClaimOf(ctx, id)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
 	out := proto.ShowResult{Issue: wireIssue(is)}
+	if claim != nil {
+		c := wireClaim(*claim)
+		out.Claim = &c
+	}
 	if !in.Full {
 		for _, f := range []*string{&out.Issue.Body, &out.Issue.Design, &out.Issue.Acceptance, &out.Issue.Notes} {
 			if cut, ok := truncate(*f, compactText); ok {
@@ -286,8 +296,25 @@ func history(ctx context.Context, s *Server, _ store.Actor, in proto.IDArgs) (an
 	return out, nil
 }
 
+// lease reads a start or renew lease; empty is the default.
+func lease(op, s string) (time.Duration, *proto.Error) {
+	if s == "" {
+		return store.DefaultLease, nil
+	}
+	d, err := proto.ParseDuration(s)
+	if err != nil || d < store.MinLease || d > store.MaxLease {
+		return 0, proto.Errf(proto.CodeInvalid, fmt.Sprintf("give a lease from 1m to 7d; `sfx %s -h` lists the options", command(op)),
+			fmt.Sprintf("lease %q is not a duration from 1m to 7d", s))
+	}
+	return d, nil
+}
+
 func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID))
+	d, perr := lease(proto.OpStart, in.Lease)
+	if perr != nil {
+		return nil, perr
+	}
+	is, claim, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID), d)
 	if errors.Is(err, store.ErrNothingReady) {
 		return nil, proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue",
 			"nothing is ready to start")
@@ -295,7 +322,8 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpStart, in.ID, 0, err)
 	}
-	out := proto.StartResult{Issue: wireIssue(is)}
+	c := wireClaim(claim)
+	out := proto.StartResult{Issue: wireIssue(is), Claim: &c}
 	h, err := s.cfg.Store.LastHandoff(ctx, is.ID)
 	if err != nil {
 		// The issue is taken; say so rather than fail the start.
@@ -317,7 +345,7 @@ func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) 
 		}
 		f.Discovered = append(f.Discovered, n)
 	}
-	is, ids, err := s.cfg.Store.FinishIssue(ctx, a, store.IssueID(in.ID), f)
+	is, ids, err := s.cfg.Store.FinishIssue(ctx, a, store.IssueID(in.ID), in.Epoch, f)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpFinish, in.ID, 0, err)
 	}
@@ -329,11 +357,32 @@ func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) 
 }
 
 func handoff(ctx context.Context, s *Server, a store.Actor, in proto.HandoffArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Note, in.Release)
+	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, in.Note, in.Release)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHandoff, in.ID, 0, err)
 	}
 	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (any, *proto.Error) {
+	d, perr := lease(proto.OpRenew, in.Lease)
+	if perr != nil {
+		return nil, perr
+	}
+	cs, err := s.cfg.Store.RenewClaims(ctx, a, d, in.All)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpRenew, "", 0, err)
+	}
+	out := proto.ClaimsResult{Claims: []proto.Claim{}}
+	for _, c := range cs {
+		out.Claims = append(out.Claims, wireClaim(c))
+	}
+	return out, nil
+}
+
+func wireClaim(c store.Claim) proto.Claim {
+	return proto.Claim{ID: string(c.Issue), By: c.Holder.Principal, Session: c.Holder.Session,
+		Machine: c.Holder.Machine, Epoch: c.Epoch, ExpiresAt: c.ExpiresAt.UTC()}
 }
 
 func wireComment(c store.Comment) proto.Comment {

@@ -304,24 +304,47 @@ type Digest struct {
 func (s *Server) register() {
 	add(s, tool{name: "prime", desc: "Start here: your in-progress issues, top ready work, notices.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, _ struct{}) (*Prime, error) {
-			return BuildPrime(ctx, c, s.opts.Version)
+			p, err := BuildPrime(ctx, c, s.opts.Version)
+			if err == nil {
+				p.Lost = s.claims.takeLost()
+				p.fit()
+			}
+			return p, err
 		})
 	add(s, tool{name: "start", desc: "Take an issue (default: top of ready); returns it, its last handoff and a branch.", ann: write},
-		func(ctx context.Context, c Conn, in StartIn) (Started, error) { return start(ctx, c, in) })
+		func(ctx context.Context, c Conn, in StartIn) (Started, error) {
+			out, epoch, err := start(ctx, c, in)
+			if err == nil && epoch > 0 {
+				s.claims.take(out.ID, epoch)
+			}
+			return out, err
+		})
 	add(s, tool{name: "finish", desc: "Close your issue, with a handoff note and new work found.", ann: write,
 		enums: enums{"discovered.type": issueTypes}},
 		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
-			args := proto.FinishArgs{ID: in.ID, Reason: in.Reason, Handoff: in.Handoff}
+			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff}
 			for _, d := range in.Discovered {
 				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
 			}
 			var out proto.FinishResult
-			return out, c.Call(ctx, proto.OpFinish, args, &out)
+			err := c.Call(ctx, proto.OpFinish, args, &out)
+			if err == nil {
+				s.claims.drop(in.ID)
+			}
+			return out, err
 		})
 	add(s, tool{name: "handoff", desc: "Note for whoever continues, without closing.", ann: write},
 		func(ctx context.Context, c Conn, in HandoffIn) (proto.WriteResult, error) {
 			var out proto.WriteResult
-			return out, c.Call(ctx, proto.OpHandoff, proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release}, &out)
+			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release}
+			if in.Release {
+				args.Epoch = s.claims.epoch(in.ID)
+			}
+			err := c.Call(ctx, proto.OpHandoff, args, &out)
+			if err == nil && in.Release {
+				s.claims.drop(in.ID)
+			}
+			return out, err
 		})
 	add(s, tool{name: "digest", desc: "Recent work: closed, started, in progress, stalled, blocked, handed off.",
 		ann: readOnly, retry: true},
@@ -433,10 +456,12 @@ func list(ctx context.Context, c Conn, in ListIn) (Issues, error) {
 	}
 }
 
-func start(ctx context.Context, c Conn, in StartIn) (Started, error) {
+// start takes an issue for Lease and returns it and the claim's epoch (0
+// from a server without claims).
+func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 	var r proto.StartResult
-	if err := c.Call(ctx, proto.OpStart, proto.StartArgs{ID: in.ID}, &r); err != nil {
-		return Started{}, err
+	if err := c.Call(ctx, proto.OpStart, proto.StartArgs{ID: in.ID, Lease: Lease}, &r); err != nil {
+		return Started{}, 0, err
 	}
 	is := r.Issue
 	out := Started{ID: is.ID, Rev: is.Rev, Title: is.Title, Type: is.Type, Priority: is.Priority, Body: is.Body,
@@ -447,7 +472,11 @@ func start(ctx context.Context, c Conn, in StartIn) (Started, error) {
 		fields = append(fields, &out.Handoff.Note)
 	}
 	out.Truncated = fitTexts(func() bool { return size(out) <= MaxResultTokens }, fields...)
-	return out, nil
+	var epoch int64
+	if r.Claim != nil {
+		epoch = r.Claim.Epoch
+	}
+	return out, epoch, nil
 }
 
 func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {

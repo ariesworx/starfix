@@ -25,6 +25,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ariesworx/starfix/internal/cli"
+	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/dolttest"
 	"github.com/ariesworx/starfix/internal/proto"
 	"github.com/ariesworx/starfix/internal/server"
@@ -376,7 +377,7 @@ func TestCRUDRoundTrip(t *testing.T) {
 	var ops []string
 	for _, e := range h.Events {
 		ops = append(ops, e.Op)
-		if e.Principal != "alice" || e.Machine != "laptop-test" || !strings.HasPrefix(e.Session, "s-") {
+		if e.Principal != "alice" || e.Machine != "laptop-test" || e.Session != client.CLISession {
 			t.Fatalf("event actor: %+v", e)
 		}
 	}
@@ -460,13 +461,13 @@ func TestRefusals(t *testing.T) {
 }
 
 func TestProtocolRangeRefusal(t *testing.T) {
-	w := newWorld(t, daemonOpts{protoMin: 2, protoMax: 3})
+	w := newWorld(t, daemonOpts{protoMin: 3, protoMax: 4})
 	alice := w.newUser("alice", "")
 	r := alice.run("v0.2.0", "ready")
 	if r.code != cli.ExitVersion {
 		t.Fatalf("exit %d, want %d\n%s", r.code, cli.ExitVersion, r.stderr)
 	}
-	want := "sfx: starfix speaks protocol 1; the server (v0.2.0) needs 2 to 3\nfix: upgrade this client: `sfx upgrade`\n"
+	want := "sfx: starfix speaks protocol 2; the server (v0.2.0) needs 3 to 4\nfix: upgrade this client: `sfx upgrade`\n"
 	if r.stderr != want {
 		t.Fatalf("stderr %q\nwant   %q", r.stderr, want)
 	}

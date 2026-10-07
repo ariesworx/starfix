@@ -170,9 +170,10 @@ command's usage; `--json` prints one JSON document, errors included.
 
 | Command | Does |
 |---|---|
-| `start [ID]` | Take an issue (the top ready one without ID) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
-| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step |
-| `handoff ID NOTE` | Leave a note for whoever continues; `--release` unassigns it so another can start it |
+| `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
+| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim |
+| `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it |
+| `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline |
 | `create` | Create an issue and print its id |
 | `show` | Show an issue and its dependencies (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
@@ -260,10 +261,21 @@ A session is two calls: `start` takes the top ready issue (or a named
 one) and returns it with its acceptance criteria, the last handoff and a
 branch name (`fix/sf-a1b2c3d4-fix-the-login-redirect`); `finish` closes it,
 records a handoff note and files the work found on the way, linked
-`discovered-from`. Until stage 3's leases, taking an issue sets it
-`in_progress` and assigned to you, and another principal's `start` or
-`finish` on it is refused with the next ready issue to take instead. The
-MCP `start` never touches git; the agent runs git itself.
+`discovered-from`. The MCP `start` never touches git; the agent runs git
+itself.
+
+Taking an issue claims it: it becomes `in_progress`, assigned to you, and
+leased to your session. Another principal's `start`, `finish` or release
+is refused, with the next ready issue to take instead, until the lease runs
+out; then the server returns the issue to `open`. An agent's lease is 15
+minutes, and `sfx mcp` renews it every minute while the agent runs, so a
+session that dies lets its issues go within 15 minutes. A claim taken from
+a terminal lasts 8 hours (`--for`), and `sfx away 4h` extends all of yours.
+Your own new session can take over your claim at once. Each new holder
+raises the claim's epoch; `finish` and `handoff --release` refuse an epoch
+other than the current one (`--epoch N`; `sfx mcp` passes it), so a
+session that lost its claim cannot close work someone has since taken.
+`show` prints the claim.
 
 The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
 `list`, `show`, `create`, `update`, `close`, `reopen`, `dep`, `label`,
@@ -281,6 +293,7 @@ the agent's environment:
 |---|---|
 | Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
 | Codex, Gemini CLI, Cursor, VS Code | none set; `sfx mcp` picks one per process (`m-…`) |
+| a person's own `sfx` commands | `cli`, one per machine |
 | any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
 
 One SSH connection serves an MCP session. It opens on the first tool call
@@ -293,8 +306,8 @@ connection, and other writes report that they may have applied.
 |---|---|---|
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
-| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish`, `digest`, `upgrade` built) |
-| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
+| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
+| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims built) |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |

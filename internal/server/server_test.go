@@ -267,9 +267,10 @@ func TestHandshake(t *testing.T) {
 		closed  bool       // no reply at all
 		session string
 	}{
-		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(1, project, "s-mine")}, session: "s-mine"},
+		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(2, project, "s-mine")}, session: "s-mine"},
+		{name: "protocol 1 still welcome", frames: []*proto.Frame{bridge, hello(1, project, "s-old")}, session: "s-old"},
 		{name: "welcome assigns a session", frames: []*proto.Frame{bridge, hello(1, project, "")}, session: "s-"},
-		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(2, project, "")}, code: proto.CodeVersion},
+		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(3, project, "")}, code: proto.CodeVersion},
 		{name: "protocol too old", frames: []*proto.Frame{bridge, hello(0, project, "")}, code: proto.CodeVersion},
 		{name: "other project", frames: []*proto.Frame{bridge, hello(1, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
 		{name: "request before hello", frames: []*proto.Frame{bridge, {T: proto.FrameReq, ID: 1, Op: "show"}}, code: proto.CodeInvalid},
@@ -288,7 +289,7 @@ func TestHandshake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 1 || f.Max != 1 {
+			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 1 || f.Max != 2 {
 				t.Fatalf("welcome: %+v", f)
 			}
 			if tc.code == "" {
@@ -574,4 +575,47 @@ func TestDispatchWork(t *testing.T) {
 	if perr == nil || !strings.Contains(perr.Message, "nothing else is ready") {
 		t.Fatalf("held with nothing ready: %+v", perr)
 	}
+}
+
+func TestDispatchClaims(t *testing.T) {
+	s := newServer(t)
+	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
+
+	st := mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: a.ID, Lease: "2h"})
+	if c := st.Claim; c == nil || c.Epoch != 1 || c.By != "alice" || c.Session != alice.Session ||
+		time.Until(c.ExpiresAt) < 119*time.Minute {
+		t.Fatalf("start claim: %+v", st.Claim)
+	}
+	show := mustCall[proto.ShowResult](t, s, bob, proto.OpShow, proto.ShowArgs{ID: a.ID})
+	if show.Claim == nil || show.Claim.Epoch != 1 {
+		t.Fatalf("show claim: %+v", show.Claim)
+	}
+	r := mustCall[proto.ClaimsResult](t, s, alice, proto.OpRenew, proto.RenewArgs{Lease: "3d", All: true})
+	if len(r.Claims) != 1 || time.Until(r.Claims[0].ExpiresAt) < 71*time.Hour {
+		t.Fatalf("renew: %+v", r)
+	}
+
+	// Another session of alice takes over; the first session's finish is
+	// fenced off by its epoch.
+	alice2 := store.Actor{Principal: "alice", Session: "s-a2", Machine: "desktop"}
+	if st := mustCall[proto.StartResult](t, s, alice2, proto.OpStart, proto.StartArgs{ID: a.ID}); st.Claim.Epoch != 2 {
+		t.Fatalf("takeover: %+v", st.Claim)
+	}
+	_, perr := call[proto.Empty](t, s, alice, proto.OpFinish, proto.FinishArgs{ID: a.ID, Epoch: 1})
+	if perr == nil || perr.Code != proto.CodeConflict ||
+		perr.Message != "your claim on "+a.ID+" (epoch 1) was lost; it is now epoch 2, held by alice/s-a2" ||
+		!strings.Contains(perr.Fix, "sfx comment "+a.ID) {
+		t.Fatalf("stale finish: %+v", perr)
+	}
+	for _, l := range []string{"5s", "8d", "soon"} {
+		_, perr := call[proto.Empty](t, s, alice, proto.OpStart, proto.StartArgs{ID: a.ID, Lease: l})
+		if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Fix, "1m to 7d") {
+			t.Fatalf("lease %q: %+v", l, perr)
+		}
+	}
+	mustCall[proto.FinishResult](t, s, alice2, proto.OpFinish, proto.FinishArgs{ID: a.ID, Epoch: 2})
+	if show := mustCall[proto.ShowResult](t, s, bob, proto.OpShow, proto.ShowArgs{ID: a.ID}); show.Claim != nil {
+		t.Fatalf("claim after finish: %+v", show.Claim)
+	}
+	s.Reap(t.Context()) // nothing expired: a no-op
 }

@@ -200,6 +200,8 @@ type wtx struct {
 	now     time.Time
 	mutated bool
 	events  int
+	// quiet allows a mutation with no event: a lease renewal.
+	quiet bool
 }
 
 // exec runs a mutating statement. It refuses an UPDATE that does not set
@@ -312,7 +314,7 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if err := fn(w); err != nil {
 		return errors.Join(err, rollback(tx))
 	}
-	if w.mutated && w.events == 0 {
+	if w.mutated && w.events == 0 && !w.quiet {
 		return errors.Join(errors.New("store: mutation without an event"), rollback(tx))
 	}
 	if s.beforeCommit != nil {
