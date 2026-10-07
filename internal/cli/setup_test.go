@@ -56,25 +56,41 @@ func snapshot(t *testing.T, dir string) map[string]string {
 }
 
 func TestSetupWriteIsIdempotent(t *testing.T) {
-	// files maps each file setup writes to a string it must hold.
+	// files maps each file setup writes to a string it must hold; parts
+	// is how many parts setup reports, when a file holds two; note is in
+	// the output of the first write and the printed snippets.
 	for _, agent := range []struct {
 		name  string
 		files map[string]string
+		parts int
+		note  string
 	}{
-		{"claude-code", map[string]string{".mcp.json": `"type": "stdio"`, "CLAUDE.md": "<!-- starfix:begin -->",
-			".claude/settings.json": `"command": "sfx prime --hook"`}},
-		{"codex", map[string]string{".codex/config.toml": "[mcp_servers.starfix]", "AGENTS.md": "<!-- starfix:end -->"}},
-		{"gemini", map[string]string{".gemini/settings.json": `"mcpServers"`, "GEMINI.md": "`prime`"}},
-		{"cursor", map[string]string{".cursor/mcp.json": `"mcpServers"`, ".cursor/rules/starfix.mdc": "alwaysApply: true"}},
-		{"vscode", map[string]string{".vscode/mcp.json": `"servers"`, ".github/copilot-instructions.md": "`finish`"}},
+		{name: "claude-code", files: map[string]string{".mcp.json": `"type": "stdio"`, "CLAUDE.md": "<!-- starfix:begin -->",
+			".claude/settings.json": `"command": "sfx prime --hook"`}, note: "approve"},
+		{name: "codex", files: map[string]string{".codex/config.toml": "[mcp_servers.starfix]", "AGENTS.md": "<!-- starfix:end -->",
+			".codex/hooks.json": `"command": "sfx prime --hook=codex"`}, note: "/hooks"},
+		{name: "gemini", files: map[string]string{".gemini/settings.json": `"command": "sfx prime --hook=gemini"`, "GEMINI.md": "`prime`"},
+			parts: 3, note: "trusted folder"},
+		{name: "cursor", files: map[string]string{".cursor/mcp.json": `"mcpServers"`, ".cursor/rules/starfix.mdc": "alwaysApply: true",
+			".cursor/hooks.json": `"command": "sfx prime --hook=cursor"`}, note: "Settings › MCP"},
+		{name: "vscode", files: map[string]string{".vscode/mcp.json": `"servers"`, ".github/copilot-instructions.md": "`finish`",
+			".github/hooks/starfix.json": `"command": "sfx prime --hook=vscode"`}, note: "Preview"},
+		{name: "junie", files: map[string]string{".junie/mcp/mcp.json": `"STARFIX_HARNESS": "junie"`, "AGENTS.md": "`start`"},
+			note: "--global"},
+		{name: "jetbrains", files: map[string]string{".aiassistant/rules/starfix.md": "apply: always"},
+			note: `"STARFIX_HARNESS": "jetbrains"`},
 	} {
 		t.Run(agent.name, func(t *testing.T) {
 			root, sub := repoWithConfig(t)
 			home := t.TempDir()
+			parts := agent.parts
+			if parts == 0 {
+				parts = len(agent.files)
+			}
 
 			// Without --write nothing is written; the output shows every file.
 			code, out, errb := runIn(t, home, "-C", sub, "setup", agent.name)
-			if code != ExitOK || !strings.Contains(out, "--write") {
+			if code != ExitOK || !strings.Contains(out, "--write") || !strings.Contains(out, agent.note) {
 				t.Fatalf("print: exit %d\n%s%s", code, out, errb)
 			}
 			for f, want := range agent.files {
@@ -91,7 +107,7 @@ func TestSetupWriteIsIdempotent(t *testing.T) {
 			}
 
 			code, out, errb = runIn(t, home, "-C", sub, "setup", agent.name, "--write")
-			if code != ExitOK || strings.Count(out, ": added\n") != len(agent.files) {
+			if code != ExitOK || strings.Count(out, ": added\n") != parts || !strings.Contains(out, agent.note) {
 				t.Fatalf("write: exit %d\n%s%s", code, out, errb)
 			}
 			first := snapshot(t, root)
@@ -104,31 +120,32 @@ func TestSetupWriteIsIdempotent(t *testing.T) {
 				}
 			}
 			code, out, _ = runIn(t, home, "-C", sub, "setup", agent.name, "--write")
-			if code != ExitOK || strings.Count(out, ": unchanged\n") != len(agent.files) {
+			if code != ExitOK || strings.Count(out, ": unchanged\n") != parts {
 				t.Fatalf("second write: exit %d %s", code, out)
 			}
 			sameFiles(t, first, snapshot(t, root))
 			if code, out, errb := runIn(t, home, "-C", sub, "setup", agent.name, "--check"); code != ExitOK ||
-				strings.Count(out, ": registered\n") != len(agent.files) {
+				strings.Count(out, ": registered\n") != parts {
 				t.Fatalf("check: %d %s %s", code, out, errb)
 			}
 			if len(snapshot(t, home)) != 0 {
 				t.Fatal("wrote to the home directory without --global")
 			}
 			if code, out, _ := runIn(t, home, "-C", sub, "setup", agent.name, "--remove"); code != ExitOK ||
-				strings.Count(out, ": removed\n") != len(agent.files) {
+				strings.Count(out, ": removed\n") != parts {
 				t.Fatalf("remove: %d %s", code, out)
 			}
-			// A file that held only the pointer is gone; the configs stay.
+			// A file that held only starfix's part is gone; the configs stay.
 			for f := range agent.files {
 				_, err := os.Stat(filepath.Join(root, filepath.FromSlash(f)))
-				if gone := errors.Is(err, fs.ErrNotExist); gone != (strings.HasSuffix(f, ".md") || strings.HasSuffix(f, ".mdc")) {
+				own := strings.HasSuffix(f, ".md") || strings.HasSuffix(f, ".mdc") || f == ".github/hooks/starfix.json"
+				if gone := errors.Is(err, fs.ErrNotExist); gone != own {
 					t.Errorf("%s after remove: %v", f, err)
 				}
 			}
 			removed := snapshot(t, root)
 			if code, out, _ := runIn(t, home, "-C", sub, "setup", agent.name, "--remove"); code != ExitOK ||
-				strings.Count(out, ": unchanged\n") != len(agent.files) {
+				strings.Count(out, ": unchanged\n") != parts {
 				t.Fatalf("second remove: %d %s", code, out)
 			}
 			sameFiles(t, removed, snapshot(t, root))
@@ -248,9 +265,11 @@ func TestSetupRefusals(t *testing.T) {
 		code int
 		want string
 	}{
-		{[]string{"setup"}, ExitUsage, "setup needs one agent: claude-code, codex, cursor, gemini, vscode"},
+		{[]string{"setup"}, ExitUsage, "setup needs one agent, or --all: claude-code, codex, cursor, gemini, jetbrains, junie, vscode"},
 		{[]string{"setup", "aider"}, ExitUsage, `unknown agent "aider"`},
+		{[]string{"setup", "codex", "--all"}, ExitUsage, "--all takes no agent"},
 		{[]string{"setup", "vscode", "--global", "--write"}, ExitFailure, "fix: drop --global"},
+		{[]string{"setup", "jetbrains", "--global"}, ExitFailure, "fix: drop --global"},
 		{[]string{"setup", "codex", "--write", "--remove"}, ExitUsage, "at most one"},
 		{[]string{"-C", t.TempDir(), "setup", "codex", "--write"}, ExitFailure, ".starfix.yaml not found"},
 	}
@@ -299,6 +318,128 @@ func TestSetupGlobalClaudeCode(t *testing.T) {
 		t.Fatalf("exit %d %s %s", code, out, errb)
 	}
 	for _, f := range []string{".claude.json", ".claude/CLAUDE.md", ".claude/settings.json"} {
+		if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(f))); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// Junie runs hooks only from the home config, so only --global writes one.
+func TestSetupGlobalJunie(t *testing.T) {
+	home := t.TempDir()
+	code, out, errb := runIn(t, home, "-C", t.TempDir(), "setup", "junie", "--global", "--write")
+	if code != ExitOK || strings.Count(out, ": added\n") != 3 {
+		t.Fatalf("exit %d %s %s", code, out, errb)
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".junie", "config.json")) //nolint:gosec // the test's temp home
+	if err != nil || !strings.Contains(string(b), `"command": "sfx prime --hook=junie"`) {
+		t.Fatalf("%s %v", b, err)
+	}
+}
+
+// lineOf is the line of out that starts with prefix.
+func lineOf(out, prefix string) string {
+	for l := range strings.Lines(out) {
+		if strings.HasPrefix(l, prefix) {
+			return l
+		}
+	}
+	return ""
+}
+
+// setup --all sets up every agent in one run. A file two agents share,
+// or one agent keeps two parts in, is edited once with both parts, and a
+// second run changes nothing.
+func TestSetupAll(t *testing.T) {
+	root, sub := repoWithConfig(t)
+	home := t.TempDir()
+
+	code, out, errb := runIn(t, home, "-C", sub, "setup", "--all")
+	if code != ExitOK || len(snapshot(t, root)) != 1 {
+		t.Fatalf("print: exit %d, wrote files\n%s%s", code, out, errb)
+	}
+	for _, name := range []string{"Claude Code", "Codex", "Cursor", "Gemini CLI", "JetBrains AI Assistant", "Junie", "VS Code"} {
+		if !strings.Contains(out, "# "+name+": ") {
+			t.Errorf("print lacks %s:\n%s", name, out)
+		}
+	}
+	if code, _, errb := runIn(t, home, "-C", sub, "setup", "--all", "--check"); code != ExitFailure ||
+		!strings.Contains(errb, "fix: run `sfx setup --all --write`") {
+		t.Fatalf("check before write: exit %d %s", code, errb)
+	}
+
+	code, out, errb = runIn(t, home, "-C", sub, "setup", "--all", "--write")
+	if code != ExitOK {
+		t.Fatalf("write: exit %d\n%s%s", code, out, errb)
+	}
+	// One summary per agent, in name order.
+	var names []string
+	for l := range strings.Lines(out) {
+		if name, _, ok := strings.Cut(l, ": "); ok && !strings.HasPrefix(l, " ") {
+			names = append(names, name)
+		}
+	}
+	if got := strings.Join(names, " "); got != "claude-code codex cursor gemini jetbrains junie vscode" {
+		t.Fatalf("summaries for %s:\n%s", got, out)
+	}
+	if l := lineOf(out, "codex: "); !strings.Contains(l, "AGENTS.md added") {
+		t.Errorf("codex: %s", l)
+	}
+	if l := lineOf(out, "junie: "); !strings.Contains(l, "AGENTS.md unchanged") {
+		t.Errorf("junie: %s", l)
+	}
+	first := snapshot(t, root)
+	agents := first[filepath.Join(root, "AGENTS.md")]
+	if strings.Count(agents, "<!-- starfix:begin -->") != 1 {
+		t.Errorf("AGENTS.md:\n%s", agents)
+	}
+	gemini := first[filepath.Join(root, ".gemini", "settings.json")]
+	if !strings.Contains(gemini, `"mcpServers"`) || !strings.Contains(gemini, `"SessionStart"`) {
+		t.Errorf(".gemini/settings.json lost a part:\n%s", gemini)
+	}
+	if len(snapshot(t, home)) != 0 {
+		t.Fatal("wrote to the home directory without --global")
+	}
+
+	code, out, _ = runIn(t, home, "-C", sub, "setup", "--all", "--write")
+	if code != ExitOK || strings.Contains(out, "added") || strings.Contains(out, "updated") {
+		t.Fatalf("second write: exit %d\n%s", code, out)
+	}
+	sameFiles(t, first, snapshot(t, root))
+	if code, out, errb := runIn(t, home, "-C", sub, "setup", "--all", "--check"); code != ExitOK || strings.Count(out, "\n") != 7 {
+		t.Fatalf("check: exit %d\n%s%s", code, out, errb)
+	}
+	if code, out, errb := runIn(t, home, "--json", "-C", sub, "setup", "--all", "--check"); code != ExitOK || strings.Count(out, "\n") != 1 ||
+		!strings.Contains(out, `"agent":"junie"`) {
+		t.Fatalf("check --json: exit %d\n%s%s", code, out, errb)
+	}
+
+	if code, out, _ := runIn(t, home, "-C", sub, "setup", "--all", "--remove"); code != ExitOK || strings.Contains(out, "added") {
+		t.Fatalf("remove: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("AGENTS.md after remove: %v", err)
+	}
+	removed := snapshot(t, root)
+	if code, out, _ := runIn(t, home, "-C", sub, "setup", "--all", "--remove"); code != ExitOK || strings.Contains(out, "removed") {
+		t.Fatalf("second remove: exit %d\n%s", code, out)
+	}
+	sameFiles(t, removed, snapshot(t, root))
+}
+
+// setup --all --global skips the agents with no home config, saying why.
+func TestSetupAllGlobal(t *testing.T) {
+	home := t.TempDir()
+	code, out, errb := runIn(t, home, "-C", t.TempDir(), "setup", "--all", "--global", "--write")
+	if code != ExitOK {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	for _, name := range []string{"vscode", "jetbrains"} {
+		if l := lineOf(out, name+": "); !strings.Contains(l, "skipped") || !strings.Contains(l, "fix: drop --global") {
+			t.Errorf("%s: %q", name, l)
+		}
+	}
+	for _, f := range []string{".claude/settings.json", ".codex/hooks.json", ".cursor/hooks.json", ".gemini/settings.json", ".junie/config.json"} {
 		if _, err := os.Stat(filepath.Join(home, filepath.FromSlash(f))); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}

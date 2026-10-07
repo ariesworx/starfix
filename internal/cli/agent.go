@@ -4,20 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/agentsetup"
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
 func cmdPrime(ctx context.Context, r *runner, args []string) error {
-	const usage = "prime [--hook]"
+	const usage = "prime [--hook[=AGENT]]"
 	fs := r.newFlags("prime")
-	hook := fs.Bool("hook", false, "run as a SessionStart hook: JSON for the harness, and never fail")
+	var hook hookFlag
+	fs.Var(&hook, "hook", "run as AGENT's SessionStart hook (bare: claude-code): JSON for the harness, and never fail")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
 		return err
@@ -25,8 +29,8 @@ func cmdPrime(ctx context.Context, r *runner, args []string) error {
 	if len(pos) > 0 {
 		return usagef(usage, "prime takes no arguments")
 	}
-	if *hook {
-		r.primeHook(ctx)
+	if hook.agent != "" {
+		r.primeHook(ctx, agentsetup.Agents[hook.agent])
 		return nil
 	}
 	c, err := r.connect(ctx)
@@ -49,22 +53,47 @@ func cmdPrime(ctx context.Context, r *runner, args []string) error {
 // timeout, so a slow server costs the session a note, not its start.
 const hookTimeout = 10 * time.Second
 
-// hookInput is the part of a SessionStart hook's stdin that prime uses.
-type hookInput struct {
-	SessionID string `json:"session_id"`
-	Cwd       string `json:"cwd"`
+// hookFlag is --hook's value: the agent whose hook prime runs as. Bare
+// --hook is Claude Code's, as it was before other harnesses had hooks.
+type hookFlag struct{ agent string }
+
+func (h *hookFlag) String() string { return h.agent }
+
+// IsBoolFlag lets --hook stand alone.
+func (h *hookFlag) IsBoolFlag() bool { return true }
+
+func (h *hookFlag) Set(s string) error {
+	switch {
+	case s == "true":
+		h.agent = "claude-code"
+	case s == "false":
+		h.agent = ""
+	case slices.Contains(agentsetup.Hooks(), s):
+		h.agent = s
+	default:
+		return fmt.Errorf("no hook for %q; agents with one: %s", s, strings.Join(agentsetup.Hooks(), ", "))
+	}
+	return nil
 }
 
-// primeHook prints prime as a Claude Code SessionStart hook's JSON
-// output, whose additionalContext the harness adds to the session. It
-// never fails: the agent's start must not depend on starfix. Outside a
-// starfix repository it prints nothing; on any other error the context
-// is a one-line note saying what failed and the fix.
+// hookInput is the part of a SessionStart hook's stdin that prime uses.
+// Harnesses send session_id; VS Code may send sessionId instead.
+type hookInput struct {
+	SessionID      string `json:"session_id"`
+	SessionIDCamel string `json:"sessionId"`
+	Cwd            string `json:"cwd"`
+}
+
+// primeHook prints prime as the agent's SessionStart hook output, whose
+// context the harness adds to the session. It never fails: the agent's
+// start must not depend on starfix. Outside a starfix repository it
+// prints nothing; on any other error the context is a one-line note
+// saying what failed and the fix.
 //
 // The session id comes from STARFIX_SESSION, else the hook input's
-// session_id, else the environment, so the connection prime opens
+// session id, else the environment, so the connection prime opens
 // registers the harness's session in the agents registry (`sfx who`).
-func (r *runner) primeHook(ctx context.Context) {
+func (r *runner) primeHook(ctx context.Context, agent agentsetup.Agent) {
 	in := readHookInput(r.env.Stdin)
 	if in.SessionID != "" && r.env.Getenv("STARFIX_SESSION") == "" {
 		r.session = in.SessionID
@@ -90,8 +119,7 @@ func (r *runner) primeHook(ctx context.Context) {
 		}
 		text = strings.ReplaceAll(text, "\n", " ") + "\n"
 	}
-	r.emit(map[string]any{"hookSpecificOutput": map[string]string{
-		"hookEventName": "SessionStart", "additionalContext": text}})
+	r.emit(agent.HookOutput(text))
 }
 
 func (r *runner) primeText(ctx context.Context) (string, error) {
@@ -119,6 +147,9 @@ func readHookInput(stdin io.Reader) hookInput {
 	b, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
 	if err == nil {
 		_ = json.Unmarshal(b, &in) // not hook JSON: no session id or cwd from it
+	}
+	if in.SessionID == "" {
+		in.SessionID = in.SessionIDCamel
 	}
 	return in
 }

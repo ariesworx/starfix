@@ -23,11 +23,18 @@ type pointerStyle int
 
 const (
 	markdownBlock pointerStyle = iota // a block inside a shared file
-	ruleFile                          // a whole file of starfix's own, with Cursor's frontmatter
+	cursorRule                        // a whole file of starfix's own, with Cursor's frontmatter
+	jetbrainsRule                     // a whole file of starfix's own, with AI Assistant's frontmatter
 )
 
-// cursorFrontmatter makes the rule apply to every request.
-const cursorFrontmatter = "---\ndescription: Issue tracking with starfix\nalwaysApply: true\n---\n\n"
+// frontmatter makes a rule file apply to every request. AI Assistant's
+// "apply: always" key is unverified: its rule-file documentation
+// describes the rule types in the IDE's settings, not the frontmatter
+// keys behind them.
+var frontmatter = map[pointerStyle]string{
+	cursorRule:    "---\ndescription: Issue tracking with starfix\nalwaysApply: true\n---\n\n",
+	jetbrainsRule: "---\napply: always\n---\n\n",
+}
 
 func pointerLines(eol string) []string {
 	out := make([]string, 0, len(pointerBody)+2)
@@ -37,8 +44,8 @@ func pointerLines(eol string) []string {
 	return out
 }
 
-func ruleContent() []byte {
-	return []byte(cursorFrontmatter + strings.Join(pointerLines(""), "\n") + "\n")
+func ruleContent(style pointerStyle) []byte {
+	return []byte(frontmatter[style] + strings.Join(pointerLines(""), "\n") + "\n")
 }
 
 // pointerBlock finds the block: the indexes of its begin and end lines.
@@ -73,8 +80,8 @@ func eolOf(lines []string) string {
 }
 
 func applyPointer(content []byte, style pointerStyle) ([]byte, Result, error) {
-	if style == ruleFile {
-		want := ruleContent()
+	if style != markdownBlock {
+		want := ruleContent(style)
 		switch {
 		case string(content) == string(want):
 			return content, Unchanged, nil
@@ -111,7 +118,7 @@ func removePointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 	if !ok {
 		return content, Unchanged, nil
 	}
-	if style == ruleFile {
+	if style != markdownBlock {
 		return nil, Removed, nil // the whole file is starfix's
 	}
 	rest := lines[end+1:]
@@ -127,8 +134,8 @@ func removePointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 }
 
 func pointerRegistered(content []byte, style pointerStyle) bool {
-	if style == ruleFile {
-		return string(content) == string(ruleContent())
+	if style != markdownBlock {
+		return string(content) == string(ruleContent(style))
 	}
 	lines := splitLines(content)
 	start, end, ok, err := pointerBlock(lines)
@@ -136,8 +143,8 @@ func pointerRegistered(content []byte, style pointerStyle) bool {
 }
 
 func pointerSnippet(style pointerStyle) string {
-	if style == ruleFile {
-		return string(ruleContent())
+	if style != markdownBlock {
+		return string(ruleContent(style))
 	}
 	return strings.Join(pointerLines(""), "\n") + "\n"
 }
