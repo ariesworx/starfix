@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -39,7 +40,14 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	case *all && len(pos) > 0:
 		return usagef(usage, "--all takes no agent")
 	case *all:
-		names = agentsetup.Names()
+		// A desktop app's config is the person's, outside the
+		// repository, and pins this checkout: it is set up by name only.
+		names = nil
+		for _, n := range agentsetup.Names() {
+			if !agentsetup.Agents[n].Desktop {
+				names = append(names, n)
+			}
+		}
 	case len(pos) != 1:
 		return usagef(usage, "setup needs one agent, or --all: %s", strings.Join(agentsetup.Names(), ", "))
 	}
@@ -52,6 +60,7 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	if n > 1 {
 		return usagef(usage, "give at most one of --write, --check and --remove")
 	}
+	mode := setupMode{write: *write, check: *check, remove: *remove}
 	if entry.Command == "" || strings.ContainsAny(entry.Command, "\x00\n") {
 		return usagef(usage, "--command must be a program name or path")
 	}
@@ -60,6 +69,14 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 		agent, ok := agentsetup.Agents[name]
 		if !ok {
 			return usagef(usage, "unknown agent %q; supported: %s", name, strings.Join(agentsetup.Names(), ", "))
+		}
+		if agent.Desktop {
+			commandSet := false
+			fs.Visit(func(f *flag.Flag) { commandSet = commandSet || f.Name == "command" })
+			if commandSet {
+				return r.setupDesktop(agent, entry.Command, mode)
+			}
+			return r.setupDesktop(agent, "", mode)
 		}
 		p := setupPlan{Agent: agent}
 		if *global && agent.Global == "" {
@@ -110,9 +127,19 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 			p.files = append(p.files, f)
 		}
 	}
+	return r.applySetup(plans, entry, mode, *all, *global, again, order)
+}
 
+// setupMode is what setup was asked to do; none set means print.
+type setupMode struct{ write, check, remove bool }
+
+// applySetup checks, prints or edits the plans' files, read already,
+// and reports. again is the command that would set them up; order
+// holds each file once, in the order read.
+func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setupMode, all, global bool, again string, order []*diskFile) error {
+	var err error
 	switch {
-	case *check:
+	case mode.check:
 		var missing []string
 		for _, p := range plans {
 			var m []string
@@ -129,19 +156,20 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 			return proto.Errf(proto.CodeNotFound, "run `"+again+" --write`",
 				"starfix is not set up for "+strings.Join(missing, "; "))
 		}
-		r.report(plans, *all, "registered")
+		r.report(plans, all, "registered")
 		return nil
-	case !*write && !*remove:
-		r.printPlans(plans, entry, *all, *global)
+	case !mode.write && !mode.remove:
+		r.printPlans(plans, entry, all, global)
 		return nil
 	}
 	// Work out every edit before writing any, so a file that cannot be
 	// parsed leaves all of them as they were.
 	for i := range plans {
-		for j := range plans[i].files {
-			f := &plans[i].files[j]
+		files := plans[i].files
+		for j := range files {
+			f := &files[j]
 			var out []byte
-			if *remove {
+			if mode.remove {
 				out, f.res, err = f.Remove(f.disk.cur, entry)
 			} else {
 				out, f.res, err = f.Apply(f.disk.cur, entry)
@@ -175,12 +203,12 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	for i := range plans {
 		p := &plans[i]
 		for _, f := range p.files {
-			if f.res == agentsetup.Added && !*global {
+			if f.res == agentsetup.Added && !global {
 				p.note = p.Steps(entry)
 			}
 		}
 	}
-	r.report(plans, *all, "")
+	r.report(plans, all, "")
 	return nil
 }
 
@@ -423,13 +451,17 @@ func removeConfig(path string) error {
 
 // writeConfig replaces path atomically, keeping its mode. A project
 // config is meant to be committed, so a new one is 0644; it holds no
-// secret.
+// secret. A missing directory is made 0755, or 0700 for a private file.
 func writeConfig(path string, b []byte, mode fs.FileMode) error {
 	fail := func(err error) error {
 		return proto.Errf(proto.CodeInvalid, "check the directory's permissions", fmt.Sprintf("write %s: %v", path, err))
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // .codex/, .claude/ and the like, in the repository
+	dirMode := fs.FileMode(0o755)
+	if mode&0o077 == 0 {
+		dirMode = 0o700
+	}
+	if err := os.MkdirAll(dir, dirMode); err != nil { //nolint:gosec // .codex/, .claude/ and the like, in the repository
 		return fail(err)
 	}
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")

@@ -146,10 +146,11 @@ func applyJSON(content []byte, f format, e Entry, harness string) ([]byte, error
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 	}
+	name := e.server()
 	entry := object{}
-	if raw, ok := servers.get(ServerName); ok {
+	if raw, ok := servers.get(name); ok {
 		if entry, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("%s.%s: %w", key, ServerName, err)
+			return nil, fmt.Errorf("%s.%s: %w", key, name, err)
 		}
 	}
 	for _, m := range owned(f, e) {
@@ -158,16 +159,16 @@ func applyJSON(content []byte, f format, e Entry, harness string) ([]byte, error
 	env := object{}
 	if raw, ok := entry.get("env"); ok {
 		if env, err = parseObject(raw); err != nil {
-			return nil, fmt.Errorf("%s.%s.env: %w", key, ServerName, err)
+			return nil, fmt.Errorf("%s.%s.env: %w", key, name, err)
 		}
 	}
 	entry = entry.set("env", env.set(HarnessEnv, mustJSON(harness)).marshal())
-	servers = servers.set(ServerName, entry.marshal())
+	servers = servers.set(name, entry.marshal())
 	root = root.set(key, servers.marshal())
 	return indent(root.marshal())
 }
 
-func removeJSON(content []byte, f format) ([]byte, error) {
+func removeJSON(content []byte, f format, name string) ([]byte, error) {
 	root, err := parseObject(content)
 	if err != nil {
 		return nil, err
@@ -178,12 +179,12 @@ func removeJSON(content []byte, f format) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", key, err)
 	}
-	root = root.set(key, servers.del(ServerName).marshal())
+	root = root.set(key, servers.del(name).marshal())
 	return indent(root.marshal())
 }
 
-// jsonEntry returns the starfix entry, if content has one.
-func jsonEntry(content []byte, f format) (object, bool) {
+// jsonEntry returns the named server's entry, if content has one.
+func jsonEntry(content []byte, f format, name string) (object, bool) {
 	root, err := parseObject(content)
 	if err != nil {
 		return nil, false
@@ -196,7 +197,7 @@ func jsonEntry(content []byte, f format) (object, bool) {
 	if err != nil {
 		return nil, false
 	}
-	raw, ok = servers.get(ServerName)
+	raw, ok = servers.get(name)
 	if !ok {
 		return nil, false
 	}
@@ -205,7 +206,7 @@ func jsonEntry(content []byte, f format) (object, bool) {
 }
 
 func jsonRegistered(content []byte, f format, e Entry, harness string) bool {
-	entry, ok := jsonEntry(content, f)
+	entry, ok := jsonEntry(content, f, e.server())
 	if !ok {
 		return false
 	}
