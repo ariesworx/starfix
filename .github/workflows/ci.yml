@@ -30,6 +30,9 @@ jobs:
       - name: go mod verify
         # The module cache still matches go.sum.
         run: go mod download && go mod verify
+      - name: shellcheck
+        # Preinstalled on GitHub's Ubuntu runners.
+        run: shellcheck install.sh
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: cross-platform build
