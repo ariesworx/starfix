@@ -92,7 +92,11 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 	if err := r.readTexts(&f); err != nil {
 		return err
 	}
-	in := proto.CreateArgs{ID: id, Title: strings.Join(pos, " "), Body: f.body, Design: f.design,
+	idem, err := proto.NewIdem("cli")
+	if err != nil {
+		return err
+	}
+	in := proto.CreateArgs{ID: id, Idem: idem, Title: strings.Join(pos, " "), Body: f.body, Design: f.design,
 		Acceptance: f.acceptance, Notes: f.notes, Status: f.status, Type: f.typ, Assignee: f.assignee,
 		Owner: f.owner, Parent: f.parent, Labels: labels}
 	if f.prio != "" {
@@ -102,16 +106,54 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 		}
 		in.Priority = &p
 	}
-	var out proto.WriteResult
+	var out proto.CreateResult
 	if err := r.call(ctx, proto.OpCreate, in, &out); err != nil {
 		return err
 	}
 	if r.json {
 		r.emit(out)
-	} else {
-		_, _ = fmt.Fprintln(r.env.Stdout, out.ID)
+		return nil
 	}
+	_, _ = fmt.Fprintln(r.env.Stdout, out.ID)
+	// Standard error, so `id=$(sfx create …)` still captures the id alone.
+	printSimilar(r.env.Stderr, out.Similar)
 	return nil
+}
+
+// printSimilar lists similar closed issues, if any.
+func printSimilar(w io.Writer, sim []proto.Summary) {
+	if len(sim) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintln(w, "similar closed issues:")
+	for _, s := range sim {
+		_, _ = fmt.Fprintf(w, "  %s  %s\n", s.ID, s.Title)
+	}
+}
+
+// printItems prints an issue's acceptance checklist, if it has one.
+func printItems(w io.Writer, items []proto.AcceptanceItem) {
+	if len(items) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintln(w, "\nacceptance:")
+	for _, it := range items {
+		mark := " "
+		switch it.State {
+		case "ticked":
+			mark = "x"
+		case "waived":
+			mark = "~"
+		}
+		line := fmt.Sprintf("  %d [%s] %s", it.N, mark, it.Text)
+		switch {
+		case it.State == "waived":
+			line += fmt.Sprintf(" (waived by %s: %s)", it.By, it.Reason)
+		case it.By != "":
+			line += " (" + it.By + ")"
+		}
+		_, _ = fmt.Fprintln(w, line)
+	}
 }
 
 func one(usage string, pos []string, what string) (string, error) {
@@ -142,7 +184,12 @@ func cmdShow(ctx context.Context, r *runner, args []string) error {
 		return nil
 	}
 	printIssue(r.env.Stdout, out)
+	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
+	if len(out.Similar) > 0 {
+		_, _ = fmt.Fprintln(r.env.Stdout)
+		printSimilar(r.env.Stdout, out.Similar)
+	}
 	return nil
 }
 
@@ -192,7 +239,11 @@ func printIssue(w io.Writer, s proto.ShowResult) {
 	if is.Body != "" {
 		p("\n%s\n", is.Body)
 	}
-	for _, kv := range [][2]string{{"design", is.Design}, {"acceptance", is.Acceptance}, {"notes", is.Notes}} {
+	acceptance := is.Acceptance
+	if len(s.Items) > 0 {
+		acceptance = "" // printItems shows it as a checklist
+	}
+	for _, kv := range [][2]string{{"design", is.Design}, {"acceptance", acceptance}, {"notes", is.Notes}} {
 		if kv[1] != "" {
 			p("\n%s:\n%s\n", kv[0], kv[1])
 		}
@@ -396,10 +447,11 @@ func (r *runner) write(ctx context.Context, op string, in any) error {
 }
 
 func cmdClose(ctx context.Context, r *runner, args []string) error {
-	const usage = "close ID [--reason TEXT] [--rev N]"
+	const usage = "close ID [--reason TEXT] [--rev N] [--force]"
 	fs := r.newFlags("close")
 	var in proto.CloseArgs
 	fs.StringVar(&in.Reason, "reason", "", "why it was closed")
+	fs.BoolVar(&in.Force, "force", false, "close even with acceptance items open; the event records them")
 	fs.Int64Var(&in.Rev, "rev", 0, "refuse if the issue changed since this revision")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
@@ -495,8 +547,12 @@ func cmdComment(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
+	idem, err := proto.NewIdem("cli")
+	if err != nil {
+		return err
+	}
 	var out proto.CommentResult
-	if err := r.call(ctx, proto.OpComment, proto.CommentArgs{ID: pos[0], Body: body}, &out); err != nil {
+	if err := r.call(ctx, proto.OpComment, proto.CommentArgs{ID: pos[0], Body: body, Idem: idem}, &out); err != nil {
 		return err
 	}
 	if r.json {

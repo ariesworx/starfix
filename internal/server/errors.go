@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -25,6 +26,8 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	text := err.Error()
 	var held *store.HeldError
 	var stale *store.StaleEpochError
+	var idem *store.IdemError
+	var unmet *store.AcceptanceError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
@@ -40,6 +43,13 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 		}
 		return proto.Errf(proto.CodeConflict,
 			fmt.Sprintf("stop work on it; keep anything useful as a comment (`sfx comment %s`), or start it again if it is free", stale.ID), msg)
+
+	case errors.As(err, &idem):
+		return proto.Errf(proto.CodeConflict,
+			fmt.Sprintf("send the request with a new idempotency key instead of %q; sfx makes one per command", idem.Key), text)
+
+	case errors.As(err, &unmet):
+		return unmetErr(op, unmet)
 
 	case errors.Is(err, store.ErrConflict):
 		return s.conflict(ctx, id, rev)
@@ -76,6 +86,21 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	s.cfg.Logger.Error("request failed", "op", op, "err", err)
 	return proto.Errf(proto.CodeUnavailable, "retry; if it persists, the server admin should check the starfixd log",
 		fmt.Sprintf("the server could not complete %s", op))
+}
+
+// unmetErr refuses a close or finish with acceptance items open, naming
+// the command that ticks them; close may also be forced.
+func unmetErr(op string, e *store.AcceptanceError) *proto.Error {
+	nums := make([]string, len(e.Open))
+	for i, n := range e.Open {
+		nums[i] = strconv.Itoa(n)
+	}
+	fix := fmt.Sprintf("tick what is met with `sfx accept %s %s`, or waive an item with `sfx accept %s N --waive REASON`",
+		e.ID, strings.Join(nums, " "), e.ID)
+	if op == proto.OpClose {
+		fix += fmt.Sprintf("; `sfx close %s --force` closes anyway, on the record", e.ID)
+	}
+	return proto.Errf(proto.CodeAcceptance, fix, e.Error())
 }
 
 // conflict explains a failed compare-and-swap: who moved the issue to

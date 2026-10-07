@@ -69,8 +69,10 @@ const Lease = "15m"
 // Instructions is what an agent reads when it connects.
 const Instructions = "Issue tracker shared by every agent and person on this project. " +
 	"Call prime at the start of a session. Take work with start (the top ready issue, or an id): " +
-	"it claims the issue while this session runs and returns it, its last handoff and a branch name. Comment as you go. " +
+	"it claims the issue while this session runs and returns it, its acceptance items, its last handoff and a branch name. Comment as you go. " +
 	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
+	"Each acceptance item must be met (finish's ticked) or waived with a reason (waived); finish and close refuse while one is open. " +
+	"create and show name similar closed issues: read them before duplicating work. " +
 	"To stop without closing, call handoff (release lets another start it). " +
 	"For a standup or status report, call digest and write the narrative from it; who lists the agents at work. " +
 	"A line \"inbox: N new\" after a result means call inbox: a lost claim, a handoff, a mention or an assignment. " +

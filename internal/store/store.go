@@ -211,6 +211,10 @@ type wtx struct {
 	quiet bool
 	// inbox are the items this attempt wrote, pushed once it commits.
 	inbox []InboxItem
+	// pending are the events recorded, written by flush.
+	pending []pendingEvent
+	// idem is the operation's idempotency stamp, when it has a key.
+	idem *idemStamp
 }
 
 // exec runs a mutating statement. It refuses an UPDATE that does not set
@@ -233,8 +237,11 @@ func (w *wtx) exec(ctx context.Context, q string, args ...any) (int64, error) {
 	return n, nil
 }
 
-// event appends the next gapless event. Every mutation calls it once.
-func (w *wtx) event(ctx context.Context, op Op, target string, before, after any, idemKey string) error {
+// event records the next gapless event. Every mutation calls it once.
+// Events are buffered and written in order once the operation's closure
+// returns (flush), so the last can carry the operation's idempotency
+// stamp and result.
+func (w *wtx) event(_ context.Context, op Op, target string, before, after any) error {
 	b, err := jsonOrNull(before)
 	if err != nil {
 		return err
@@ -243,22 +250,54 @@ func (w *wtx) event(ctx context.Context, op Op, target string, before, after any
 	if err != nil {
 		return err
 	}
+	w.pending = append(w.pending, pendingEvent{op: op, target: target, before: b, after: a})
+	w.events++
+	return nil
+}
+
+// pendingEvent is an event recorded but not yet written.
+type pendingEvent struct {
+	op            Op
+	target        string
+	before, after any
+}
+
+// flush writes the buffered events with the next sequence numbers. The
+// last carries the idempotency stamp, if the operation has one.
+func (w *wtx) flush(ctx context.Context) error {
+	if len(w.pending) == 0 {
+		if w.idem != nil && w.idem.result != nil {
+			return errors.New("store: idempotent operation recorded no event")
+		}
+		return nil
+	}
 	seq, err := lastEventSeq(ctx, w.tx)
 	if err != nil {
 		return fmt.Errorf("next event seq: %w", err)
 	}
-	seq++
-	var idem any
-	if idemKey != "" {
-		idem = idemKey
+	for i, e := range w.pending {
+		seq++
+		var key, args, result any
+		if st := w.idem; st != nil && i == len(w.pending)-1 {
+			if st.result == nil {
+				return errors.New("store: idempotent operation set no result")
+			}
+			key, args, result = st.key, st.args, string(st.result)
+		}
+		if _, err := w.exec(ctx, `INSERT INTO events
+  (seq, at, principal, session, machine, op, target, before_state, after_state, idem_key, idem_args, idem_result)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			seq, w.now, w.actor.Principal, w.actor.Session, w.actor.Machine, string(e.op), e.target, e.before, e.after,
+			key, args, result); err != nil {
+			if key != nil && isDuplicate(err) {
+				// A concurrent request with the same key committed first;
+				// the rerun replays it.
+				return fmt.Errorf("%w: idempotency key %q: %w", errRetry, w.idem.key, err)
+			}
+			return fmt.Errorf("insert event: %w", err)
+		}
 	}
-	if _, err := w.exec(ctx, `INSERT INTO events
-  (seq, at, principal, session, machine, op, target, before_state, after_state, idem_key)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		seq, w.now, w.actor.Principal, w.actor.Session, w.actor.Machine, string(op), target, b, a, idem); err != nil {
-		return fmt.Errorf("insert event: %w", err)
-	}
-	w.events++
+	w.pending = nil
 	return nil
 }
 
@@ -325,6 +364,9 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	}
 	if w.mutated && w.events == 0 && !w.quiet {
 		return errors.Join(errors.New("store: mutation without an event"), rollback(tx))
+	}
+	if err := w.flush(ctx); err != nil {
+		return errors.Join(err, rollback(tx))
 	}
 	if s.beforeCommit != nil {
 		if err := s.beforeCommit(ctx); err != nil {

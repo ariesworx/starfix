@@ -8,7 +8,7 @@ import (
 
 // Operations. Each names its argument and result types.
 const (
-	OpCreate   = "create"    // CreateArgs → WriteResult
+	OpCreate   = "create"    // CreateArgs → CreateResult
 	OpShow     = "show"      // ShowArgs → ShowResult
 	OpList     = "list"      // ListArgs → ListResult
 	OpReady    = "ready"     // LimitArgs → ListResult
@@ -29,6 +29,7 @@ const (
 	OpDigest   = "digest"    // DigestArgs → DigestResult
 	OpRenew    = "renew"     // RenewArgs → ClaimsResult (protocol 2)
 	OpWho      = "who"       // WhoArgs → WhoResult (protocol 2)
+	OpAccept   = "accept"    // AcceptArgs → AcceptResult (protocol 2)
 )
 
 // WhoArgs selects the agents seen within Since, a duration such as 5m,
@@ -128,6 +129,7 @@ type Event struct {
 }
 
 // CreateArgs creates an issue. Zero values take the server's defaults.
+// Idem, an idempotency key, makes a retry return the first result.
 type CreateArgs struct {
 	ID         string   `json:"id,omitempty"`
 	Idem       string   `json:"idem,omitempty"`
@@ -151,6 +153,13 @@ type WriteResult struct {
 	Rev int64  `json:"rev"`
 }
 
+// CreateResult is create's WriteResult and up to three similar closed
+// issues, best first (protocol 2).
+type CreateResult struct {
+	WriteResult
+	Similar []Summary `json:"similar,omitempty"`
+}
+
 // ShowArgs reads one issue. Without Full, long text fields are cut.
 type ShowArgs struct {
 	ID   string `json:"id"`
@@ -165,6 +174,39 @@ type ShowResult struct {
 	Claim *Claim `json:"claim,omitempty"`
 	// Handoff is the issue's latest handoff note and its fields, if any.
 	Handoff *Handoff `json:"handoff,omitempty"`
+	// Items are the acceptance criteria and their state (protocol 2).
+	Items []AcceptanceItem `json:"items,omitempty"`
+	// Similar are up to three similar closed issues, best first
+	// (protocol 2).
+	Similar []Summary `json:"similar,omitempty"`
+}
+
+// AcceptanceItem is one acceptance criterion. State is empty while open,
+// "ticked" or "waived" (with Reason). By and At say who set it and when;
+// an item ticked in the acceptance text itself has neither.
+type AcceptanceItem struct {
+	N      int        `json:"n"`
+	Text   string     `json:"text"`
+	State  string     `json:"state,omitempty"`
+	Reason string     `json:"reason,omitempty"`
+	By     string     `json:"by,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+}
+
+// AcceptArgs ticks, unticks and waives an issue's acceptance items by
+// number; Waive maps a number to the reason it is waived.
+type AcceptArgs struct {
+	ID     string         `json:"id"`
+	Tick   []int          `json:"tick,omitempty"`
+	Untick []int          `json:"untick,omitempty"`
+	Waive  map[int]string `json:"waive,omitempty"`
+}
+
+// AcceptResult lists the items and the numbers of those still open.
+type AcceptResult struct {
+	ID    string           `json:"id"`
+	Items []AcceptanceItem `json:"items"`
+	Open  []int            `json:"open,omitempty"`
 }
 
 // ListArgs filters issues. Empty fields match everything; all Labels must
@@ -224,11 +266,13 @@ type UpdateArgs struct {
 }
 
 // CloseArgs closes an issue. Rev 0 skips the revision check: close wins
-// over concurrent edits (design §8).
+// over concurrent edits (design §8). Force closes despite acceptance
+// items neither ticked nor waived, and records them in the event.
 type CloseArgs struct {
 	ID     string `json:"id"`
 	Rev    int64  `json:"rev,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	Force  bool   `json:"force,omitempty"`
 }
 
 // ReopenArgs reopens a closed issue. Rev 0 skips the revision check.
@@ -250,10 +294,12 @@ type LabelArgs struct {
 	Label string `json:"label"`
 }
 
-// CommentArgs adds a comment.
+// CommentArgs adds a comment. Idem, an idempotency key, makes a retry
+// return the first comment.
 type CommentArgs struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`
+	Idem string `json:"idem,omitempty"`
 }
 
 // CommentResult names the new comment.
@@ -285,11 +331,12 @@ type StartArgs struct {
 }
 
 // StartResult is the issue taken, in full, its latest handoff note with
-// its fields, and the claim (protocol 2).
+// its fields, the claim and the acceptance items (protocol 2).
 type StartResult struct {
-	Issue   Issue    `json:"issue"`
-	Handoff *Handoff `json:"handoff,omitempty"`
-	Claim   *Claim   `json:"claim,omitempty"`
+	Issue   Issue            `json:"issue"`
+	Handoff *Handoff         `json:"handoff,omitempty"`
+	Claim   *Claim           `json:"claim,omitempty"`
+	Items   []AcceptanceItem `json:"items,omitempty"`
 }
 
 // Claim is a lease on an issue. Epoch rises each time a new holder takes
@@ -326,14 +373,20 @@ type Discovered struct {
 
 // FinishArgs closes an issue with an optional handoff note and the work
 // discovered while doing it, in one transaction. The handoff's fields
-// need its note; To also puts it in that principal's inbox.
+// need its note; To also puts it in that principal's inbox. Ticked and
+// Waived settle acceptance items first; the close is refused while any
+// is left open. Idem, an idempotency key, makes a retry return the
+// first result.
 type FinishArgs struct {
 	ID string `json:"id"`
 	// Epoch, if set, must be the issue's current claim epoch.
-	Epoch      int64        `json:"epoch,omitempty"`
-	Reason     string       `json:"reason,omitempty"`
-	Handoff    string       `json:"handoff,omitempty"`
-	Discovered []Discovered `json:"discovered,omitempty"`
+	Epoch      int64          `json:"epoch,omitempty"`
+	Reason     string         `json:"reason,omitempty"`
+	Handoff    string         `json:"handoff,omitempty"`
+	Discovered []Discovered   `json:"discovered,omitempty"`
+	Ticked     []int          `json:"ticked,omitempty"`
+	Waived     map[int]string `json:"waived,omitempty"`
+	Idem       string         `json:"idem,omitempty"`
 	HandoffFields
 }
 
@@ -347,13 +400,15 @@ type FinishResult struct {
 
 // HandoffArgs records a handoff note and its fields. Release also lets
 // the issue go, so another can start it; To also puts it in that
-// principal's inbox.
+// principal's inbox. Idem, an idempotency key, makes a retry return the
+// first result.
 type HandoffArgs struct {
 	ID string `json:"id"`
 	// Epoch, if set, must be the issue's current claim epoch.
 	Epoch   int64  `json:"epoch,omitempty"`
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty"`
+	Idem    string `json:"idem,omitempty"`
 	HandoffFields
 }
 

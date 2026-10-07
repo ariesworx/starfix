@@ -16,7 +16,7 @@ func TestCreateIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := s.CreateIssue(ctx, alice, NewIssue{Title: "once", IdempotencyKey: "k1"})
+	again, err := s.CreateIssue(ctx, alice, NewIssue{Title: "once", IdempotencyKey: "k1", Labels: []string{"area:db"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,8 @@ func TestCreateIdempotent(t *testing.T) {
 		in   NewIssue
 		want error
 	}{
-		{"key reused for another id", NewIssue{Title: "x", IdempotencyKey: "k1", ID: "tst-other"}, ErrInvalid},
+		{"key reused for another id", NewIssue{Title: "once", IdempotencyKey: "k1", ID: "tst-other", Labels: []string{"area:db"}}, ErrConflict},
+		{"key reused without the labels", NewIssue{Title: "once", IdempotencyKey: "k1"}, ErrConflict},
 		{"client id taken", NewIssue{Title: "x", ID: first.ID}, ErrExists},
 		{"bad id", NewIssue{Title: "x", ID: "Not An ID"}, ErrInvalid},
 		{"empty title", NewIssue{Title: " "}, ErrInvalid},
@@ -128,7 +129,7 @@ func TestEventPerMutation(t *testing.T) {
 		{"add dep again", func() error { return s.AddDep(ctx, alice, a.ID, b.ID, DepBlocks) }, "", ""},
 		{"remove dep", func() error { return s.RemoveDep(ctx, alice, a.ID, b.ID, DepBlocks) }, OpDepRemove, a.ID},
 		{"remove absent dep", func() error { return s.RemoveDep(ctx, alice, a.ID, b.ID, DepBlocks) }, "", ""},
-		{"comment", func() error { _, err := s.AddComment(ctx, alice, a.ID, "hello"); return err }, OpCommentAdd, a.ID},
+		{"comment", func() error { _, err := s.AddComment(ctx, alice, a.ID, "hello", ""); return err }, OpCommentAdd, a.ID},
 		{"close", func() error { _, err := s.CloseIssue(ctx, alice, a.ID, 0, "done"); return err }, OpIssueClose, a.ID},
 		{"reopen", func() error { _, err := s.ReopenIssue(ctx, alice, a.ID, 0); return err }, OpIssueReopen, a.ID},
 	}
@@ -248,11 +249,11 @@ func TestComments(t *testing.T) {
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{})
 	for _, body := range []string{"one", "two"} {
-		if _, err := s.AddComment(ctx, bob, is.ID, body); err != nil {
+		if _, err := s.AddComment(ctx, bob, is.ID, body, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.AddComment(ctx, bob, "tst-missing", "x"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.AddComment(ctx, bob, "tst-missing", "x", ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("comment on missing issue: %v", err)
 	}
 	cs, err := s.Comments(ctx, is.ID)

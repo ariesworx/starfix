@@ -36,6 +36,8 @@ func (e Event) Changed() string {
 		return fmt.Sprint(pick["label"])
 	case "dep.add", "dep.remove":
 		return fmt.Sprintf("%v %v", pick["type"], pick["to"])
+	case "acceptance.tick", "acceptance.untick", "acceptance.waive":
+		return fmt.Sprintf("item %v", pick["n"])
 	case "issue.create":
 		return fmt.Sprintf("%q", pick["title"])
 	case "claim.take", "claim.expire":

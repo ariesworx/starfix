@@ -73,6 +73,10 @@ type world struct {
 	fixedClock bool
 	connsMu    sync.Mutex
 	conns      map[net.Conn]struct{} // open SSH connections
+	// dropOp, when set, names an op whose next response is never
+	// delivered: the connection drops after the server has answered
+	// (dropReplyTo).
+	dropOp string
 }
 
 type daemonOpts struct {
@@ -183,6 +187,74 @@ func (w *world) startSSH(ctx context.Context) {
 	})
 }
 
+// dropReplyTo arranges for the next request of op to be applied by the
+// server and its response lost: the SSH connection drops instead of
+// delivering it, as a network failure at the worst moment would.
+func (w *world) dropReplyTo(op string) {
+	w.connsMu.Lock()
+	defer w.connsMu.Unlock()
+	w.dropOp = op
+}
+
+// tap watches one SSH connection's frames for dropReplyTo: reads note the
+// id of the request to drop, writes drop the connection at its response.
+type tap struct {
+	w    *world
+	nc   net.Conn
+	in   io.Reader
+	out  io.Writer
+	mu   sync.Mutex
+	drop map[uint64]bool
+	rbuf []byte // partial request line
+	wbuf []byte // partial response line
+}
+
+func (t *tap) Read(p []byte) (int, error) {
+	n, err := t.in.Read(p)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.rbuf = append(t.rbuf, p[:n]...)
+	for {
+		i := bytes.IndexByte(t.rbuf, '\n')
+		if i < 0 {
+			break
+		}
+		var f proto.Frame
+		if json.Unmarshal(t.rbuf[:i], &f) == nil && f.T == proto.FrameReq {
+			t.w.connsMu.Lock()
+			if f.Op == t.w.dropOp {
+				t.w.dropOp = ""
+				t.drop[f.ID] = true
+			}
+			t.w.connsMu.Unlock()
+		}
+		t.rbuf = t.rbuf[i+1:]
+	}
+	return n, err
+}
+
+func (t *tap) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.wbuf = append(t.wbuf, p...)
+	for {
+		i := bytes.IndexByte(t.wbuf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := t.wbuf[:i+1]
+		var f proto.Frame
+		if json.Unmarshal(line, &f) == nil && f.T == proto.FrameRes && t.drop[f.ID] {
+			_ = t.nc.Close()
+			return 0, errors.New("e2e: response dropped")
+		}
+		if _, err := t.out.Write(line); err != nil {
+			return 0, err
+		}
+		t.wbuf = t.wbuf[i+1:]
+	}
+}
+
 // dropAll closes every open SSH connection, as a network drop would.
 func (w *world) dropAll() {
 	w.connsMu.Lock()
@@ -227,7 +299,8 @@ func (w *world) serveSSH(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig
 				case "exec", "shell":
 					_ = req.Reply(true, nil)
 					status := uint32(0)
-					if err := server.Bridge(ctx, w.socket, principal, ch, ch); err != nil {
+					tp := &tap{w: w, nc: nc, in: ch, out: ch, drop: map[uint64]bool{}}
+					if err := server.Bridge(ctx, w.socket, principal, tp, tp); err != nil {
 						_, _ = fmt.Fprintf(ch.Stderr(), "starfixd: %v\n", err)
 						status = 1
 					}

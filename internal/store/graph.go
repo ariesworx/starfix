@@ -47,7 +47,7 @@ func insertDep(ctx context.Context, w *wtx, from, to IssueID, typ DepType) error
 		return fmt.Errorf("insert dep: %w", err)
 	}
 	d := Dep{From: from, To: to, Type: typ, CreatedBy: w.actor.Principal, CreatedAt: w.now}
-	return w.event(ctx, OpDepAdd, string(from), nil, d, "")
+	return w.event(ctx, OpDepAdd, string(from), nil, d)
 }
 
 // RemoveDep deletes an edge. Removing a missing edge is a no-op.
@@ -64,7 +64,7 @@ func (s *Store) RemoveDep(ctx context.Context, actor Actor, from, to IssueID, ty
 		if n == 0 {
 			return nil
 		}
-		return w.event(ctx, OpDepRemove, string(from), Dep{From: from, To: to, Type: typ}, nil, "")
+		return w.event(ctx, OpDepRemove, string(from), Dep{From: from, To: to, Type: typ}, nil)
 	})
 }
 

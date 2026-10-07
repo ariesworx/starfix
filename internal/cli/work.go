@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/gitx"
@@ -66,7 +67,8 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim})
+	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim, Items: out.Items})
+	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
 	_, _ = fmt.Fprintf(r.env.Stdout, "\nbranch: %s%s\n", out.Branch, note)
 	return nil
@@ -83,10 +85,13 @@ func (l *repeated) Set(v string) error {
 }
 
 func cmdFinish(ctx context.Context, r *runner, args []string) error {
-	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--discovered TITLE]... [--epoch N]"
+	const usage = "finish ID [--reason TEXT] [--handoff TEXT|-] [--state S] [--next TEXT] [--branch B] [--worktree DIR] [--to P] [--discovered TITLE]... [--tick N,N] [--waive N=REASON]... [--epoch N]"
 	fs := r.newFlags("finish")
 	var in proto.FinishArgs
-	var found repeated
+	var found, waive repeated
+	var tick listFlag
+	fs.Var(&tick, "tick", "acceptance items met (comma-separated or repeatable)")
+	fs.Var(&waive, "waive", "N=REASON: waive acceptance item N (repeatable)")
 	fs.Int64Var(&in.Epoch, "epoch", 0, "refuse unless this is still the claim's epoch")
 	fs.StringVar(&in.Reason, "reason", "", "what was done")
 	fs.StringVar(&in.Handoff, "handoff", "", "a note for whoever comes next, or - for standard input")
@@ -104,6 +109,23 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 	}
 	for _, t := range found {
 		in.Discovered = append(in.Discovered, proto.Discovered{Title: t})
+	}
+	if in.Ticked, err = itemNumbers(usage, tick); err != nil {
+		return err
+	}
+	for _, w := range waive {
+		ns, reason, ok := strings.Cut(w, "=")
+		n, err := strconv.Atoi(ns)
+		if !ok || err != nil || n < 1 || reason == "" {
+			return usagef(usage, "--waive %q is not N=REASON", w)
+		}
+		if in.Waived == nil {
+			in.Waived = map[int]string{}
+		}
+		in.Waived[n] = reason
+	}
+	if in.Idem, err = proto.NewIdem("cli"); err != nil {
+		return err
 	}
 	var out proto.FinishResult
 	if err := r.call(ctx, proto.OpFinish, in, &out); err != nil {
@@ -138,7 +160,73 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 	if in.Note, err = r.text(strings.Join(pos[1:], " ")); err != nil {
 		return err
 	}
+	if in.Idem, err = proto.NewIdem("cli"); err != nil {
+		return err
+	}
 	return r.write(ctx, proto.OpHandoff, in)
+}
+
+// itemNumbers parses acceptance item numbers.
+func itemNumbers(usage string, args []string) ([]int, error) {
+	var out []int
+	for _, a := range args {
+		n, err := strconv.Atoi(a)
+		if err != nil || n < 1 {
+			return nil, usagef(usage, "%q is not an item number", a)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+func cmdAccept(ctx context.Context, r *runner, args []string) error {
+	const usage = "accept ID N... [--undo | --waive REASON]"
+	fs := r.newFlags("accept")
+	undo := fs.Bool("undo", false, "untick the items instead")
+	waive := fs.String("waive", "", "waive the items, for this reason, instead of ticking them")
+	pos, err := parse(fs, args, usage)
+	if err != nil {
+		return err
+	}
+	if len(pos) < 2 {
+		return usagef(usage, "accept needs an issue id and item numbers")
+	}
+	if *undo && set(fs, "waive") {
+		return usagef(usage, "give --undo or --waive, not both")
+	}
+	var ns []int
+	for _, a := range pos[1:] {
+		more, err := itemNumbers(usage, strings.Split(a, ","))
+		if err != nil {
+			return err
+		}
+		ns = append(ns, more...)
+	}
+	in := proto.AcceptArgs{ID: pos[0]}
+	switch {
+	case *undo:
+		in.Untick = ns
+	case set(fs, "waive"):
+		in.Waive = map[int]string{}
+		for _, n := range ns {
+			in.Waive[n] = *waive
+		}
+	default:
+		in.Tick = ns
+	}
+	var out proto.AcceptResult
+	if err := r.call(ctx, proto.OpAccept, in, &out); err != nil {
+		return err
+	}
+	if r.json {
+		r.emit(out)
+		return nil
+	}
+	printItems(r.env.Stdout, out.Items)
+	if len(out.Open) == 0 {
+		_, _ = fmt.Fprintf(r.env.Stdout, "\n%s: every item is ticked or waived\n", out.ID)
+	}
+	return nil
 }
 
 // handoffFlags adds a handoff's structured fields to finish and handoff.

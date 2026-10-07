@@ -56,7 +56,7 @@ func TestStartHandoffFinish(t *testing.T) {
 
 	out := alice.ok("start", "--branch")
 	branch := "fix/" + id + "-fix-the-login-redirect"
-	for _, want := range []string{id + "  P1  in_progress  bug  rev 2", "assignee: alice", "acceptance:\nlands on /home",
+	for _, want := range []string{id + "  P1  in_progress  bug  rev 2", "assignee: alice", "acceptance:\n  1 [ ] lands on /home",
 		"claimed by alice (cli on laptop-test), epoch 1, until ", "branch: " + branch + " (checked out)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("start lacks %q:\n%s", want, out)
@@ -107,7 +107,11 @@ func TestStartHandoffFinish(t *testing.T) {
 	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "fix: leave it to bob") {
 		t.Fatalf("alice finish: exit %d\n%s", r.code, r.stderr)
 	}
-	f := decode[proto.FinishResult](t, bob.ok("finish", id, "--reason", "fixed", "--handoff", "cookie path is gone",
+	r = bob.run("v0.2.0", "finish", id, "--reason", "fixed")
+	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "acceptance items neither ticked nor waived: 1\nfix: tick what is met with `sfx accept "+id+" 1`") {
+		t.Fatalf("finish with the item open: exit %d\n%s", r.code, r.stderr)
+	}
+	f := decode[proto.FinishResult](t, bob.ok("finish", id, "--reason", "fixed", "--handoff", "cookie path is gone", "--tick", "1",
 		"--discovered", "Flaky login test, sometimes", "--discovered", "Document the redirect", "--json"))
 	if f.ID != id || len(f.Created) != 2 {
 		t.Fatalf("finish: %+v", f)
@@ -130,7 +134,7 @@ func TestStartHandoffFinish(t *testing.T) {
 	for _, e := range h.Events {
 		ops = append(ops, e.Op+"/"+e.Principal)
 	}
-	want := "issue.create/alice claim.take/alice issue.update/alice comment.add/alice issue.update/alice claim.take/bob issue.update/bob comment.add/bob issue.close/bob"
+	want := "issue.create/alice claim.take/alice issue.update/alice comment.add/alice issue.update/alice claim.take/bob issue.update/bob acceptance.tick/bob comment.add/bob issue.close/bob"
 	if got := strings.Join(ops, " "); got != want {
 		t.Fatalf("history:\n got %s\nwant %s", got, want)
 	}
@@ -152,7 +156,7 @@ func TestMCPStartFinish(t *testing.T) {
 	id := strings.TrimSpace(alice.ok("create", "Add the start tool", "-t", "feature", "--acceptance", "two calls"))
 
 	st := decode[mcpserver.Started](t, ag.ok("start", nil))
-	if st.ID != id || st.Rev != 2 || st.Acceptance != "two calls" || st.Branch != "feature/"+id+"-add-the-start-tool" || st.Handoff != nil {
+	if st.ID != id || st.Rev != 2 || len(st.Items) != 1 || st.Items[0] != "1 [ ] two calls" || st.Branch != "feature/"+id+"-add-the-start-tool" || st.Handoff != nil {
 		t.Fatalf("start: %+v", st)
 	}
 	if again := decode[mcpserver.Started](t, ag.ok("start", map[string]any{"id": id})); again.Rev != 2 {
@@ -161,8 +165,17 @@ func TestMCPStartFinish(t *testing.T) {
 	if out := ag.ok("handoff", map[string]any{"id": id, "note": "schema done"}); out != `{"id":"`+id+`","rev":2}` {
 		t.Fatalf("handoff: %s", out)
 	}
-	out = ag.ok("finish", map[string]any{"id": id, "reason": "done", "handoff": "see the README",
-		"discovered": []any{map[string]any{"title": "Add digest", "priority": 1}}})
+	// The agent cannot finish until the item is ticked; the refusal names
+	// the argument, and nothing of the refused finish is written.
+	fin := map[string]any{"id": id, "reason": "done", "handoff": "see the README",
+		"discovered": []any{map[string]any{"title": "Add digest", "priority": 1}}}
+	out, isErr = ag.call("finish", fin)
+	if !isErr || out != "acceptance: issue "+id+" has acceptance items neither ticked nor waived: 1\n"+
+		"fix: call finish with ticked: [numbers met] and waived: {number: reason} for the rest; show lists the items" {
+		t.Fatalf("finish with the item open: %q", out)
+	}
+	fin["ticked"] = []any{1}
+	out = ag.ok("finish", fin)
 	f := decode[proto.FinishResult](t, out)
 	if f.ID != id || f.Rev != 3 || len(f.Created) != 1 {
 		t.Fatalf("finish: %s", out)

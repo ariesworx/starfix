@@ -199,19 +199,20 @@ command's usage; `--json` prints one JSON document, errors included.
 | Command | Does |
 |---|---|
 | `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
-| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim. The note can carry the handoff fields below |
+| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim. The note can carry the handoff fields below. `--tick 1,3` and `--waive N=REASON` settle acceptance items first; it is refused while any is open |
+| `accept ID N...` | Tick acceptance items (`--undo` unticks, `--waive REASON` waives them). Items come from the acceptance text: each Markdown list item (`- [ ] x`, `- x`, `1. x`), or the whole text as one; `start` and `show` print them as a checklist |
 | `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it. Optional fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P`, which puts it in P's inbox. `start` and `show` print the latest |
 | `inbox` | List your unread inbox, newest first: lost claims, handoffs to you, mentions, assignments (`--all` includes read ones, `-n N`); `--ack ID`, repeatable or comma-separated, or `--ack-all` marks them read |
 | `watch` | Print your inbox items as they happen, until interrupted (ctrl-c exits 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it fell behind and missed items (`sfx inbox` lists them) |
 | `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds |
-| `create` | Create an issue and print its id |
-| `show` | Show an issue and its dependencies (`--compact` for short) |
+| `create` | Create an issue and print its id; similar closed issues, if any, go to stderr |
+| `show` | Show an issue, its dependencies, acceptance checklist and similar closed issues (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
 | `ready` | List issues nothing holds back |
 | `blocked` | List issues held back by open blockers |
 | `update` | Change fields; `--rev N` makes it a strict compare-and-swap |
-| `close`, `reopen` | Close or reopen an issue |
+| `close`, `reopen` | Close or reopen an issue. Close is refused while an acceptance item is open; `--force` closes anyway and records the open items in the event |
 | `dep` | Add or remove a dependency: FROM depends on TO |
 | `label` | Add or remove labels |
 | `comment`, `comments` | Add a comment; list an issue's comments |

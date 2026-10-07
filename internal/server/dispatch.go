@@ -55,6 +55,7 @@ func init() {
 		proto.OpInbox:    typed(inbox),
 		proto.OpAck:      typed(ack),
 		proto.OpWatch:    typed(watchOp),
+		proto.OpAccept:   typed(accept),
 	}
 }
 
@@ -89,7 +90,41 @@ func create(ctx context.Context, s *Server, a store.Actor, in proto.CreateArgs) 
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpCreate, in.ID, 0, err)
 	}
-	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+	return proto.CreateResult{WriteResult: proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)},
+		Similar: s.similar(ctx, is)}, nil
+}
+
+// similar lists the closed issues like is, for create and show. A failure
+// is logged and lists none: the request itself succeeded.
+func (s *Server) similar(ctx context.Context, is store.Issue) []proto.Summary {
+	sim, err := s.cfg.Store.SimilarClosed(ctx, is.Title, is.ID, store.MaxSimilar)
+	if err != nil {
+		s.cfg.Logger.Error("similar issues", "issue", is.ID, "err", err)
+		return nil
+	}
+	var out []proto.Summary
+	for _, x := range sim {
+		out = append(out, proto.Summary{ID: string(x.ID), Title: x.Title, Status: string(store.StatusClosed), Priority: int(x.Priority)})
+	}
+	return out
+}
+
+// items reads is's acceptance items for start and show.
+func (s *Server) items(ctx context.Context, is store.Issue) ([]proto.AcceptanceItem, error) {
+	items, err := s.cfg.Store.AcceptanceItems(ctx, is.ID)
+	if err != nil {
+		return nil, err
+	}
+	return wireItems(items), nil
+}
+
+func wireItems(items []store.AcceptanceItem) []proto.AcceptanceItem {
+	var out []proto.AcceptanceItem
+	for _, it := range items {
+		out = append(out, proto.AcceptanceItem{N: it.N, Text: it.Text, State: string(it.State), Reason: it.Reason,
+			By: it.By, At: it.At})
+	}
+	return out
 }
 
 // compactText is how much of each long text field compact show returns.
@@ -113,7 +148,11 @@ func show(ctx context.Context, s *Server, _ store.Actor, in proto.ShowArgs) (any
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
 	}
-	out := proto.ShowResult{Issue: wireIssue(is)}
+	items, err := s.items(ctx, is)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
+	out := proto.ShowResult{Issue: wireIssue(is), Items: items, Similar: s.similar(ctx, is)}
 	if claim != nil {
 		c := wireClaim(*claim)
 		out.Claim = &c
@@ -218,7 +257,11 @@ func update(ctx context.Context, s *Server, a store.Actor, in proto.UpdateArgs) 
 }
 
 func closeIssue(ctx context.Context, s *Server, a store.Actor, in proto.CloseArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.CloseIssue(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev), in.Reason)
+	closer := s.cfg.Store.CloseIssue
+	if in.Force {
+		closer = s.cfg.Store.ForceClose
+	}
+	is, err := closer(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev), in.Reason)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpClose, in.ID, in.Rev, err)
 	}
@@ -269,7 +312,7 @@ func labelRm(ctx context.Context, s *Server, a store.Actor, in proto.LabelArgs) 
 }
 
 func comment(ctx context.Context, s *Server, a store.Actor, in proto.CommentArgs) (any, *proto.Error) {
-	c, err := s.cfg.Store.AddComment(ctx, a, store.IssueID(in.ID), in.Body)
+	c, err := s.cfg.Store.AddComment(ctx, a, store.IssueID(in.ID), in.Body, in.Idem)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpComment, in.ID, 0, err)
 	}
@@ -336,6 +379,11 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 	}
 	c := wireClaim(claim)
 	out := proto.StartResult{Issue: wireIssue(is), Claim: &c}
+	// The issue is taken; a failed read says so in the log rather than
+	// fail the start.
+	if out.Items, err = s.items(ctx, is); err != nil {
+		s.cfg.Logger.Error("read acceptance items", "issue", is.ID, "err", err)
+	}
 	h, err := s.cfg.Store.LastHandoff(ctx, is.ID)
 	if err != nil {
 		// The issue is taken; say so rather than fail the start.
@@ -348,7 +396,8 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 }
 
 func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) (any, *proto.Error) {
-	f := store.Finish{Reason: in.Reason, Handoff: storeHandoff(in.Handoff, in.HandoffFields)}
+	f := store.Finish{Reason: in.Reason, Handoff: storeHandoff(in.Handoff, in.HandoffFields), IdempotencyKey: in.Idem,
+		Accept: store.Acceptance{Tick: in.Ticked, Waive: in.Waived}}
 	for _, d := range in.Discovered {
 		n := store.NewIssue{Title: d.Title, Type: store.IssueType(d.Type)}
 		if d.Priority != nil {
@@ -369,11 +418,25 @@ func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) 
 }
 
 func handoff(ctx context.Context, s *Server, a store.Actor, in proto.HandoffArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, storeHandoff(in.Note, in.HandoffFields), in.Release)
+	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, storeHandoff(in.Note, in.HandoffFields), in.Release, in.Idem)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHandoff, in.ID, 0, err)
 	}
 	return proto.WriteResult{ID: string(is.ID), Rev: int64(is.Rev)}, nil
+}
+
+func accept(ctx context.Context, s *Server, a store.Actor, in proto.AcceptArgs) (any, *proto.Error) {
+	items, err := s.cfg.Store.Accept(ctx, a, store.IssueID(in.ID), store.Acceptance{Tick: in.Tick, Untick: in.Untick, Waive: in.Waive})
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpAccept, in.ID, 0, err)
+	}
+	out := proto.AcceptResult{ID: in.ID, Items: wireItems(items)}
+	for _, it := range items {
+		if it.State == store.ItemOpen {
+			out.Open = append(out.Open, it.N)
+		}
+	}
+	return out, nil
 }
 
 func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (any, *proto.Error) {
