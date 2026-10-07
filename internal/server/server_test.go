@@ -485,3 +485,89 @@ func TestResolveSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestDispatchWork(t *testing.T) {
+	s := newServer(t)
+	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "first", Acceptance: "it works"})
+	b := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "second"})
+
+	st := mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{})
+	if st.Issue.ID != a.ID || st.Issue.Status != "in_progress" || st.Issue.Assignee != "alice" ||
+		st.Issue.Acceptance != "it works" || st.Handoff != nil {
+		t.Fatalf("start: %+v", st)
+	}
+	h := mustCall[proto.WriteResult](t, s, alice, proto.OpHandoff, proto.HandoffArgs{ID: a.ID, Note: "half done", Release: true})
+	if h.ID != a.ID || h.Rev != 3 {
+		t.Fatalf("handoff: %+v", h)
+	}
+	st = mustCall[proto.StartResult](t, s, bob, proto.OpStart, proto.StartArgs{ID: a.ID})
+	if st.Issue.Assignee != "bob" || st.Handoff == nil || st.Handoff.Body != "half done" ||
+		st.Handoff.Kind != "handoff" || st.Handoff.Author != "alice" {
+		t.Fatalf("start after handoff: %+v %+v", st.Issue, st.Handoff)
+	}
+	p0 := 0
+	f := mustCall[proto.FinishResult](t, s, bob, proto.OpFinish, proto.FinishArgs{ID: a.ID, Reason: "done", Handoff: "all yours",
+		Discovered: []proto.Discovered{{Title: "follow-up", Type: "bug", Priority: &p0}}})
+	if f.ID != a.ID || len(f.Created) != 1 {
+		t.Fatalf("finish: %+v", f)
+	}
+	show := mustCall[proto.ShowResult](t, s, bob, proto.OpShow, proto.ShowArgs{ID: f.Created[0]})
+	if show.Issue.Type != "bug" || show.Issue.Priority != 0 || len(show.Deps) != 1 ||
+		show.Deps[0].To != a.ID || show.Deps[0].Type != "discovered-from" {
+		t.Fatalf("discovered: %+v", show)
+	}
+	cs := mustCall[proto.CommentsResult](t, s, bob, proto.OpComments, proto.IDArgs{ID: a.ID})
+	if len(cs.Comments) != 2 || cs.Comments[1].Kind != "handoff" || cs.Comments[1].Body != "all yours" {
+		t.Fatalf("comments: %+v", cs)
+	}
+
+	// Errors: alice holds b; bob is pointed at the next ready issue.
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: b.ID})
+	tests := []struct {
+		name string
+		a    store.Actor
+		op   string
+		args any
+		code proto.Code
+		msg  string
+		fix  string
+	}{
+		{name: "start held names the next ready", a: bob, op: proto.OpStart, args: proto.StartArgs{ID: b.ID},
+			code: proto.CodeConflict, msg: b.ID + " is in progress by alice; next ready: " + f.Created[0],
+			fix: "take that one with `sfx start " + f.Created[0] + "`"},
+		{name: "finish held", a: bob, op: proto.OpFinish, args: proto.FinishArgs{ID: b.ID},
+			code: proto.CodeConflict, msg: b.ID + " is in progress by alice", fix: "`sfx close " + b.ID + "`"},
+		{name: "release held", a: bob, op: proto.OpHandoff, args: proto.HandoffArgs{ID: b.ID, Note: "x", Release: true},
+			code: proto.CodeConflict, msg: "in progress by alice", fix: "without --release"},
+		{name: "start closed", a: bob, op: proto.OpStart, args: proto.StartArgs{ID: a.ID},
+			code: proto.CodeInvalid, msg: "is closed", fix: "sfx reopen " + a.ID},
+		{name: "finish closed", a: bob, op: proto.OpFinish, args: proto.FinishArgs{ID: a.ID}, code: proto.CodeInvalid, fix: "nothing to do"},
+		{name: "start missing", a: bob, op: proto.OpStart, args: proto.StartArgs{ID: "sf-zzzzzzzz"},
+			code: proto.CodeNotFound, msg: "issue sf-zzzzzzzz not found"},
+		{name: "bad discovered", a: alice, op: proto.OpFinish, args: proto.FinishArgs{ID: b.ID, Discovered: []proto.Discovered{{Title: "x", Type: "story"}}},
+			code: proto.CodeInvalid, msg: "story", fix: "`sfx finish -h`"},
+		{name: "empty note", a: alice, op: proto.OpHandoff, args: proto.HandoffArgs{ID: b.ID}, code: proto.CodeInvalid, msg: "comment must be"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, perr := call[proto.Empty](t, s, tc.a, tc.op, tc.args)
+			if perr == nil {
+				t.Fatal("succeeded")
+			}
+			if perr.Code != tc.code || !strings.Contains(perr.Message, tc.msg) || !strings.Contains(perr.Fix, tc.fix) || perr.Fix == "" {
+				t.Fatalf("got %+v\nwant code %s, message containing %q, fix containing %q", perr, tc.code, tc.msg, tc.fix)
+			}
+		})
+	}
+
+	// Nothing left to start.
+	mustCall[proto.StartResult](t, s, bob, proto.OpStart, proto.StartArgs{})
+	_, perr := call[proto.Empty](t, s, bob, proto.OpStart, proto.StartArgs{})
+	if perr == nil || perr.Code != proto.CodeNotFound || perr.Message != "nothing is ready to start" || !strings.Contains(perr.Fix, "sfx blocked") {
+		t.Fatalf("nothing ready: %+v", perr)
+	}
+	_, perr = call[proto.Empty](t, s, bob, proto.OpStart, proto.StartArgs{ID: b.ID})
+	if perr == nil || !strings.Contains(perr.Message, "nothing else is ready") {
+		t.Fatalf("held with nothing ready: %+v", perr)
+	}
+}

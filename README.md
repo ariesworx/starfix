@@ -143,6 +143,9 @@ command's usage; `--json` prints one JSON document, errors included.
 
 | Command | Does |
 |---|---|
+| `start [ID]` | Take an issue (the top ready one without ID) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
+| `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step |
+| `handoff ID NOTE` | Leave a note for whoever continues; `--release` unassigns it so another can start it |
 | `create` | Create an issue and print its id |
 | `show` | Show an issue and its dependencies (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
@@ -193,9 +196,18 @@ sfx setup codex --check         # fails, with a fix, if it is missing
 outside the repository is touched without it. `--command PATH` sets how
 the agent runs `sfx` when it is not on PATH.
 
-The tools are `prime`, `ready`, `blocked`, `list`, `show`, `create`,
-`update`, `close`, `reopen`, `dep`, `label`, `comment`, `comments` and
-`history`; there are no admin tools. Results are compact (writes return
+A session is two calls: `start` takes the top ready issue (or a named
+one) and returns it with its acceptance criteria, the last handoff and a
+branch name (`fix/sf-a1b2c3d4-fix-the-login-redirect`); `finish` closes it,
+records a handoff note and files the work found on the way, linked
+`discovered-from`. Until stage 3's leases, taking an issue sets it
+`in_progress` and assigned to you, and another principal's `start` or
+`finish` on it is refused with the next ready issue to take instead. The
+MCP `start` never touches git; the agent runs git itself.
+
+The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
+`list`, `show`, `create`, `update`, `close`, `reopen`, `dep`, `label`,
+`comment`, `comments` and `history`; there are no admin tools. Results are compact (writes return
 `{id, rev}`, lists return id, title, status and priority) and capped at
 about 2,000 tokens, prime at 1,500. A refusal is a tool error with the
 server's code and message and a `fix:` line naming the agent's next step.
@@ -219,7 +231,7 @@ connection, and other writes report that they may have applied.
 |---|---|---|
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
-| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup` built) |
+| 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup`, `start`/`finish` built) |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
@@ -257,6 +269,7 @@ GOOS=windows go build ./cmd/...   # the client must build on every developer OS
 | `internal/proto` | Wire frames, handshake, typed requests and errors |
 | `internal/server` | Daemon, socket, bridge, settings |
 | `internal/client`, `internal/cli` | SSH client, config discovery, CLI commands |
+| `internal/gitx` | Branch names from issues, issue IDs from branches and `Starfix:` trailers, branch and worktree creation |
 | `internal/bdimport` | bd JSONL import and export |
 | `internal/mcpserver`, `internal/agentsetup` | MCP tools and `prime`; agent registration |
 | `internal/e2e` | End-to-end tests through an in-process SSH server |

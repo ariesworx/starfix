@@ -38,6 +38,13 @@ func TestRunWithoutServer(t *testing.T) {
 		{name: "bad priority", args: []string{"-C", empty, "create", "x", "-p", "9"}, code: ExitUsage, stderr: "priority must be 0-4"},
 		{name: "update with nothing", args: []string{"-C", empty, "update", "sf-aaaa"}, code: ExitUsage, stderr: "nothing to update"},
 		{name: "dep needs an action", args: []string{"dep", "link", "a", "b"}, code: ExitUsage, stderr: `unknown dep action "link"`},
+		{name: "help for start", args: []string{"help", "start"}, code: ExitOK, stdout: "usage: sfx start [ID] [--branch | --worktree DIR]"},
+		{name: "start takes one id", args: []string{"start", "sf-a", "sf-b"}, code: ExitUsage, stderr: "start takes at most one issue id"},
+		{name: "start branch or worktree", args: []string{"start", "--branch", "--worktree", "wt"}, code: ExitUsage,
+			stderr: "give --branch or --worktree, not both"},
+		{name: "finish needs an id", args: []string{"finish", "--reason", "done"}, code: ExitUsage,
+			stderr: "finish needs exactly one issue id\nfix: usage: sfx finish ID"},
+		{name: "handoff needs a note", args: []string{"handoff", "sf-a"}, code: ExitUsage, stderr: "handoff needs an issue id and a note"},
 		{name: "no config", args: []string{"-C", empty, "ready"}, code: ExitFailure,
 			stderr: "sfx: .starfix.yaml not found here or in any parent directory\nfix: run starfix inside a repository"},
 	}

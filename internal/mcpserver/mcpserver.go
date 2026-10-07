@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -56,8 +57,10 @@ type Options struct {
 
 // Instructions is what an agent reads when it connects.
 const Instructions = "Issue tracker shared by every agent and person on this project. " +
-	"Call prime at the start of a session. Pick work with ready, set it in_progress with update, " +
-	"comment as you go, close it when done, and create issues for work you discover. " +
+	"Call prime at the start of a session. Take work with start (the top ready issue, or an id): " +
+	"it returns the issue, its last handoff and a branch name. Comment as you go. " +
+	"End with finish: it closes the issue, records your handoff and files work you discovered. " +
+	"To stop without closing, call handoff (release lets another start it). " +
 	"Writes return {id, rev}; pass rev to update or close to refuse a stale edit. " +
 	"On an error, follow its fix line."
 
@@ -200,23 +203,14 @@ func add[In, Out any](s *Server, t tool, h func(context.Context, Conn, In) (Out,
 	// Optional fields are pointers or slices, which infer as nullable.
 	// Omitting a field already says "not given", and the null costs
 	// tokens in every session.
-	for _, p := range schema.Properties {
-		if len(p.Types) == 2 && p.Types[0] == "null" {
-			p.Type, p.Types = p.Types[1], nil
-		}
-	}
+	notNull(schema)
 	for field, values := range t.enums {
-		p := schema.Properties[field]
-		if p.Items != nil {
-			p = p.Items
-		}
-		p.Enum = values
+		prop(schema, field).Enum = values
 	}
-	if p := schema.Properties["priority"]; p != nil {
-		if p.Items != nil {
-			p = p.Items
+	for _, field := range []string{"priority", "discovered.priority"} {
+		if p := prop(schema, field); p != nil {
+			p.Minimum, p.Maximum = ptr(0.0), ptr(4.0)
 		}
-		p.Minimum, p.Maximum = ptr(0.0), ptr(4.0)
 	}
 	if p := schema.Properties["limit"]; p != nil {
 		p.Minimum = ptr(1.0) // the server clamps the maximum
@@ -239,6 +233,36 @@ func add[In, Out any](s *Server, t tool, h func(context.Context, Conn, In) (Out,
 			}
 			return nil, out, nil
 		})
+}
+
+// notNull makes nullable properties, at any depth, plain.
+func notNull(s *jsonschema.Schema) {
+	for _, p := range s.Properties {
+		if len(p.Types) == 2 && p.Types[0] == "null" {
+			p.Type, p.Types = p.Types[1], nil
+		}
+		notNull(p)
+	}
+	if s.Items != nil {
+		notNull(s.Items)
+	}
+}
+
+// prop finds a property by a dotted path, stepping into array items; a
+// property that is an array yields its items. It returns nil if absent.
+func prop(s *jsonschema.Schema, path string) *jsonschema.Schema {
+	for name := range strings.SplitSeq(path, ".") {
+		if s.Items != nil {
+			s = s.Items
+		}
+		if s = s.Properties[name]; s == nil {
+			return nil
+		}
+	}
+	if s.Items != nil {
+		s = s.Items
+	}
+	return s
 }
 
 // preparer is an input that sets itself up once per call, before any

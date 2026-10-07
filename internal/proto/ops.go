@@ -22,6 +22,9 @@ const (
 	OpComment  = "comment"   // CommentArgs → CommentResult
 	OpComments = "comments"  // IDArgs → CommentsResult
 	OpHistory  = "history"   // IDArgs → HistoryResult
+	OpStart    = "start"     // StartArgs → StartResult
+	OpFinish   = "finish"    // FinishArgs → FinishResult
+	OpHandoff  = "handoff"   // HandoffArgs → WriteResult
 )
 
 // Issue is the full form of an issue, returned by show.
@@ -75,9 +78,11 @@ type Dep struct {
 
 // Comment is one comment on an issue.
 type Comment struct {
-	ID        string    `json:"id"`
-	Author    string    `json:"author"`
-	Session   string    `json:"session,omitempty"`
+	ID      string `json:"id"`
+	Author  string `json:"author"`
+	Session string `json:"session,omitempty"`
+	// Kind is empty for a plain comment, "handoff" for a handoff note.
+	Kind      string    `json:"kind,omitempty"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -237,6 +242,50 @@ type CommentsResult struct {
 // HistoryResult lists events, oldest first.
 type HistoryResult struct {
 	Events []Event `json:"events"`
+}
+
+// StartArgs takes an issue: the one named, or the top ready one.
+type StartArgs struct {
+	ID string `json:"id,omitempty"`
+}
+
+// StartResult is the issue taken, in full, and its latest handoff note.
+type StartResult struct {
+	Issue   Issue    `json:"issue"`
+	Handoff *Comment `json:"handoff,omitempty"`
+}
+
+// Discovered is work found while doing an issue, filed by finish. Zero
+// values take the server's defaults.
+type Discovered struct {
+	Title    string `json:"title"`
+	Type     string `json:"type,omitempty"`
+	Priority *int   `json:"priority,omitempty"`
+}
+
+// FinishArgs closes an issue with an optional handoff note and the work
+// discovered while doing it, in one transaction.
+type FinishArgs struct {
+	ID         string       `json:"id"`
+	Reason     string       `json:"reason,omitempty"`
+	Handoff    string       `json:"handoff,omitempty"`
+	Discovered []Discovered `json:"discovered,omitempty"`
+}
+
+// FinishResult is the closed issue's revision and the discovered issues'
+// IDs, in the order given.
+type FinishResult struct {
+	ID      string   `json:"id"`
+	Rev     int64    `json:"rev"`
+	Created []string `json:"created,omitempty"`
+}
+
+// HandoffArgs records a handoff note. Release also lets the issue go, so
+// another can start it.
+type HandoffArgs struct {
+	ID      string `json:"id"`
+	Note    string `json:"note"`
+	Release bool   `json:"release,omitempty"`
 }
 
 // Empty is the result of writes that have nothing to report.

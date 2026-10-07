@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -21,6 +22,9 @@ var (
 	ErrCycle = errors.New("dependency cycle")
 	// ErrInvalid: the input failed validation.
 	ErrInvalid = errors.New("invalid input")
+	// ErrNothingReady: StartIssue was asked for the top ready issue and
+	// none is ready. It wraps ErrNotFound.
+	ErrNothingReady = fmt.Errorf("nothing is ready to start: %w", ErrNotFound)
 	// ErrSchemaTooNew: the database was migrated by a newer starfix.
 	ErrSchemaTooNew = errors.New("database schema is newer than this binary")
 )
@@ -46,3 +50,15 @@ func isDuplicate(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && me.Number == 1062
 }
+
+// HeldError reports an issue in progress under another principal. It
+// wraps ErrConflict.
+type HeldError struct {
+	ID IssueID
+	By string
+}
+
+func (e *HeldError) Error() string { return fmt.Sprintf("issue %s is in progress by %s", e.ID, e.By) }
+
+// Unwrap makes errors.Is(err, ErrConflict) hold.
+func (e *HeldError) Unwrap() error { return ErrConflict }

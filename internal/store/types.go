@@ -235,14 +235,27 @@ type Dep struct {
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
+// CommentKind distinguishes notes with a role from plain comments.
+type CommentKind string
+
+// Comment kinds.
+const (
+	// CommentPlain is an ordinary comment.
+	CommentPlain CommentKind = ""
+	// CommentHandoff is a handoff note: what the next person to work on
+	// the issue needs to know. StartIssue's caller reads the latest.
+	CommentHandoff CommentKind = "handoff"
+)
+
 // Comment is an append-only note on an issue.
 type Comment struct {
-	ID        string    `json:"id"`
-	Issue     IssueID   `json:"issue"`
-	Author    string    `json:"author"`
-	Session   string    `json:"session"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string      `json:"id"`
+	Issue     IssueID     `json:"issue"`
+	Author    string      `json:"author"`
+	Session   string      `json:"session"`
+	Kind      CommentKind `json:"kind,omitempty"`
+	Body      string      `json:"body"`
+	CreatedAt time.Time   `json:"created_at"`
 }
 
 // Event is one entry in the gapless operation log.

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -171,13 +172,13 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "history", "label", "list", "prime",
-		"ready", "reopen", "show", "update"}
+	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "finish", "handoff", "history", "label",
+		"list", "prime", "ready", "reopen", "show", "start", "update"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v\nwant    %v", names, want)
 	}
-	// Design §5 aims for about 2k tokens for the whole verb set. These 14
-	// tools are about 5 KiB, some 1.3k real tokens; the budget below is in
+	// Design §5 aims for about 2k tokens for the whole verb set. These 17
+	// tools are about 6 KiB, some 1.5k real tokens; the budget below is in
 	// Tokens' deliberately high estimate. Counted is what a model reads:
 	// names, descriptions and input schemas; annotations steer the
 	// harness's approval prompts.
@@ -197,8 +198,8 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, budget := Tokens(b), 1750; got > budget {
-		t.Errorf("tool schemas cost ~%d tokens, budget %d", got, budget)
+	if got, budget := Tokens(b), 2100; got > budget {
+		t.Errorf("tool schemas cost ~%d tokens (%d bytes), budget %d", got, len(b), budget)
 	}
 }
 
@@ -239,6 +240,10 @@ func TestSchemaRejects(t *testing.T) {
 		{"label", map[string]any{"action": "toggle", "id": "sf-1", "labels": []any{"x"}}},
 		{"show", map[string]any{}},
 		{"show", map[string]any{"id": "sf-1", "extra": true}},
+		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "x", "type": "story"}}}},
+		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "x", "priority": 9}}}},
+		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"type": "bug"}}}},
+		{"handoff", map[string]any{"id": "sf-1"}},
 	} {
 		if res := callTool(t, cs, tc.tool, tc.args); !res.IsError {
 			t.Errorf("%s %v was accepted", tc.tool, tc.args)
@@ -256,6 +261,8 @@ func TestWritesAreCompact(t *testing.T) {
 			return proto.ShowResult{Issue: proto.Issue{ID: "sf-1", Rev: 4}}, nil
 		case proto.OpComment:
 			return proto.CommentResult{ID: "c-1"}, nil
+		case proto.OpFinish:
+			return proto.FinishResult{ID: "sf-1", Rev: 5, Created: []string{"sf-2"}}, nil
 		}
 		return proto.WriteResult{ID: "sf-1", Rev: 5}, nil
 	}}
@@ -271,6 +278,9 @@ func TestWritesAreCompact(t *testing.T) {
 		{"dep", map[string]any{"action": "add", "id": "sf-1", "depends_on": "sf-2"}, `{"id":"sf-1"}`},
 		{"label", map[string]any{"action": "rm", "id": "sf-1", "labels": []any{"a", "b"}}, `{"id":"sf-1"}`},
 		{"comment", map[string]any{"id": "sf-1", "body": "hi"}, `{"id":"c-1"}`},
+		{"handoff", map[string]any{"id": "sf-1", "note": "next: tests", "release": true}, `{"id":"sf-1","rev":5}`},
+		{"finish", map[string]any{"id": "sf-1", "discovered": []any{map[string]any{"title": "more", "type": "bug", "priority": 1}}},
+			`{"id":"sf-1","rev":5,"created":["sf-2"]}`},
 	} {
 		res := callTool(t, cs, tc.tool, tc.args)
 		if res.IsError || text(t, res) != tc.want {
@@ -278,9 +288,16 @@ func TestWritesAreCompact(t *testing.T) {
 		}
 	}
 	// update without rev reads it first; label sends one call per label.
-	want := []string{"create", "show", "update", "close", "dep.add", "label.rm", "label.rm", "comment"}
+	want := []string{"create", "show", "update", "close", "dep.add", "label.rm", "label.rm", "comment", "handoff", "finish"}
 	if got := f.ops(); !slices.Equal(got, want) {
 		t.Errorf("ops %v, want %v", got, want)
+	}
+	if got, ok := f.calls[8].args.(proto.HandoffArgs); !ok || got.Note != "next: tests" || !got.Release {
+		t.Errorf("handoff args %#v", f.calls[8].args)
+	}
+	got, ok := f.calls[9].args.(proto.FinishArgs)
+	if !ok || len(got.Discovered) != 1 || got.Discovered[0].Type != "bug" || *got.Discovered[0].Priority != 1 {
+		t.Errorf("finish args %#v", f.calls[9].args)
 	}
 	if got := f.calls[2].args.(proto.UpdateArgs); got.Rev != 4 || *got.Title != "y" || got.Status != nil {
 		t.Errorf("update args %+v", got)
@@ -306,6 +323,12 @@ func TestErrorsNameTheNextStep(t *testing.T) {
 			"cycle: sf-a depends on sf-b, so this would make a cycle\nfix: remove an edge with dep (action rm), or choose another parent"},
 		{"invalid", proto.Errf(proto.CodeInvalid, "correct it and retry; `sfx update -h` lists the options", "title is empty"),
 			"invalid: title is empty\nfix: correct the arguments and retry"},
+		{"held at start", proto.Errf(proto.CodeConflict, "take that one with `sfx start sf-y`", "sf-x is in progress by bob; next ready: sf-y"),
+			"conflict: sf-x is in progress by bob; next ready: sf-y\nfix: call start with the next ready id named above"},
+		{"held at finish", proto.Errf(proto.CodeConflict, "leave it to bob, or close it with `sfx close sf-x`", "sf-x is in progress by bob"),
+			"conflict: sf-x is in progress by bob\nfix: someone else holds this issue: pick other work with start, or tell the user if it must move"},
+		{"nothing ready", proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue", "nothing is ready to start"),
+			"not_found: nothing is ready to start\nfix: nothing is ready: call blocked to see why, or create an issue"},
 		{"dial", &dialError{err: proto.Errf(proto.CodeAuth, "send your public key to the starfix admin", "refused your SSH key")},
 			"auth: refused your SSH key\nfix: tell the user starfix cannot connect: send your public key to the starfix admin"},
 		{"lost write", &lostError{err: errLost},
@@ -496,5 +519,36 @@ func TestPrimeFitDropsToBudget(t *testing.T) {
 	p.fit()
 	if b, _ := json.Marshal(p); Tokens(b) > MaxPrimeTokens || !p.More {
 		t.Fatalf("%d tokens, more %v", Tokens(b), p.More)
+	}
+}
+
+// start returns the issue with its handoff and branch, cut to the budget.
+func TestStart(t *testing.T) {
+	at := time.Date(2026, 10, 7, 9, 30, 0, 0, time.UTC)
+	f := &fakeConn{reply: func(op string, args any) (any, error) {
+		if a, ok := args.(proto.StartArgs); !ok || a.ID != "sf-a1b2" {
+			return nil, fmt.Errorf("%s args %#v", op, args)
+		}
+		return proto.StartResult{
+			Issue: proto.Issue{ID: "sf-a1b2", Rev: 3, Title: "Fix the login redirect", Type: "bug", Priority: 1,
+				Status: "in_progress", Body: strings.Repeat("b", 20000), Acceptance: "redirects to /home"},
+			Handoff: &proto.Comment{Author: "bob", Kind: "handoff", Body: "tried the cookie path", CreatedAt: at},
+		}, nil
+	}}
+	cs, _ := connect(t, f)
+	res := callTool(t, cs, "start", map[string]any{"id": "sf-a1b2"})
+	if res.IsError {
+		t.Fatal(text(t, res))
+	}
+	var got Started
+	if err := json.Unmarshal([]byte(text(t, res)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Branch != "fix/sf-a1b2-fix-the-login-redirect" || got.Rev != 3 || got.Acceptance != "redirects to /home" ||
+		got.Handoff == nil || *got.Handoff != (Handoff{By: "bob", At: "2026-10-07T09:30Z", Note: "tried the cookie path"}) {
+		t.Fatalf("start: %+v", got)
+	}
+	if !got.Truncated || Tokens([]byte(text(t, res))) > MaxResultTokens {
+		t.Fatalf("start is %d tokens, truncated %v", Tokens([]byte(text(t, res))), got.Truncated)
 	}
 }

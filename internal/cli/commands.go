@@ -526,7 +526,11 @@ func cmdComments(ctx context.Context, r *runner, args []string) error {
 		if i > 0 {
 			_, _ = fmt.Fprintln(r.env.Stdout)
 		}
-		_, _ = fmt.Fprintf(r.env.Stdout, "%s  %s\n%s\n", c.Author, when(c.CreatedAt), c.Body)
+		kind := ""
+		if c.Kind != "" {
+			kind = "  (" + c.Kind + ")"
+		}
+		_, _ = fmt.Fprintf(r.env.Stdout, "%s  %s%s\n%s\n", c.Author, when(c.CreatedAt), kind, c.Body)
 	}
 	return nil
 }
