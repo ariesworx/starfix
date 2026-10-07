@@ -29,13 +29,13 @@
 //	s       session id: the client's (hello), the effective one (welcome)
 //	m       machine name (hello)
 //	latest  latest release the server knows of (welcome; may be empty)
-//	pr      principal (bridge only)
+//	pr      principal: the bridge's claim, and the welcome's echo of it
 //
 // # Sequence
 //
 //	bridge → daemon:  {"t":"bridge","pr":"ed"}
 //	client → daemon:  {"t":"hello","v":"v0.1.0","p":1,"proj":"…","s":"…","m":"laptop"}
-//	daemon → client:  {"t":"welcome","v":"v0.1.0","min":1,"max":1,"s":"…"}
+//	daemon → client:  {"t":"welcome","v":"v0.1.0","min":1,"max":1,"s":"…","pr":"ed"}
 //	client → daemon:  {"t":"req","id":1,"op":"show","a":{"id":"sf-a1b2c3d4"}}
 //	daemon → client:  {"t":"res","id":1,"ok":{…}}
 //
