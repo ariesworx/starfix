@@ -66,11 +66,15 @@ type world struct {
 	hostFpr string
 	keys    map[string]string // authorized key fingerprint → principal
 	keysMu  sync.Mutex
+
+	connsMu sync.Mutex
+	conns   map[net.Conn]struct{} // open SSH connections
 }
 
 type daemonOpts struct {
 	protoMin, protoMax int
 	noDaemon           bool
+	latest             string
 }
 
 func newWorld(t *testing.T, o daemonOpts) *world {
@@ -89,7 +93,7 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
-	w := &world{t: t, socket: filepath.Join(base, "run", "starfixd.sock"), keys: map[string]string{}}
+	w := &world{t: t, socket: filepath.Join(base, "run", "starfixd.sock"), keys: map[string]string{}, conns: map[net.Conn]struct{}{}}
 
 	if !o.noDaemon {
 		dsn, err := dolt.NewDatabase(ctx)
@@ -101,7 +105,7 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 			t.Fatal(err)
 		}
 		srv, err := server.New(server.Config{Store: st, Project: project, Version: "v0.2.0",
-			ProtoMin: o.protoMin, ProtoMax: o.protoMax})
+			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,8 +172,25 @@ func (w *world) startSSH(ctx context.Context) {
 	})
 }
 
+// dropAll closes every open SSH connection, as a network drop would.
+func (w *world) dropAll() {
+	w.connsMu.Lock()
+	defer w.connsMu.Unlock()
+	for c := range w.conns {
+		_ = c.Close()
+	}
+}
+
 func (w *world) serveSSH(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
-	defer func() { _ = nc.Close() }()
+	w.connsMu.Lock()
+	w.conns[nc] = struct{}{}
+	w.connsMu.Unlock()
+	defer func() {
+		w.connsMu.Lock()
+		delete(w.conns, nc)
+		w.connsMu.Unlock()
+		_ = nc.Close()
+	}()
 	sc, chans, reqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
 		return
