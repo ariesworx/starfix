@@ -1,0 +1,142 @@
+name: release
+# A pushed vMAJOR.MINOR.PATCH tag builds every archive and checksums.txt and
+# attests their provenance (build, no secrets), then, once the maintainer
+# approves the `release` environment, signs checksums.txt with the release
+# key and publishes the GitHub release (sign-and-publish). `sfx upgrade` and
+# `starfixd upgrade` refuse a release whose checksums.txt.sig does not
+# verify against internal/release/keys.go. See RELEASING.md.
+on:
+  push:
+    tags: ['v*']
+permissions: {}
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write      # actions/attest-build-provenance
+      attestations: write  # actions/attest-build-provenance
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false     # a release builds from a clean module cache
+
+      - name: Check the tag
+        # The same pattern as internal/release.TagPattern.
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,32})?$ ]]; then
+            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH[-pre]"
+            exit 1
+          fi
+
+      - name: Build
+        # A plain loop: eight static builds and an archive each. CGO off,
+        # -trimpath, symbols and DWARF stripped, version stamped; VCS
+        # information is kept (go version -m shows the commit). dist lives
+        # outside the checkout so the build sees a clean tree.
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/dist"
+          ver="${TAG#v}"
+          ldflags="-s -w -X github.com/ariesworx/starfix/internal/version.Version=${TAG}"
+          export CGO_ENABLED=0
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          mkdir -p "$dist"
+          build() { # bin os arch
+            local bin=$1 os=$2 arch=$3 exe=$1 stage name
+            [[ $os == windows ]] && exe=$bin.exe
+            stage="$(mktemp -d)"
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$stage/$exe" "./cmd/$bin"
+            cp LICENSE README.md "$stage/"
+            touch -d "@$SOURCE_DATE_EPOCH" "$stage"/*
+            name="${bin}_${ver}_${os}_${arch}"
+            if [[ $os == windows ]]; then
+              (cd "$stage" && zip -qX "$dist/$name.zip" "$exe" LICENSE README.md)
+            else
+              tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner \
+                --mtime="@$SOURCE_DATE_EPOCH" -cf - "$exe" LICENSE README.md |
+                gzip -9n > "$dist/$name.tar.gz"
+            fi
+          }
+          for os in linux darwin windows; do
+            for arch in amd64 arm64; do build sfx "$os" "$arch"; done
+          done
+          for arch in amd64 arm64; do build starfixd linux "$arch"; done
+          (cd "$dist" && sha256sum -- *.tar.gz *.zip > checksums.txt)
+          cat "$dist/checksums.txt"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/dist/checksums.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    # The environment holds STARFIX_RELEASE_KEY. It admits only v* tags and
+    # waits for the maintainer's approval, so no other workflow, branch or
+    # person's run can read the key.
+    environment: release
+    permissions:
+      contents: write      # gh release create
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+
+      - name: Check the archives against checksums.txt
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum -c --strict checksums.txt
+
+      - name: Sign checksums.txt
+        # The key reaches only this step, through the environment; the tool
+        # refuses a key that internal/release/keys.go at this tag lacks.
+        env:
+          STARFIX_RELEASE_KEY: ${{ secrets.STARFIX_RELEASE_KEY }}
+        run: |
+          if [[ -z "${STARFIX_RELEASE_KEY:-}" ]]; then
+            echo "::error::the release environment has no STARFIX_RELEASE_KEY secret (RELEASING.md, one-time setup)"
+            exit 1
+          fi
+          go run ./internal/tools/releasekey sign "$RUNNER_TEMP/dist/checksums.txt"
+          go run ./internal/tools/releasekey verify "$RUNNER_TEMP/dist/checksums.txt"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          dolt="$(sed -n 's/^const Dolt = "\(.*\)"$/\1/p' internal/version/version.go)"
+          test -n "$dolt"
+          pre=()
+          [[ $TAG == *-* ]] && pre=(--prerelease)
+          notes="Tested with Dolt ${dolt}. \`sfx upgrade\` and \`starfixd upgrade\` verify these files; to check a manual download, see README, Install."
+          gh release create "$TAG" "$RUNNER_TEMP"/dist/* --verify-tag --title "$TAG" \
+            --notes "$notes" --generate-notes "${pre[@]}"
