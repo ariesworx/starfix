@@ -16,7 +16,7 @@ import (
 
 // pushed counts what the server pushed since the agent was last told.
 type pushed struct {
-	mu     sync.Mutex
+	mu     sync.Mutex // guards n and resync
 	n      int
 	resync bool
 }
@@ -61,12 +61,12 @@ func watch(ctx context.Context, c Conn) {
 	_ = c.Call(ctx, proto.OpWatch, proto.WatchArgs{}, nil)
 }
 
-// InboxIn reads the inbox, after acking.
+// InboxIn is the inbox tool's input.
 type InboxIn struct {
 	Ack []int64 `json:"ack,omitempty"` // ids to mark read first
 }
 
-// InboxItem is one item, compact.
+// InboxItem is one inbox item, compact. At is in UTC, to the minute.
 type InboxItem struct {
 	ID    int64  `json:"id"`
 	Kind  string `json:"kind"`
@@ -88,6 +88,8 @@ type Inbox struct {
 // inboxLimit is how many items the inbox tool asks for.
 const inboxLimit = 20
 
+// inbox is the inbox tool: it acks in.Ack, then lists the unread items,
+// dropping the oldest until the result fits MaxResultTokens.
 func inbox(ctx context.Context, c Conn, in InboxIn) (Inbox, error) {
 	var out Inbox
 	if len(in.Ack) > 0 {

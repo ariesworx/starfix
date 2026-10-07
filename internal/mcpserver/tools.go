@@ -188,6 +188,7 @@ type HandoffFieldsIn struct {
 	To     string `json:"to,omitempty" jsonschema:"principal"`
 }
 
+// wire converts f to the protocol's fields.
 func (f HandoffFieldsIn) wire() proto.HandoffFields {
 	return proto.HandoffFields{State: f.State, Next: f.Next, Branch: f.Branch, To: f.To}
 }
@@ -584,6 +585,8 @@ func (s *Server) register() {
 		func(ctx context.Context, c Conn, in PageIn) (History, error) { return history(ctx, c, in) })
 }
 
+// list is the list tool. A page that would pass MaxResultTokens is asked
+// for again with a smaller limit, so its cursor stays exact.
 func list(ctx context.Context, c Conn, in ListIn) (Issues, error) {
 	args := proto.ListArgs{Status: in.Status, Type: in.Type, Priority: in.Priority, Assignee: in.Assignee,
 		Parent: in.Parent, Labels: in.Labels, Limit: orDefault(in.Limit, DefaultLimit), Cursor: in.Cursor}
@@ -636,6 +639,8 @@ func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 	return out, epoch, nil
 }
 
+// show is the show tool: long text is cut, then dependents dropped, to fit
+// MaxResultTokens.
 func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	var r proto.ShowResult
 	if err := c.Call(ctx, proto.OpShow, proto.ShowArgs{ID: in.ID, Full: in.Full}, &r); err != nil {
@@ -666,6 +671,9 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	return out, nil
 }
 
+// update is the update tool. Without a rev it reads the current one
+// first, so the write is refused as stale only if the issue changes in
+// between.
 func update(ctx context.Context, c Conn, in UpdateIn) (proto.WriteResult, error) {
 	args := proto.UpdateArgs{ID: in.ID, Rev: in.Rev, Title: in.Title, Body: in.Body, Design: in.Design,
 		Acceptance: in.Acceptance, Notes: in.Notes, Status: in.Status, Priority: in.Priority, Type: in.Type,
@@ -693,6 +701,9 @@ const maxCommentBody = 1000
 // keep: a protocol 1 server returns every entry and no total.
 func omitted(n, total, keep int) int { return max(n, total) - min(n, keep) }
 
+// comments is the comments tool: the newest in.Limit (DefaultLimit if
+// unset), oldest first, each cut to maxCommentBody, with the oldest
+// dropped to fit MaxResultTokens.
 func comments(ctx context.Context, c Conn, in PageIn) (Comments, error) {
 	var r proto.CommentsResult
 	limit := orDefault(in.Limit, DefaultLimit)
@@ -712,6 +723,8 @@ func comments(ctx context.Context, c Conn, in PageIn) (Comments, error) {
 	return out, nil
 }
 
+// history is the history tool, by the comments tool's rules; each
+// event's change is cut to 200 bytes.
 func history(ctx context.Context, c Conn, in PageIn) (History, error) {
 	var r proto.HistoryResult
 	limit := orDefault(in.Limit, DefaultLimit)
@@ -731,6 +744,9 @@ func history(ctx context.Context, c Conn, in PageIn) (History, error) {
 	return out, nil
 }
 
+// digest is the digest tool: titles are cut, in-progress and stalled
+// items say for how long instead of when, and fit drops items to stay
+// under MaxDigestTokens.
 func digest(ctx context.Context, c Conn, in DigestIn) (Digest, error) {
 	var r proto.DigestResult
 	if err := c.Call(ctx, proto.OpDigest, proto.DigestArgs{Since: in.Since, By: in.By, Label: in.Label}, &r); err != nil {
@@ -779,8 +795,10 @@ func (d *Digest) fit() {
 	}
 }
 
+// stamp formats t for a result: UTC, to the minute.
 func stamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04Z") }
 
+// orDefault returns v, or def when v is the zero value.
 func orDefault[T comparable](v, def T) T {
 	var zero T
 	if v == zero {

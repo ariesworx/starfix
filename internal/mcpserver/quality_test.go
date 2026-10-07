@@ -97,7 +97,7 @@ func TestItemsAndSimilar(t *testing.T) {
 		case proto.OpShow:
 			return proto.ShowResult{Issue: is, Items: items, Similar: similar}, nil
 		}
-		return proto.CreateResult{WriteResult: proto.WriteResult{ID: "sf-2", Rev: 1}, Similar: similar}, nil
+		return proto.CreateResult{ID: "sf-2", Rev: 1, Similar: similar}, nil
 	}}
 	cs, _ := connect(t, f)
 	want := []string{"1 [x] survives restart", "2 [waived: none needed] docs", "3 [ ] has tests"}

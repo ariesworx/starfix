@@ -1,7 +1,6 @@
 package mcpserver
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -186,7 +185,7 @@ func TestPrimeInbox(t *testing.T) {
 				}
 				return proto.ListResult{Issues: []proto.Summary{}}, nil
 			}}
-			p, err := BuildPrime(context.Background(), f, "v0.2.0")
+			p, err := BuildPrime(t.Context(), f, "v0.2.0")
 			if err != nil {
 				t.Fatal(err)
 			}

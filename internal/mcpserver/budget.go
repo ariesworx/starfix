@@ -32,7 +32,8 @@ func size(v any) int {
 	return Tokens(b)
 }
 
-// cut shortens s to at most n bytes on a rune boundary, adding "…".
+// cut shortens s, when it is longer than n bytes, to at most n bytes on a
+// rune boundary followed by "…", and reports whether it did.
 func cut(s string, n int) (string, bool) {
 	if len(s) <= n {
 		return s, false
@@ -46,8 +47,8 @@ func cut(s string, n int) (string, bool) {
 	return s[:n] + "…", true
 }
 
-// fitTexts halves the longest of fields until fits reports true or every
-// field is short. It reports whether anything was cut.
+// fitTexts halves the longest of fields until fits reports true or no
+// field is longer than 64 bytes. It reports whether anything was cut.
 func fitTexts(fits func() bool, fields ...*string) bool {
 	cutAny := false
 	for !fits() {

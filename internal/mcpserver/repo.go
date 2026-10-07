@@ -25,8 +25,7 @@ func (c *RepoConn) Project() string { return c.name }
 func DialRepo(ctx context.Context, dir string, opts client.Options) (*RepoConn, error) {
 	cfg, err := client.LoadConfig(dir)
 	if err != nil {
-		var pe *proto.Error
-		if errors.As(err, &pe) {
+		if _, ok := errors.AsType[*proto.Error](err); ok {
 			return nil, err
 		}
 		return nil, proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
