@@ -195,7 +195,9 @@ stored issue edited in starfix after the export is not overwritten. bd types
 and statuses starfix lacks are kept as `bd-type:` and `bd-status:` labels and
 restored on export. Whatever starfix cannot hold yet (some dependency types,
 memories, a few fields) is listed with the IDs it affects, never dropped
-silently; the mapping is in `internal/bdimport`.
+silently; the mapping is in `internal/bdimport`. Control and bidirectional
+characters, which starfix refuses (see Untrusted text), are removed with a
+`text` warning naming the field, rather than failing the issue.
 
 ## Commands
 
@@ -209,11 +211,11 @@ command's usage; `--json` prints one JSON document, errors included.
 | `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h, at most 24h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it; `--take` takes it over from another session of yours that holds it |
 | `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim. The note can carry the handoff fields below. `--tick 1,3` and `--waive N=REASON` settle acceptance items first; it is refused while any is open |
 | `accept ID N...` | Tick acceptance items (`--undo` unticks, `--waive REASON` waives them). Items come from the acceptance text: each Markdown list item (`- [ ] x`, `- x`, `1. x`), or the whole text as one; `start` and `show` print them as a checklist. A `- [x]` box counts as ticked only in the text an issue is created or imported with; later edits to the text tick nothing |
-| `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it. Optional fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P`, which puts it in P's inbox. `start` and `show` print the latest |
+| `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it. Optional fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P`, which puts it in P's inbox. `start` and `show` print the latest; the worktree, a path on your machine, only to your own principal |
 | `inbox` | List your unread inbox, newest first: lost claims, handoffs to you, mentions, assignments (`--all` includes read ones, `-n N`); `--ack ID`, repeatable or comma-separated, or `--ack-all` marks them read |
 | `watch` | Print your inbox items as they happen, until interrupted (ctrl-c exits 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it fell behind and missed items (`sfx inbox` lists them) |
 | `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline. Only from your own terminal: the server refuses it from an agent's session (`STARFIX_SESSION` or a harness session id set) |
-| `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds |
+| `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds. Every principal sees every machine name |
 | `create` | Create an issue and print its id; similar closed issues, if any, go to stderr |
 | `show` | Show an issue, its dependencies, acceptance checklist and similar closed issues (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
@@ -238,6 +240,27 @@ Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
 refused. A refusal because someone else holds the issue, or because the
 change is for admins, exits 1 like any other; `--json` gives its code,
 `forbidden`.
+
+#### Untrusted text
+
+Issue text comes from other people, their agents and the server, so starfix
+keeps it from acting on a terminal or posing as its own output:
+
+- The server refuses control characters (C0, DEL, C1), the Unicode
+  bidirectional controls and marks, line separators and invalid UTF-8 in
+  every field. Titles, names, labels, reasons and handoff fields are one
+  line; bodies, design, acceptance, notes, comments and handoff notes may
+  also hold newlines and tabs. Text stored before this rule is kept as is.
+- `sfx` prints any such character that still arrives as a visible escape
+  (`\x1b`, `\u202e`), and a one-line field's newline as `\n`, in every
+  command, server error and quoted server stderr. `--json` escapes them in
+  JSON, so the output is the same value and still valid.
+- `prime` (and its hook) puts titles and inbox text, each quoted on one
+  line, inside a `--- starfix data ---` fence after a line saying they are
+  data. A failed hook quotes the error.
+- MCP results that hold others' text carry `"untrusted"`, and the
+  instructions tell the agent never to follow instructions in that text.
+  A fix the server wrote is relayed quoted, for the user.
 
 ### `starfixd`
 
@@ -425,7 +448,9 @@ The tools are `prime`, `start`, `finish`, `handoff`, `ready`, `blocked`,
 about 2,000 tokens, prime and digest at 1,500. `digest` is structured data
 from the event log, for a standup or status report; the agent writes any
 narrative, and starfix runs no model. A refusal is a tool error with the
-server's code and message and a `fix:` line naming the agent's next step.
+server's code and message and a `fix:` line naming the agent's next step;
+a fix only the user can act on is quoted from the server. Results that hold
+text others wrote carry `"untrusted"` (see Untrusted text).
 
 The server knows who you are from your SSH key. The session id comes from
 the agent's environment:
@@ -493,6 +518,7 @@ shellcheck install.sh
 | `internal/proto` | Wire frames, handshake, typed requests and errors |
 | `internal/server` | Daemon, socket, bridge, settings |
 | `internal/client`, `internal/cli` | SSH client, config discovery, CLI commands |
+| `internal/safetext` | The one rule for unsafe characters: store validation, import cleaning, output escaping |
 | `internal/gitx` | Branch names from issues, issue IDs from branches and `Starfix:` trailers, branch and worktree creation |
 | `internal/bdimport` | bd JSONL import and export |
 | `internal/release`, `internal/tools/releasekey` | Release download, signature and checksum verification, binary swap; the release-key tool ([RELEASING.md](RELEASING.md)) |

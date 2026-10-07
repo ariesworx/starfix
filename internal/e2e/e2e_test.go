@@ -73,6 +73,9 @@ type world struct {
 	fixedClock bool
 	connsMu    sync.Mutex
 	conns      map[net.Conn]struct{} // open SSH connections
+	// dsn is the store's database, for tests that plant rows the store
+	// would refuse (data from before a validation, or a hostile writer).
+	dsn string
 	// dropOp, when set, names an op whose next response is never
 	// delivered: the connection drops after the server has answered
 	// (dropReplyTo).
@@ -117,6 +120,7 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 		if err != nil {
 			t.Fatal(err)
 		}
+		w.dsn = dsn
 		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now, Admins: o.admins})
 		if err != nil {
 			t.Fatal(err)

@@ -114,7 +114,7 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	_, _ = fmt.Fprintln(r.env.Stdout, out.ID)
+	_, _ = fmt.Fprintln(r.env.Stdout, esc(out.ID))
 	// Standard error, so `id=$(sfx create …)` still captures the id alone.
 	printSimilar(r.env.Stderr, out.Similar)
 	return nil
@@ -127,7 +127,7 @@ func printSimilar(w io.Writer, sim []proto.Summary) {
 	}
 	_, _ = fmt.Fprintln(w, "similar closed issues:")
 	for _, s := range sim {
-		_, _ = fmt.Fprintf(w, "  %s  %s\n", s.ID, s.Title)
+		_, _ = fmt.Fprintf(w, "  %s  %s\n", esc(s.ID), esc(s.Title))
 	}
 }
 
@@ -145,12 +145,12 @@ func printItems(w io.Writer, items []proto.AcceptanceItem) {
 		case "waived":
 			mark = "~"
 		}
-		line := fmt.Sprintf("  %d [%s] %s", it.N, mark, it.Text)
+		line := fmt.Sprintf("  %d [%s] %s", it.N, mark, esc(it.Text))
 		switch {
 		case it.State == "waived":
-			line += fmt.Sprintf(" (waived by %s: %s)", it.By, it.Reason)
+			line += fmt.Sprintf(" (waived by %s: %s)", esc(it.By), esc(it.Reason))
 		case it.By != "":
-			line += " (" + it.By + ")"
+			line += " (" + esc(it.By) + ")"
 		}
 		_, _ = fmt.Fprintln(w, line)
 	}
@@ -198,36 +198,36 @@ func when(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 func printIssue(w io.Writer, s proto.ShowResult) {
 	is := s.Issue
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
-	p("%s  P%d  %s  %s  rev %d\n%s\n", is.ID, is.Priority, is.Status, is.Type, is.Rev, is.Title)
+	p("%s  P%d  %s  %s  rev %d\n%s\n", esc(is.ID), is.Priority, esc(is.Status), esc(is.Type), is.Rev, esc(is.Title))
 	var who []string
 	for _, kv := range [][2]string{{"parent", is.ParentID}, {"assignee", is.Assignee}, {"owner", is.Owner}} {
 		if kv[1] != "" {
-			who = append(who, kv[0]+": "+kv[1])
+			who = append(who, kv[0]+": "+esc(kv[1]))
 		}
 	}
 	if len(who) > 0 {
 		p("%s\n", strings.Join(who, "  "))
 	}
 	if len(is.Labels) > 0 {
-		p("labels: %s\n", strings.Join(is.Labels, ", "))
+		p("labels: %s\n", strings.Join(escAll(is.Labels), ", "))
 	}
 	if c := s.Claim; c != nil {
-		p("claimed by %s (%s on %s), epoch %d, until %s\n", c.By, c.Session, c.Machine, c.Epoch, when(c.ExpiresAt))
+		p("claimed by %s (%s on %s), epoch %d, until %s\n", esc(c.By), esc(c.Session), esc(c.Machine), c.Epoch, when(c.ExpiresAt))
 	}
-	p("created %s by %s; updated %s\n", when(is.CreatedAt), is.CreatedBy, when(is.UpdatedAt))
+	p("created %s by %s; updated %s\n", when(is.CreatedAt), esc(is.CreatedBy), when(is.UpdatedAt))
 	if is.ClosedAt != nil {
 		p("closed %s", when(*is.ClosedAt))
 		if is.CloseReason != "" {
-			p(": %s", is.CloseReason)
+			p(": %s", esc(is.CloseReason))
 		}
 		p("\n")
 	}
 	var out, in []string
 	for _, d := range s.Deps {
 		if d.From == is.ID {
-			out = append(out, fmt.Sprintf("%s (%s)", d.To, d.Type))
+			out = append(out, fmt.Sprintf("%s (%s)", esc(d.To), esc(d.Type)))
 		} else {
-			in = append(in, fmt.Sprintf("%s (%s)", d.From, d.Type))
+			in = append(in, fmt.Sprintf("%s (%s)", esc(d.From), esc(d.Type)))
 		}
 	}
 	if len(out) > 0 {
@@ -256,7 +256,7 @@ func printIssue(w io.Writer, s proto.ShowResult) {
 func printSummaries(w io.Writer, issues []proto.Summary, extra func(i int) string) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for i, is := range issues {
-		line := fmt.Sprintf("%s\tP%d\t%s\t%s", is.ID, is.Priority, is.Status, is.Title)
+		line := fmt.Sprintf("%s\tP%d\t%s\t%s", esc(is.ID), is.Priority, esc(is.Status), esc(is.Title))
 		if extra != nil {
 			line += extra(i)
 		}
@@ -310,7 +310,7 @@ func cmdList(ctx context.Context, r *runner, args []string) error {
 	}
 	printSummaries(r.env.Stdout, out.Issues, nil)
 	if out.Next != "" {
-		_, _ = fmt.Fprintf(r.env.Stderr, "more: sfx list --cursor %s\n", out.Next)
+		_, _ = fmt.Fprintf(r.env.Stderr, "more: sfx list --cursor %s\n", esc(out.Next))
 	}
 	return nil
 }
@@ -357,19 +357,24 @@ func cmdBlocked(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	sums := make([]proto.Summary, len(out.Issues))
-	for i, b := range out.Issues {
+	printBlocked(r.env.Stdout, out.Issues)
+	return nil
+}
+
+// printBlocked lists blocked issues with what holds each back.
+func printBlocked(w io.Writer, issues []proto.BlockedIssue) {
+	sums := make([]proto.Summary, len(issues))
+	for i, b := range issues {
 		sums[i] = b.Summary
 	}
-	printSummaries(r.env.Stdout, sums, func(i int) string {
-		b := out.Issues[i]
-		s := "\tblocked by " + strings.Join(b.BlockedBy, ", ")
+	printSummaries(w, sums, func(i int) string {
+		b := issues[i]
+		s := "\tblocked by " + strings.Join(escAll(b.BlockedBy), ", ")
 		if b.Via != "" {
-			s += " (via " + b.Via + ")"
+			s += " (via " + esc(b.Via) + ")"
 		}
 		return s
 	})
-	return nil
 }
 
 func cmdUpdate(ctx context.Context, r *runner, args []string) error {
@@ -441,7 +446,7 @@ func (r *runner) write(ctx context.Context, op string, in any) error {
 	if r.json {
 		r.emit(out)
 	} else {
-		_, _ = fmt.Fprintf(r.env.Stdout, "%s rev %d\n", out.ID, out.Rev)
+		_, _ = fmt.Fprintf(r.env.Stdout, "%s rev %d\n", esc(out.ID), out.Rev)
 	}
 	return nil
 }
@@ -558,7 +563,7 @@ func cmdComment(ctx context.Context, r *runner, args []string) error {
 	if r.json {
 		r.emit(out)
 	} else {
-		_, _ = fmt.Fprintln(r.env.Stdout, out.ID)
+		_, _ = fmt.Fprintln(r.env.Stdout, esc(out.ID))
 	}
 	return nil
 }
@@ -582,17 +587,23 @@ func cmdComments(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	for i, c := range out.Comments {
+	printComments(r.env.Stdout, out.Comments)
+	return nil
+}
+
+// printComments prints each comment's author, time and kind on one line,
+// then its body.
+func printComments(w io.Writer, cs []proto.Comment) {
+	for i, c := range cs {
 		if i > 0 {
-			_, _ = fmt.Fprintln(r.env.Stdout)
+			_, _ = fmt.Fprintln(w)
 		}
 		kind := ""
 		if c.Kind != "" {
-			kind = "  (" + c.Kind + ")"
+			kind = "  (" + esc(c.Kind) + ")"
 		}
-		_, _ = fmt.Fprintf(r.env.Stdout, "%s  %s%s\n%s\n", c.Author, when(c.CreatedAt), kind, c.Body)
+		_, _ = fmt.Fprintf(w, "%s  %s%s\n%s\n", esc(c.Author), when(c.CreatedAt), kind, c.Body)
 	}
-	return nil
 }
 
 func cmdHistory(ctx context.Context, r *runner, args []string) error {
@@ -614,9 +625,14 @@ func cmdHistory(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	tw := tabwriter.NewWriter(r.env.Stdout, 0, 0, 2, ' ', 0)
-	for _, e := range out.Events {
-		_, _ = fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", e.Seq, when(e.At), e.Principal, e.Op, e.Changed())
+	return printHistory(r.env.Stdout, out.Events)
+}
+
+// printHistory prints one line per event.
+func printHistory(w io.Writer, evs []proto.Event) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, e := range evs {
+		_, _ = fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", e.Seq, when(e.At), esc(e.Principal), esc(e.Op), esc(e.Changed()))
 	}
 	return tw.Flush()
 }

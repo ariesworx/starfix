@@ -52,9 +52,9 @@ func printWho(w io.Writer, since string, res proto.WhoResult) {
 		return
 	}
 	for _, a := range res.Agents {
-		line := a.Principal + "/" + a.Session + " on " + a.Machine
+		line := esc(a.Principal) + "/" + esc(a.Session) + " on " + esc(a.Machine)
 		if a.Harness != "" {
-			line += " (" + a.Harness + ")"
+			line += " (" + esc(a.Harness) + ")"
 		}
 		if ago := res.Now.Sub(a.LastSeen); ago < time.Minute {
 			line += " seen just now"
@@ -62,7 +62,7 @@ func printWho(w io.Writer, since string, res proto.WhoResult) {
 			line += " seen " + proto.Span(ago) + " ago"
 		}
 		if len(a.Claims) > 0 {
-			line += ", holds " + strings.Join(a.Claims, " ")
+			line += ", holds " + strings.Join(escAll(a.Claims), " ")
 		}
 		_, _ = fmt.Fprintln(w, line)
 	}

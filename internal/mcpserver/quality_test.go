@@ -116,7 +116,7 @@ func TestItemsAndSimilar(t *testing.T) {
 	if !slices.Equal(sh.Items, want) || sh.Acceptance != "" || sh.Similar != "sf-old1 Login fails; sf-old2 Token expiry" {
 		t.Errorf("show: items %q, acceptance %q, similar %q", sh.Items, sh.Acceptance, sh.Similar)
 	}
-	if got := text(t, callTool(t, cs, "create", map[string]any{"title": "Login again"})); got != `{"id":"sf-2","rev":1,"similar":"sf-old1 Login fails; sf-old2 Token expiry"}` {
+	if got := text(t, callTool(t, cs, "create", map[string]any{"title": "Login again"})); got != `{"untrusted":"`+untrustedNote+`","id":"sf-2","rev":1,"similar":"sf-old1 Login fails; sf-old2 Token expiry"}` {
 		t.Errorf("create = %s", got)
 	}
 }

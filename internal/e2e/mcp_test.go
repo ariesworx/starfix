@@ -134,7 +134,7 @@ func TestMCPAgentSession(t *testing.T) {
 		t.Fatalf("prime working: %+v", p.Working)
 	}
 
-	if out := alice.ok("prime"); !strings.Contains(out, "in progress:\n  "+b.ID+" P2 Write the docs\n") {
+	if out := alice.ok("prime"); !strings.Contains(out, "in progress:\n  "+b.ID+" P2 \"Write the docs\"\n") {
 		t.Fatalf("sfx prime:\n%s", out)
 	}
 
@@ -153,7 +153,7 @@ func TestMCPAgentSession(t *testing.T) {
 			Context string `json:"additionalContext"`
 		} `json:"hookSpecificOutput"`
 	}](t, hookOut.String())
-	if !strings.Contains(hook.Out.Context, "session cc-hook\n") || !strings.Contains(hook.Out.Context, b.ID+" P2 Write the docs") {
+	if !strings.Contains(hook.Out.Context, "session cc-hook\n") || !strings.Contains(hook.Out.Context, b.ID+" P2 \"Write the docs\"") {
 		t.Fatalf("prime --hook:\n%s", hookOut.String())
 	}
 
@@ -242,7 +242,7 @@ func TestMCPServerAssignedSessionAndRefusal(t *testing.T) {
 
 	stranger := w.newUser("", "").mcp("v0.2.0")
 	out, isErr := stranger.call("ready", nil)
-	if !isErr || !strings.HasPrefix(out, "auth: ") || !strings.Contains(out, "fix: tell the user starfix cannot connect: send your public key") {
+	if !isErr || !strings.HasPrefix(out, "auth: ") || !strings.Contains(out, "fix: tell the user starfix cannot connect, quoting the server: \"send your public key") {
 		t.Fatalf("unknown key: %q", out)
 	}
 	var doc struct {

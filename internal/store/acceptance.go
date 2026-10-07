@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // The acceptance checklist (design §12 item 4): an issue's acceptance
@@ -68,9 +67,6 @@ type Acceptance struct {
 
 func (a Acceptance) empty() bool { return len(a.Tick) == 0 && len(a.Untick) == 0 && len(a.Waive) == 0 }
 
-// waiveReason is one line of up to 500 bytes.
-var waiveReason = regexp.MustCompile(`^[^\x00-\x1f\x7f]{1,500}$`)
-
 // validate checks the numbers and reasons; each item may appear once.
 func (a Acceptance) validate() error {
 	seen := map[int]bool{}
@@ -93,7 +89,7 @@ func (a Acceptance) validate() error {
 		if err := check(n); err != nil {
 			return err
 		}
-		if len(r) > 500 || !utf8.ValidString(r) || !waiveReason.MatchString(r) {
+		if checkLine("waive reason", r, 500, true) != nil {
 			return fmt.Errorf("%w: waiving acceptance item %d needs a reason of one line, up to 500 bytes", ErrInvalid, n)
 		}
 	}

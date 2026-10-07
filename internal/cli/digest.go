@@ -48,7 +48,9 @@ func printDigest(w io.Writer, d proto.DigestResult) {
 		p(", some totals partial")
 	}
 	p("\n")
-	ago := func(it proto.DigestItem) string { return "\t" + it.By + "\t" + proto.Span(d.Until.Sub(it.At)) + " ago" }
+	ago := func(it proto.DigestItem) string {
+		return "\t" + esc(it.By) + "\t" + proto.Span(d.Until.Sub(it.At)) + " ago"
+	}
 	t := d.Totals
 	for _, sec := range []struct {
 		name  string
@@ -59,24 +61,24 @@ func printDigest(w io.Writer, d proto.DigestResult) {
 		{"closed", t.Closed, d.Closed, ago},
 		{"started", t.Started, d.Started, ago},
 		{"in progress", t.InProgress, d.InProgress, func(it proto.DigestItem) string {
-			return "\t" + it.By + "\tfor " + proto.Span(d.Until.Sub(it.At))
+			return "\t" + esc(it.By) + "\tfor " + proto.Span(d.Until.Sub(it.At))
 		}},
 		{"stalled", t.Stalled, d.Stalled, func(it proto.DigestItem) string {
-			return "\t" + it.By + "\tidle " + proto.Span(d.Until.Sub(it.At))
+			return "\t" + esc(it.By) + "\tidle " + proto.Span(d.Until.Sub(it.At))
 		}},
 		{"blocked", t.Blocked, d.Blocked, func(it proto.DigestItem) string {
-			return "\tby " + strings.Join(it.BlockedBy, ", ")
+			return "\tby " + strings.Join(escAll(it.BlockedBy), ", ")
 		}},
 		{"handed off", t.HandedOff, d.HandedOff, func(it proto.DigestItem) string {
 			note := strings.Join(strings.Fields(it.Note), " ")
 			if len([]rune(note)) > digestNoteLen {
 				note = string([]rune(note)[:digestNoteLen]) + "…"
 			}
-			return ago(it) + "\t" + note
+			return ago(it) + "\t" + esc(note)
 		}},
 		{"created", t.Created, d.Created, ago},
 		{"discovered", t.Discovered, d.Discovered, func(it proto.DigestItem) string {
-			return ago(it) + "\tfrom " + it.From
+			return ago(it) + "\tfrom " + esc(it.From)
 		}},
 	} {
 		if sec.total == 0 {
@@ -89,7 +91,7 @@ func printDigest(w io.Writer, d proto.DigestResult) {
 		p("\n")
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		for _, it := range sec.items {
-			_, _ = fmt.Fprintf(tw, "  %s\tP%d\t%s%s\n", it.ID, it.Priority, it.Title, sec.extra(it))
+			_, _ = fmt.Fprintf(tw, "  %s\tP%d\t%s%s\n", esc(it.ID), it.Priority, esc(it.Title), sec.extra(it))
 		}
 		_ = tw.Flush()
 	}

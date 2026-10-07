@@ -2,17 +2,21 @@ package mcpserver
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/safetext"
 )
 
 // explain rephrases an error for an agent (design §12 item 5). The server's
 // code and message are kept; its fix, written for a person at a shell
 // (`sfx show …`), becomes the agent's next step in terms of tools.
 // Fixes only a person can carry out (keys, config, upgrades) are handed to
-// the user.
+// the user, quoted: the server chose that text, so it is relayed as data
+// for the user, never as the agent's instruction (C-4). The message is
+// the server's too, escaped onto one line so it cannot add a fix line.
 func explain(err error) toolErr {
 	var lost *lostError
 	var dial *dialError
@@ -22,16 +26,17 @@ func explain(err error) toolErr {
 	if pe != nil {
 		e.Code, e.Message = string(pe.Code), pe.Message
 	}
+	e.Message = safetext.Line(e.Message)
 	switch {
 	case errors.As(err, &lost) && lost.retried:
-		e.Fix = "starfix reconnected and the retry failed too; try again later, and if it persists tell the user: " + personFix(pe)
+		e.Fix = "starfix reconnected and the retry failed too; try again later, and if it persists tell the user" + personFix(pe)
 	case errors.As(err, &lost):
 		e.Fix = "the connection dropped and the next call reconnects; this write may have applied, so check with show before repeating it"
 	case errors.As(err, &dial):
 		if pe == nil || pe.Fix == "" {
 			e.Fix = "tell the user starfix cannot connect: check " + client.ConfigFile + " and the network"
 		} else {
-			e.Fix = "tell the user starfix cannot connect: " + pe.Fix
+			e.Fix = "tell the user starfix cannot connect" + personFix(pe)
 		}
 	case pe == nil:
 		e.Fix = "retry once; if it fails again, tell the user"
@@ -76,7 +81,7 @@ func nextStep(pe *proto.Error) string {
 		case pe.Fix == "nothing to do":
 			return "nothing to do"
 		case strings.HasPrefix(pe.Fix, "upgrade"):
-			return "tell the user: " + pe.Fix
+			return "tell the user" + personFix(pe)
 		}
 		return "correct the arguments and retry"
 	case proto.CodeAcceptance:
@@ -90,14 +95,15 @@ func nextStep(pe *proto.Error) string {
 		}
 		return "this is for a starfix admin: tell the user"
 	case proto.CodeUnavailable:
-		return "retry once; if it fails again, tell the user: " + personFix(pe)
+		return "retry once; if it fails again, tell the user" + personFix(pe)
 	}
-	return "tell the user: " + personFix(pe)
+	return "tell the user" + personFix(pe)
 }
 
+// personFix relays the server's fix for the user, quoted.
 func personFix(pe *proto.Error) string {
 	if pe == nil || pe.Fix == "" {
-		return "starfix cannot reach its server"
+		return ": starfix cannot reach its server"
 	}
-	return pe.Fix
+	return ", quoting the server: " + strconv.Quote(pe.Fix)
 }
