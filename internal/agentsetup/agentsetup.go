@@ -9,10 +9,14 @@
 // config, with one entry per project (desktop.go).
 //
 // Edits are idempotent and minimal: an existing file keeps its other
-// servers, its other keys and their order, and an existing starfix entry
-// keeps keys starfix does not own (a timeout, other env variables). The
+// servers, its other keys and their order. The starfix entry itself is
+// replaced wholesale: an extra key (cwd, another env variable such as
+// PATH or LD_PRELOAD) could make a server named starfix run something
+// else, so Registered fails on one and Apply drops it. The
 // entry's env sets HarnessEnv to the agent's name, so the agents registry
-// knows which harness each session runs under. Applying a
+// knows which harness each session runs under. A JSON file with a
+// duplicate key is refused: harnesses keep the last copy, so editing the
+// first would report a registration the harness never runs. Applying a
 // registration that is already in place changes nothing, byte for byte.
 // The functions here work on file contents; reading and writing the files
 // is the caller's.
@@ -227,17 +231,19 @@ func (a Agent) Remove(content []byte) ([]byte, Result, error) {
 	return a.remove(content, DefaultEntry)
 }
 
-// remove takes out the entry registered under e's name.
+// remove takes out the entry registered under e's name. A file that
+// cannot be read is an error, not "unchanged".
 func (a Agent) remove(content []byte, e Entry) ([]byte, Result, error) {
-	if !a.has(content, e) {
-		return content, Unchanged, nil
-	}
+	var out []byte
+	var found bool
+	var err error
 	if a.format == tomlCodex {
-		return removeTOML(content), Removed, nil
+		out, found, err = removeTOML(content)
+	} else {
+		out, found, err = removeJSON(content, a.format, e.server())
 	}
-	out, err := removeJSON(content, a.format, e.server())
-	if err != nil {
-		return nil, Unchanged, err
+	if err != nil || !found {
+		return content, Unchanged, err
 	}
 	return out, Removed, nil
 }
@@ -254,8 +260,7 @@ func (a Agent) Registered(content []byte, e Entry) bool {
 // it holds.
 func (a Agent) has(content []byte, e Entry) bool {
 	if a.format == tomlCodex {
-		_, _, ok := tomlSection(strings.Split(string(content), "\n"))
-		return ok
+		return tomlHas(content)
 	}
 	_, ok := jsonEntry(content, a.format, e.server())
 	return ok

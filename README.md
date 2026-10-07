@@ -171,6 +171,13 @@ sfx close sf-a1b2c3d4 --reason "fixed in #12"
 The host key is pinned, never trusted on first use. Keys come from ssh-agent
 (the OpenSSH named pipe on Windows) or the `key:` file.
 
+`sfx` finds `.starfix.yaml` in the working directory or a parent, but
+stops at the repository's top level (the first directory holding `.git`)
+and never looks above your home directory. On macOS and Linux the file
+must be yours and writable by no one else; `chmod go-w .starfix.yaml`
+fixes a checkout made under a umask of 002. Windows has no owner check, so
+there the search boundary is the only guard.
+
 ## Moving from bd
 
 Export with `bd export -o bd.jsonl`, copy it to the server and, as the
@@ -314,10 +321,25 @@ and `clear`; Codex's matcher is `startup|resume|clear|compact`. Prime reads
 the session id from the hook's input (`session_id`, or VS Code's
 `sessionId`), adds prime to the session's context, prints nothing outside
 a starfix repository, and on any error adds a one-line note instead of
-failing the session. A hook is starfix's when its command runs
-`prime --hook` through `sfx` (or `--command`); other hooks are never
-touched. Existing files keep their other keys, their order and their mode;
-a second run changes nothing.
+failing the session. A hook is starfix's only when its whole command is
+the one setup writes, `sfx prime --hook[=AGENT]` through `sfx` or the
+`--command` program; other hooks, including your own commands that end
+in `sfx prime --hook`, are never touched. Existing files keep their other
+keys, their order and their mode; a second run changes nothing.
+
+The starfix MCP entry itself is replaced wholesale: it holds `command`,
+`args` and `STARFIX_HARNESS` in its env, and nothing else. `--check`
+fails on any extra key or env variable (`cwd`, `PATH`, `LD_PRELOAD` and
+the like), and `--write` drops them. A JSON file with a duplicate key is
+refused, since the harness would run the last copy. Codex's
+`config.toml` is edited table-aware; a file setup cannot read safely, or
+one that defines starfix with dotted keys or an inline table, is refused,
+and you add the printed snippet by hand.
+
+Setup never reads or writes a project file through a symbolic link: a
+link anywhere below the repository root, file included, is refused with
+a fix, so a cloned repository cannot point `.mcp.json` at a secret or
+`.claude` at your home directory. New project files are 0644.
 
 `--global` edits the files in your home directory instead (for Claude Code
 `~/.claude.json`, `~/.claude/CLAUDE.md` and `~/.claude/settings.json`; for
@@ -327,6 +349,16 @@ is touched without it. VS Code keeps its user MCP config in a per-platform
 profile and AI Assistant in the IDE's settings, so `--global` is refused
 for `vscode` and `jetbrains`, and `--all --global` skips them with that
 fix. `--command PATH` sets how the agent runs `sfx` when it is not on PATH.
+New files in your home directory are created 0600, in 0700 directories.
+A home file or directory may be a symbolic link (a dotfiles repository)
+only to something of yours inside your home directory; setup edits the
+target and keeps the link.
+
+A global hook runs in every repository with a `.starfix.yaml` that you
+open with the agent, and connects to the server that file names, chosen
+by whoever wrote the repository. Setup says so when it writes one. Prefer
+per-project hooks, or turn the global one off before opening a repository
+you do not trust.
 
 Claude Desktop (macOS and Windows) has no project files, hooks or working
 directory, so `sfx setup claude-desktop`, run inside the repository, adds

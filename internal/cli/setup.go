@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -99,8 +98,10 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	if *global {
 		again += " --global"
 	}
+	base := fileBase{dir: root, user: *global, home: root}
 	// Read each file once: two parts may share one (Gemini's settings,
 	// AGENTS.md for Codex and Junie), and each sees the last one's edit.
+	// Printing reads nothing.
 	disk := map[string]*diskFile{}
 	var order []*diskFile
 	for i := range plans {
@@ -112,11 +113,12 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 			path := filepath.Join(root, filepath.FromSlash(t.Path))
 			d, ok := disk[path]
 			if !ok {
-				d = &diskFile{path: path}
-				if d.orig, d.mode, err = readConfig(path); err != nil {
-					return err
+				d = &diskFile{path: path, base: base}
+				if mode != (setupMode{}) {
+					if err := d.read(); err != nil {
+						return err
+					}
 				}
-				d.cur = d.orig
 				disk[path] = d
 				order = append(order, d)
 			}
@@ -192,9 +194,9 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 		case string(d.cur) == string(d.orig):
 			continue
 		case d.drop:
-			err = removeConfig(d.path)
+			err = removeConfig(d.real)
 		default:
-			err = writeConfig(d.path, d.cur, d.mode)
+			err = d.base.writeConfig(d.path, d.real, d.cur, d.mode)
 		}
 		if err != nil {
 			return err
@@ -203,14 +205,26 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 	for i := range plans {
 		p := &plans[i]
 		for _, f := range p.files {
-			if f.res == agentsetup.Added && !global {
+			switch {
+			case f.res != agentsetup.Added:
+			case !global:
 				p.note = p.Steps(entry)
+			case f.Kind == agentsetup.KindHook:
+				p.note = globalHookNote
 			}
 		}
 	}
 	r.report(plans, all, "")
 	return nil
 }
+
+// globalHookNote is said after setup adds or prints a hook in the home
+// directory. The hook runs prime, which dials the server named by the
+// .starfix.yaml of whatever repository the agent opens (C-14 in the
+// security review): a cloned repository chooses the host. Per-project
+// hooks have the same reach but are part of the repository the person
+// chose to set up.
+const globalHookNote = "This hook runs in every repository with a .starfix.yaml that you open with the agent, and connects to the server that file names. Turn it off before opening a repository you do not trust, or drop --global and set the hook up per project."
 
 func noGlobal(a agentsetup.Agent) string {
 	if a.ManualMCP() {
@@ -241,11 +255,27 @@ func (p setupPlan) shared(f setupFile) bool {
 
 // diskFile is one file on disk: as read, and with the edits so far.
 type diskFile struct {
-	path      string
-	orig, cur []byte
-	mode      fs.FileMode
+	// path is the file as setup names it; real is where it is read
+	// and written, once base has checked the way there.
+	path, real string
+	base       fileBase
+	orig, cur  []byte
+	mode       fs.FileMode
 	// drop: the last edit emptied a file that held only starfix's part.
 	drop bool
+}
+
+// read checks the way to the file and reads it.
+func (d *diskFile) read() error {
+	var err error
+	if d.real, err = d.base.resolve(d.path); err != nil {
+		return err
+	}
+	if d.orig, d.mode, err = d.base.readConfig(d.real); err != nil {
+		return err
+	}
+	d.cur = d.orig
+	return nil
 }
 
 // setupFile is one target and the file it lives in.
@@ -395,6 +425,9 @@ func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, glob
 			p("\n# pointer: add to %s\n%s", f.rel, f.Snippet(entry))
 		case agentsetup.KindHook:
 			p("\n# SessionStart hook: merge into %s\n%s", f.rel, f.Snippet(entry))
+			if global {
+				p("# %s\n", globalHookNote)
+			}
 		}
 	}
 	if agent.SessionEnv != "" {
@@ -423,61 +456,4 @@ func (r *runner) setupRoot(global bool) (string, error) {
 		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
 	}
 	return cfg.Root, nil
-}
-
-// readConfig reads a config file; a missing one is empty, mode 0644.
-func readConfig(path string) ([]byte, fs.FileMode, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // the agent's config file, chosen by name
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, 0o644, nil
-	}
-	if err != nil {
-		return nil, 0, proto.Errf(proto.CodeInvalid, "check the file's permissions", fmt.Sprintf("read %s: %v", path, err))
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		return nil, 0, proto.Errf(proto.CodeInvalid, "check the file's permissions", fmt.Sprintf("stat %s: %v", path, err))
-	}
-	return b, st.Mode().Perm(), nil
-}
-
-// removeConfig deletes a file setup emptied.
-func removeConfig(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return proto.Errf(proto.CodeInvalid, "check the directory's permissions", fmt.Sprintf("remove %s: %v", path, err))
-	}
-	return nil
-}
-
-// writeConfig replaces path atomically, keeping its mode. A project
-// config is meant to be committed, so a new one is 0644; it holds no
-// secret. A missing directory is made 0755, or 0700 for a private file.
-func writeConfig(path string, b []byte, mode fs.FileMode) error {
-	fail := func(err error) error {
-		return proto.Errf(proto.CodeInvalid, "check the directory's permissions", fmt.Sprintf("write %s: %v", path, err))
-	}
-	dir := filepath.Dir(path)
-	dirMode := fs.FileMode(0o755)
-	if mode&0o077 == 0 {
-		dirMode = 0o700
-	}
-	if err := os.MkdirAll(dir, dirMode); err != nil { //nolint:gosec // .codex/, .claude/ and the like, in the repository
-		return fail(err)
-	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fail(err)
-	}
-	tmp := f.Name()
-	_, werr := f.Write(b)
-	cerr := f.Close()
-	if err := errors.Join(werr, cerr, os.Chmod(tmp, mode)); err != nil {
-		_ = os.Remove(tmp)
-		return fail(err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fail(err)
-	}
-	return nil
 }
