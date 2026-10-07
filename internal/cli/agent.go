@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
 )
 
@@ -48,6 +49,11 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 		return usagef(usage, "mcp takes no arguments")
 	}
 	opts := r.clientOptions()
+	if opts.Session == "" {
+		// No harness session id: pick one for this process, so a reconnect
+		// keeps the session's history under one id.
+		opts.Session = client.NewSessionID()
+	}
 	srv := mcpserver.New(mcpserver.Options{Version: r.env.Version,
 		Dial: func(ctx context.Context) (mcpserver.Conn, error) {
 			return mcpserver.DialRepo(ctx, r.dir, opts)

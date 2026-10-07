@@ -22,3 +22,10 @@ func TestSessionFromEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestNewSessionID(t *testing.T) {
+	a, b := NewSessionID(), NewSessionID()
+	if len(a) != 18 || a[:2] != "m-" || a == b {
+		t.Fatalf("NewSessionID() = %q, %q; want two distinct m-<16 hex>", a, b)
+	}
+}
