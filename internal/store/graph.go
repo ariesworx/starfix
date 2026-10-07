@@ -7,7 +7,10 @@ import (
 )
 
 // AddDep records that from depends on to. Adding an existing edge is a
-// no-op. Blocking edges (and parent links) may not form a cycle.
+// no-op. A blocking edge that would close a cycle of blocking edges and
+// parent links is refused with ErrCycle; an edge past the Deps limit, or
+// a non-blocking edge from an issue to itself, with ErrInvalid; and a
+// missing issue with ErrNotFound. Dependencies need no hold.
 func (s *Store) AddDep(ctx context.Context, actor Actor, from, to IssueID, typ DepType) error {
 	if err := validEdge(from, to, typ); err != nil {
 		return err
@@ -74,6 +77,9 @@ func (s *Store) RemoveDep(ctx context.Context, actor Actor, from, to IssueID, ty
 	})
 }
 
+// validEdge checks an edge's ends and type. A blocking edge from an issue
+// to itself passes, so that the cycle check refuses it with ErrCycle; any
+// other edge to itself is ErrInvalid.
 func validEdge(from, to IssueID, typ DepType) error {
 	if err := from.Validate(); err != nil {
 		return err
@@ -90,8 +96,8 @@ func validEdge(from, to IssueID, typ DepType) error {
 	return nil
 }
 
-// checkEdge refuses a new waits-on edge from→to (a blocking dep, or a
-// parent link) when to already reaches from.
+// checkEdge refuses, with ErrCycle, a new waits-on edge from→to (a
+// blocking dep, or a parent link) when to already reaches from.
 func checkEdge(ctx context.Context, q querier, from, to IssueID) error {
 	if from == to {
 		return fmt.Errorf("%s depends on itself: %w", from, ErrCycle)
@@ -118,7 +124,8 @@ SELECT COUNT(*) FROM reach WHERE id = ?`, string(to), string(from)).Scan(&n)
 	return nil
 }
 
-// Deps returns the edges into and out of an issue.
+// Deps returns the edges into and out of an issue, ordered by from, to
+// and type.
 func (s *Store) Deps(ctx context.Context, id IssueID) ([]Dep, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
@@ -131,6 +138,8 @@ func (s *Store) AllDeps(ctx context.Context) ([]Dep, error) {
 	return s.deps(ctx, ``)
 }
 
+// deps reads the edges that where, a constant clause with placeholders
+// for args, selects.
 func (s *Store) deps(ctx context.Context, where string, args ...any) ([]Dep, error) {
 	q := `SELECT from_id, to_id, type, created_by, created_at, metadata FROM deps ` + where + //nolint:gosec // where is a constant from the callers above
 		` ORDER BY from_id, to_id, type`
@@ -158,10 +167,10 @@ func (s *Store) deps(ctx context.Context, where string, args ...any) ([]Dep, err
 	return out, nil
 }
 
-// blockedCTE yields blocked(id, via): open issues with an unclosed
-// blocking target, and their descendants, with via naming the ancestor whose
-// blockers apply. deferred(id) is the same for issues deferred by status or
-// by a future defer_until (parameter 1: now).
+// blockedCTE yields blocked(id, via): unclosed issues with an unclosed
+// target of a readyBlocking edge, and their descendants, with via naming
+// the ancestor whose blockers apply. deferred(id) is the same for issues
+// deferred by status or by a future defer_until (parameter 1: now).
 const blockedCTE = `WITH RECURSIVE
 direct (id) AS (
   SELECT DISTINCT d.from_id FROM deps d
@@ -190,6 +199,8 @@ const readyWhere = `WHERE i.status = 'open' AND i.template = FALSE
 ORDER BY i.priority, i.created_at, i.id
 LIMIT ?`
 
+// clampLimit returns def when n is not positive, and otherwise n capped
+// at maxN.
 func clampLimit(n, def, maxN int) int {
 	if n <= 0 {
 		return def
@@ -200,7 +211,8 @@ func clampLimit(n, def, maxN int) int {
 // Ready returns open issues that nothing holds back: no unclosed blocks or
 // conditional-blocks target on the issue or an ancestor, not deferred (by
 // status or a future defer_until) on the issue or an ancestor, and not a
-// template. Ordered by priority, then age. Computed at read time.
+// template. Ordered by priority, then age, at most limit (0 means 10, at
+// most 500). Computed at read time.
 func (s *Store) Ready(ctx context.Context, limit int) ([]Issue, error) {
 	limit = clampLimit(limit, 10, 500)
 	rows, err := s.r.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+` FROM issues i
@@ -224,7 +236,8 @@ func (s *Store) Ready(ctx context.Context, limit int) ([]Issue, error) {
 }
 
 // Blocked returns unclosed issues held back by unclosed blockers, their own
-// or an ancestor's, ordered by priority, then age.
+// or an ancestor's, ordered by priority, then age, at most limit (0 means
+// 50, at most 500).
 func (s *Store) Blocked(ctx context.Context, limit int) ([]BlockedIssue, error) {
 	limit = clampLimit(limit, 50, 500)
 	rows, err := s.r.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+`, b.via FROM issues i
@@ -266,6 +279,8 @@ ORDER BY i.priority, i.created_at, i.id, (b.via <> i.id)`, s.now())
 	return out, attachLabels(ctx, s.r, issues)
 }
 
+// attachBlockers fills BlockedBy for each issue: its own unclosed
+// blockers, or those of the ancestor it is blocked through (Via).
 func (s *Store) attachBlockers(ctx context.Context, bs []BlockedIssue) error {
 	by, err := blockerMap(ctx, s.r)
 	if err != nil {
@@ -281,7 +296,8 @@ func (s *Store) attachBlockers(ctx context.Context, bs []BlockedIssue) error {
 	return nil
 }
 
-// blockerMap maps each issue to its open blocking targets, in id order.
+// blockerMap maps each issue to its unclosed blocking targets, in id
+// order.
 func blockerMap(ctx context.Context, q querier) (map[IssueID][]IssueID, error) {
 	rows, err := q.QueryContext(ctx, `SELECT d.from_id, d.to_id FROM deps d
 JOIN issues t ON t.id = d.to_id
@@ -305,6 +321,7 @@ ORDER BY d.from_id, d.to_id`)
 	return by, nil
 }
 
+// withLabels is attachLabels for a slice of issues.
 func withLabels(ctx context.Context, q querier, issues []Issue) error {
 	ps := make([]*Issue, len(issues))
 	for i := range issues {

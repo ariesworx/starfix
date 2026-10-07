@@ -35,19 +35,20 @@ type Options struct {
 	Readers int
 	// Now is the server clock. Default time.Now.
 	Now func() time.Time
-	// Logger receives background committer errors. Default discards.
+	// Logger receives background committer errors, and the warning that
+	// AllowUnsafeAccount let an unsafe account through. Default discards.
 	Logger *slog.Logger
 	// Admins are the principals who may change issues others hold and
-	// force a close (authz.go). None may be reserved.
+	// force a close. None may be a [Reserved] name.
 	Admins []string
 	// AllowUnsafeAccount opens the store even when the database account
 	// is root, holds rights beyond its database, or the server leaves
-	// secure_file_priv empty (account.go). Off, Open refuses such an
-	// account with an *UnsafeAccountError; starfixd turns it on only for
-	// --dev --allow-unsafe-dolt.
+	// secure_file_priv empty. Off, Open refuses such an account with an
+	// [*UnsafeAccountError]; starfixd turns it on only for --dev
+	// --allow-unsafe-dolt.
 	AllowUnsafeAccount bool
-	// Limits bound requests and per-principal rows (limits.go). Zero
-	// fields take DefaultLimits.
+	// Limits bound requests and per-principal rows. Zero fields take
+	// [DefaultLimits].
 	Limits Limits
 
 	// tick, when set by tests, replaces the committer's CommitInterval
@@ -56,11 +57,16 @@ type Options struct {
 }
 
 // Store is the server-side issue store. It is safe for concurrent use.
+// [Open] returns one, and [Store.Close] releases it.
 type Store struct {
-	w, r  *sql.DB
-	opts  Options
+	// w is the single writer connection; r is the read pool.
+	w, r *sql.DB
+	opts Options
+	// dirty is set by a write that changed rows since the last Dolt
+	// commit, and cleared by Flush.
 	dirty atomic.Bool
 
+	// stop asks the committer to return; it closes done when it has.
 	stop      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
@@ -78,7 +84,14 @@ type Store struct {
 }
 
 // Open connects to the Dolt database named in dsn (go-sql-driver/mysql
-// format), applies pending migrations and starts the committer.
+// format), checks the account, applies pending migrations and starts the
+// committer. ctx bounds only the opening; the caller must Close the
+// store.
+//
+// Open refuses, with [ErrInvalid], a dsn that names no database and an
+// invalid prefix, admin or limit in opts. It refuses an unsafe account
+// with an [*UnsafeAccountError] unless opts.AllowUnsafeAccount is set,
+// and a database a newer binary migrated with [ErrSchemaTooNew].
 func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -162,7 +175,8 @@ func Open(ctx context.Context, dsn string, opts Options) (*Store, error) {
 }
 
 // Close stops the committer, makes a final Dolt commit of pending writes
-// and closes the connections.
+// and closes the connections. It is safe to call more than once; every
+// call returns the first one's error.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.stop)
@@ -174,6 +188,9 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
+// commitLoop flushes every interval, or on each test tick, until Close
+// stops it. A failed commit is logged and tried again on the next tick,
+// since Flush leaves the writes pending.
 func (s *Store) commitLoop(every time.Duration) {
 	defer close(s.done)
 	tick := s.opts.tick
@@ -197,7 +214,8 @@ func (s *Store) commitLoop(every time.Duration) {
 }
 
 // Flush makes a Dolt commit now if any write happened since the last one.
-// The message names the last event sequence it covers.
+// The message names the last event sequence it covers. When the commit
+// fails, the writes stay pending for the next Flush.
 func (s *Store) Flush(ctx context.Context) error {
 	if !s.dirty.Swap(false) {
 		return nil
@@ -209,6 +227,8 @@ func (s *Store) Flush(ctx context.Context) error {
 	return err
 }
 
+// commit makes a Dolt commit of the working set, named for the last
+// event sequence.
 func (s *Store) commit(ctx context.Context) error {
 	// Hold the single writer connection so no write lands between reading
 	// the sequence and committing.
@@ -242,16 +262,26 @@ type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// wtx is one attempt at a write transaction.
+// wtx is one attempt at a write transaction. Every attempt gets a fresh
+// one, so none of a failed attempt's events, inbox items or idempotency
+// stamp carries into the rerun.
+//
+// The transaction's connection serves one result set at a time: read
+// rows to the end and close them before running the next statement.
 type wtx struct {
 	tx    *sql.Tx
 	actor Actor
 	// admin is set when actor's principal is one of the store's admins.
-	admin   bool
-	now     time.Time
+	admin bool
+	// now is the attempt's server time, used for every timestamp it
+	// writes.
+	now time.Time
+	// mutated is set once a statement changed a row; writeOnce then
+	// requires an event unless quiet is set.
 	mutated bool
 	events  int
-	// quiet allows a mutation with no event: a lease renewal.
+	// quiet allows a mutation with no event, for bookkeeping that is not
+	// history: a lease renewal, a registry touch, an inbox ack, a prune.
 	quiet bool
 	// inbox are the items this attempt wrote, pushed once it commits.
 	inbox []InboxItem
@@ -287,10 +317,11 @@ func (w *wtx) exec(ctx context.Context, q string, args ...any) (int64, error) {
 	return n, nil
 }
 
-// event records the next gapless event. Every mutation calls it once.
-// Events are buffered and written in order once the operation's closure
-// returns (flush), so the last can carry the operation's idempotency
-// stamp and result.
+// event records an event for op on target, with the before and after
+// states as JSON (nil is NULL). Every change that is history records at
+// least one. Events are buffered and written in order, with the next
+// gapless sequence numbers, once the operation's closure returns (flush),
+// so the last can carry the operation's idempotency stamp and result.
 func (w *wtx) event(_ context.Context, op Op, target string, before, after any) error {
 	b, err := jsonOrNull(before)
 	if err != nil {
@@ -357,6 +388,8 @@ func lastEventSeq(ctx context.Context, q querier) (int64, error) {
 	return lastKey(ctx, q, `SELECT seq FROM events ORDER BY seq DESC LIMIT 1`)
 }
 
+// lastKey runs query, which selects one integer in descending order with
+// LIMIT 1, and returns it, or 0 when the table is empty.
 func lastKey(ctx context.Context, q querier, query string) (int64, error) {
 	var n int64
 	err := q.QueryRowContext(ctx, query).Scan(&n)
@@ -366,6 +399,8 @@ func lastKey(ctx context.Context, q querier, query string) (int64, error) {
 	return n, err
 }
 
+// jsonOrNull encodes an event state as compacted JSON text, or returns
+// nil, which is NULL, for a nil state.
 func jsonOrNull(v any) (any, error) {
 	if v == nil {
 		return nil, nil
@@ -381,11 +416,11 @@ func jsonOrNull(v any) (any, error) {
 }
 
 // Event text bounds (S-10). An event keeps the before and after of what
-// changed, and Dolt keeps every version, so an edit loop over four 64 KiB
-// fields grew the log by 256 KiB a write. A string longer than
-// EventTextMax is kept as its first EventTextKeep bytes, its length and
-// its SHA-256: enough to tell what changed and to check a copy, while the
-// text itself lives in the issue or comment row.
+// changed, and Dolt keeps every version, so without a bound an edit loop
+// over four 64 KiB fields would grow the log by 256 KiB a write. A string
+// longer than EventTextMax is kept as its first EventTextKeep bytes, its
+// length and its SHA-256: enough to tell what changed and to check a
+// copy, while the text itself lives in the issue or comment row.
 const (
 	EventTextMax  = 8 << 10
 	EventTextKeep = 512
@@ -445,8 +480,13 @@ func elide(s string) string {
 	return fmt.Sprintf("%s… [%d bytes, sha256:%s]", s[:n], len(s), hex.EncodeToString(sum[:]))
 }
 
-// write runs fn in a transaction on the writer connection, retrying when a
-// concurrent transaction wins (Dolt error 1213). fn must be safe to rerun.
+// write runs fn in a transaction on the writer connection as actor,
+// retrying when a concurrent transaction wins (see retryable). It
+// refuses an invalid actor with ErrInvalid before trying. fn must be safe
+// to rerun: each attempt starts from a fresh wtx, and fn must set every
+// result it hands back afresh. Between attempts write waits a random,
+// growing backoff; when ctx ends first, or attempts reach
+// Options.MaxAttempts, it gives up, the latter with ErrConflict.
 func (s *Store) write(ctx context.Context, actor Actor, fn func(*wtx) error) error {
 	if err := actor.validate(); err != nil {
 		return err
@@ -471,6 +511,11 @@ func (s *Store) write(ctx context.Context, actor Actor, fn func(*wtx) error) err
 	}
 }
 
+// writeOnce makes one attempt: it runs fn in a new transaction, refuses a
+// mutation that recorded no event unless the attempt is quiet, writes the
+// buffered events and commits. Only once the commit succeeds does it mark
+// the store dirty, invalidate the similar-title cache and push inbox
+// items, so a rolled-back attempt leaves no trace.
 func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -506,6 +551,7 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	return nil
 }
 
+// rollback rolls tx back; a transaction already done is not an error.
 func rollback(tx *sql.Tx) error {
 	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
 		return fmt.Errorf("rollback: %w", err)

@@ -10,25 +10,32 @@ import (
 )
 
 // Errors returned by the store, always wrapped with context. Test with
-// errors.Is.
+// [errors.Is].
+//
+// starfixd's error mapping (internal/server/errors.go) reads some of the
+// messages these wrap, such as "is claimed by" and "is closed; reopen it
+// first", to name the next step. Change such a message together with it.
 var (
-	// ErrNotFound: the issue (or other target) does not exist.
+	// ErrNotFound means the issue, or another target, does not exist.
 	ErrNotFound = errors.New("not found")
-	// ErrConflict: the row changed since the caller's revision, or a
-	// concurrent write kept winning until retries ran out.
+	// ErrConflict means the row changed since the caller's revision, or
+	// a concurrent write kept winning until retries ran out.
 	ErrConflict = errors.New("conflict")
-	// ErrExists: an issue with that ID already exists.
+	// ErrExists means an issue with that ID already exists.
 	ErrExists = errors.New("already exists")
-	// ErrCycle: the change would create a cycle of blocking edges.
+	// ErrCycle means the change would make a cycle of blocking edges or
+	// parent links.
 	ErrCycle = errors.New("dependency cycle")
-	// ErrInvalid: the input failed validation.
+	// ErrInvalid means the input failed validation, or the change does
+	// not fit the issue's state, such as a status change on a closed
+	// issue.
 	ErrInvalid = errors.New("invalid input")
-	// ErrNothingReady: StartIssue was asked for the top ready issue and
-	// none is ready. It wraps ErrNotFound.
+	// ErrNothingReady means StartIssue was asked for the top ready issue
+	// and none is ready. It wraps ErrNotFound.
 	ErrNothingReady = fmt.Errorf("nothing is ready to start: %w", ErrNotFound)
-	// ErrSchemaTooNew: the database was migrated by a newer starfix.
+	// ErrSchemaTooNew means a newer starfixd migrated the database.
 	ErrSchemaTooNew = errors.New("database schema is newer than this binary")
-	// ErrForbidden: the actor may not make this change: another
+	// ErrForbidden means the actor may not make this change: another
 	// principal holds the issue, or the change is for admins.
 	ErrForbidden = errors.New("forbidden")
 
@@ -36,8 +43,9 @@ var (
 	errRetry = errors.New("retry")
 )
 
-// retryable reports whether err is Dolt's signal that a concurrent
-// transaction won: a serialization failure (1213), a lock timeout, or a
+// retryable reports whether rerunning the write may succeed: err is
+// errRetry, or Dolt's signal that a concurrent transaction won, which is
+// a serialization failure (1213), a lock wait timeout (1205), or a
 // constraint violation produced by transaction sequencing (1105).
 func retryable(err error) bool {
 	if errors.Is(err, errRetry) {
@@ -56,6 +64,7 @@ func retryable(err error) bool {
 	return false
 }
 
+// isDuplicate reports whether err is a duplicate key error (1062).
 func isDuplicate(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && me.Number == 1062

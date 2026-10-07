@@ -13,15 +13,20 @@ var backupTagPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,99}$`)
 
 // BackupTag makes a Dolt commit of everything written so far, by this
 // store or any other session, and tags it name. It returns the tag made.
+// A name that is not 1-100 lowercase letters, digits and ._-, starting
+// with a letter, is refused with ErrInvalid.
 //
 // It is idempotent: when name already tags the current commit nothing
 // changes. When name tags an older commit (an earlier upgrade from the
 // same version that was rolled back) that tag is kept and a new one,
-// name-<UTC time>, is made, so no restore point is lost.
+// name-<UTC time>, is made, so no restore point is lost. The commit and
+// tag are Dolt history, not issue changes, so they record no event.
 func (s *Store) BackupTag(ctx context.Context, name string) (string, error) {
 	if !backupTagPattern.MatchString(name) {
 		return "", fmt.Errorf("%w: backup tag %q", ErrInvalid, name)
 	}
+	// Like commit, this holds the writer connection outside Store.write:
+	// a Dolt commit and tag change no table.
 	c, err := s.w.Conn(ctx)
 	if err != nil {
 		return "", fmt.Errorf("backup tag: %w", err)

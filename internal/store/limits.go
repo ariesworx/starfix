@@ -8,8 +8,11 @@ import (
 
 // Limits bound what one request, or one principal, can make the store
 // hold (S-4, S-6, S-7). Without them a single create with 20,000 labels
-// held the one writer for 17 s, and a principal could grow the registry
-// and another's inbox without end. Zero fields take DefaultLimits.
+// would hold the one writer for 17 s, and a principal could grow the
+// registry and another's inbox without end. Zero fields take
+// [DefaultLimits]. A request past a limit is refused with ErrInvalid,
+// except Sessions, InboxUnread and Notices, which drop rows or notices
+// as their fields say.
 type Limits struct {
 	// Labels caps the labels on one issue, and so in one create.
 	Labels int `yaml:"labels_per_issue"`
@@ -33,6 +36,7 @@ type Limits struct {
 // DefaultLimits are the limits a zero field takes.
 var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10}
 
+// withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
 	for _, f := range []struct{ v, d *int }{
 		{&l.Labels, &DefaultLimits.Labels}, {&l.AcceptanceItems, &DefaultLimits.AcceptanceItems},
@@ -46,7 +50,8 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
-// Validate refuses a negative limit.
+// Validate refuses a negative limit with ErrInvalid. Zero is valid: it
+// means the default.
 func (l Limits) Validate() error {
 	for _, f := range []struct {
 		name string
@@ -77,8 +82,10 @@ const pruneBatch = 1000
 
 // Prune deletes registry rows not seen within agentKeep, except each
 // principal's most recent row (which keeps the principal known to
-// mentions), and inbox items read more than inboxKeep ago. Neither is
-// history, so it records no event. The server's reaper runs it.
+// mentions), and inbox items read more than inboxKeep ago, at most 1,000
+// of each per call. Neither is history, so it records no event. A window
+// that is not positive is refused with ErrInvalid. The server's reaper
+// runs it.
 func (s *Store) Prune(ctx context.Context, agentKeep, inboxKeep time.Duration) (Pruned, error) {
 	if agentKeep <= 0 || inboxKeep <= 0 {
 		return Pruned{}, fmt.Errorf("%w: prune windows must be positive", ErrInvalid)

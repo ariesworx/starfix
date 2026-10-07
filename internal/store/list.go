@@ -9,19 +9,26 @@ import (
 	"time"
 )
 
-// Cursor is an opaque position in a List result.
+// Cursor is an opaque position in a paged read: [Store.List],
+// [Store.CommentsPage] or [Store.HistoryPage]. Pass a cursor back only to
+// the kind of read that returned it.
 type Cursor string
 
+// cursorPos is a List cursor's position: the last issue's created_at and
+// ID, in List's order.
 type cursorPos struct {
 	At int64   `json:"t"` // created_at, Unix microseconds
 	ID IssueID `json:"i"`
 }
 
+// encodeCursor makes the cursor of the page after is.
 func encodeCursor(is Issue) Cursor {
 	b, _ := json.Marshal(cursorPos{At: is.CreatedAt.UnixMicro(), ID: is.ID}) //nolint:errchkjson // plain struct
 	return Cursor(base64.RawURLEncoding.EncodeToString(b))
 }
 
+// decodeCursor reads a cursor from encodeCursor, refusing a malformed one
+// with ErrInvalid.
 func decodeCursor(c Cursor) (cursorPos, error) {
 	var p cursorPos
 	b, err := base64.RawURLEncoding.DecodeString(string(c))
@@ -37,7 +44,10 @@ func decodeCursor(c Cursor) (cursorPos, error) {
 	return p, nil
 }
 
-// List returns issues matching f, oldest first, one page at a time.
+// List returns issues matching f, oldest first, one page at a time: pass
+// the page's Next as f.Cursor to read the one after it. A status, type or
+// label that is not valid, or a malformed cursor, is refused with
+// ErrInvalid.
 func (s *Store) List(ctx context.Context, f Filter) (IssuePage, error) {
 	limit := clampLimit(f.Limit, 50, 500)
 	var where []string

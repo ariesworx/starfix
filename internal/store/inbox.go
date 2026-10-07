@@ -29,15 +29,17 @@ type InboxKind string
 
 // Inbox kinds.
 const (
-	// InboxClaimLost: the session's claim lapsed and was reaped, or
-	// another session took the issue over. Addressed to that session.
+	// InboxClaimLost tells a session it lost its claim: the lease lapsed
+	// and was reaped, or another session took the issue over, or closed,
+	// finished or released it. It is addressed to that session.
 	InboxClaimLost InboxKind = "claim.lost"
-	// InboxAssigned: someone else made the principal an issue's assignee.
+	// InboxAssigned tells a principal someone else made it an issue's
+	// assignee.
 	InboxAssigned InboxKind = "assigned"
-	// InboxMention: someone else wrote @principal in a comment or a
-	// handoff note.
+	// InboxMention tells a principal someone else wrote @principal in a
+	// comment or a handoff note.
 	InboxMention InboxKind = "mention"
-	// InboxHandoff: someone else handed an issue to the principal.
+	// InboxHandoff tells a principal someone else handed it an issue.
 	InboxHandoff InboxKind = "handoff"
 )
 
@@ -49,7 +51,8 @@ const (
 	// MaxInboxLimit one AckInbox by id.
 	DefaultInboxLimit = 20
 	MaxInboxLimit     = 100
-	// MaxMentions is how many principals one text can mention.
+	// MaxMentions bounds the distinct @names one text notifies: the
+	// first MaxMentions are looked up, and the rest ignored.
 	MaxMentions = 10
 	// WatchQueue is how many pushed items a watch holds before it
 	// overflows.
@@ -81,7 +84,10 @@ var mentionPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9._@+-])@([a-z][a-z0-9._
 
 // notify records an item in w's transaction and queues it to be pushed
 // once the transaction commits. Nothing is written for the actor's own
-// principal, unless the item concerns one of its other sessions.
+// principal, unless the item concerns one of its other sessions, and
+// nothing past the Notices limit on what the actor sent the recipient in
+// the last minute; claim.lost items are exempt from the limit. Recording
+// an item may mark the recipient's oldest unread items read (capUnread).
 func (w *wtx) notify(ctx context.Context, it InboxItem) error {
 	if it.To == w.actor.Principal && (it.Session == "" || it.Session == w.actor.Session) {
 		return nil
@@ -191,7 +197,9 @@ func (w *wtx) notifyMentions(ctx context.Context, id IssueID, text string, skip 
 	return nil
 }
 
-// brief makes text an item body: one line, at most InboxBodyMax bytes.
+// brief makes text an item body: whitespace and control characters
+// collapsed to single spaces, and at most InboxBodyMax bytes of text, cut
+// on a rune boundary and followed by "…" when cut.
 func brief(s string) string {
 	s = strings.Join(strings.FieldsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
 	if len(s) <= InboxBodyMax {
@@ -216,7 +224,9 @@ type InboxPage struct {
 const inboxFor = `to_principal = ? AND (to_session IS NULL OR to_session = ?)`
 
 // Inbox returns actor's unread items (with all, read ones too), newest
-// first, at most limit (0 means DefaultInboxLimit), and the unread count.
+// first, at most limit (0 means DefaultInboxLimit), and the unread count,
+// from one snapshot. A limit outside 0 to MaxInboxLimit is refused with
+// ErrInvalid.
 func (s *Store) Inbox(ctx context.Context, actor Actor, all bool, limit int) (InboxPage, error) {
 	if err := actor.validate(); err != nil {
 		return InboxPage{}, err
@@ -266,8 +276,9 @@ func (s *Store) Inbox(ctx context.Context, actor Actor, all bool, limit int) (In
 
 // AckInbox marks actor's unread items read: those with the given ids, or
 // with all every one it may read. Items actor may not read, and items
-// already read, are left alone. It returns how many it marked. Acking is
-// not history, so it records no event.
+// already read, are left alone. It returns how many it marked. Both ids
+// and all, neither, more than MaxInboxLimit ids, or an id below 1 is
+// refused with ErrInvalid. Acking is not history, so it records no event.
 func (s *Store) AckInbox(ctx context.Context, actor Actor, ids []int64, all bool) (int, error) {
 	switch {
 	case all && len(ids) > 0:
@@ -308,12 +319,16 @@ func (s *Store) AckInbox(ctx context.Context, actor Actor, ids []int64, all bool
 // session from now on: the session's own and the principal's. Items wait
 // in a queue of WatchQueue; when it is full the watch overflows, drops
 // what it held and receives nothing more, so a slow reader never holds up
-// the writer. The reader then rereads the inbox and watches again.
+// the writer. The reader then rereads the inbox and watches again. A
+// Watch is safe for concurrent use.
 type Watch struct {
 	s                  *Store
 	principal, session string
-	ready              chan struct{}
+	// ready holds at most one signal that Take has something to return.
+	ready chan struct{}
 
+	// mu guards queue, over and closed. publish takes it while holding
+	// the store's watchers.mu, so take watchers.mu first or not at all.
 	mu     sync.Mutex
 	queue  []InboxItem
 	over   bool
@@ -322,11 +337,15 @@ type Watch struct {
 
 // watchers is the set of open watches.
 type watchers struct {
+	// mu guards set; it is taken before any Watch's mu.
 	mu  sync.Mutex
 	set map[*Watch]struct{}
 }
 
-// Watch subscribes to principal's items for session. Close it when done.
+// Watch subscribes to principal's items for session. Every item
+// committed after Watch returns reaches the watch, so read the inbox
+// after subscribing, not before, and nothing falls between the two; an
+// item may then arrive both ways. Close the watch when done.
 func (s *Store) Watch(principal, session string) *Watch {
 	w := &Watch{s: s, principal: principal, session: session, ready: make(chan struct{}, 1)}
 	s.watch.mu.Lock()
@@ -338,7 +357,9 @@ func (s *Store) Watch(principal, session string) *Watch {
 	return w
 }
 
-// Ready receives when Take has something to return.
+// Ready returns a channel that receives when Take may have something to
+// return, an overflow included. Signals merge: one receive may stand for
+// many items.
 func (w *Watch) Ready() <-chan struct{} { return w.ready }
 
 // Take returns the queued items, oldest first, and empties the queue.
@@ -361,6 +382,8 @@ func (w *Watch) Close() {
 	w.closed, w.queue = true, nil
 }
 
+// wants reports whether it is addressed to w's principal, and to w's
+// session or to every session.
 func (w *Watch) wants(it InboxItem) bool {
 	return it.To == w.principal && (it.Session == "" || it.Session == w.session)
 }

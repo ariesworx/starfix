@@ -35,6 +35,8 @@ type idemStamp struct {
 	result    json.RawMessage
 }
 
+// validIdem refuses, with ErrInvalid, a key that is set and does not
+// match IdemPattern.
 func validIdem(key string) error {
 	if key != "" && !IdemPattern.MatchString(key) {
 		return fmt.Errorf("%w: idempotency key must be 1-64 letters, digits and ._:-, starting with a letter or digit", ErrInvalid)

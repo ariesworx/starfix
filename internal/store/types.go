@@ -9,7 +9,9 @@ import (
 	"github.com/ariesworx/starfix/internal/safetext"
 )
 
-// Rev is an issue's revision. It starts at 1 and increments on every write.
+// Rev is an issue's revision. It starts at 1 and rises by one with every
+// write to the issue's own row; labels, comments and dependencies have
+// rows of their own and do not move it.
 type Rev int64
 
 // Priority is 0 (critical) to 4 (backlog).
@@ -130,6 +132,8 @@ type Actor struct {
 	Machine   string `json:"machine"`
 }
 
+// validate refuses an actor whose principal, session or machine is
+// empty, longer than maxName or not one line of safe text.
 func (a Actor) validate() error {
 	for _, f := range []struct{ name, v string }{
 		{"principal", a.Principal}, {"session", a.Session}, {"machine", a.Machine},
@@ -141,7 +145,8 @@ func (a Actor) validate() error {
 	return nil
 }
 
-// Issue is one tracked item.
+// Issue is one tracked item, as the store reads it back: times in UTC to
+// the microsecond, and Labels sorted.
 type Issue struct {
 	ID          IssueID         `json:"id"`
 	ParentID    IssueID         `json:"parent_id,omitempty"`
@@ -243,7 +248,7 @@ const (
 	// CommentPlain is an ordinary comment.
 	CommentPlain CommentKind = ""
 	// CommentHandoff is a handoff note: what the next person to work on
-	// the issue needs to know. StartIssue's caller reads the latest.
+	// the issue needs to know. [Store.LastHandoff] returns the latest.
 	CommentHandoff CommentKind = "handoff"
 )
 
@@ -258,7 +263,11 @@ type Comment struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
-// Event is one entry in the gapless operation log.
+// Event is one entry in the gapless operation log. Before and After
+// record what changed, as JSON (for an issue update, the changed fields'
+// old and new values), and are absent when null; a long string in them is
+// shortened (see [EventTextMax]). IdemKey is the idempotency key of the
+// operation the event ends, if it had one.
 type Event struct {
 	Seq     int64           `json:"seq"`
 	At      time.Time       `json:"at"`
@@ -290,8 +299,8 @@ type IssuePage struct {
 	Next   Cursor
 }
 
-// BlockedIssue is an open issue held back by unclosed blockers, its own or
-// an ancestor's (Via).
+// BlockedIssue is an unclosed issue held back by unclosed blockers, its
+// own or an ancestor's (Via).
 type BlockedIssue struct {
 	Issue     Issue
 	BlockedBy []IssueID
@@ -305,6 +314,7 @@ var labelPattern = regexp.MustCompile(`^[^\s,\x00-\x1f]{1,64}$`)
 // without spaces, commas, or control or bidirectional characters.
 func ValidLabel(l string) bool { return labelPattern.MatchString(l) && safetext.ValidLine(l) }
 
+// validLabel is ValidLabel as an error that wraps ErrInvalid.
 func validLabel(l string) error {
 	if !ValidLabel(l) {
 		return fmt.Errorf("%w: label %q must be 1-64 characters without spaces, commas, or control or bidirectional characters", ErrInvalid, l)

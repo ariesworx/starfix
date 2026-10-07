@@ -15,7 +15,9 @@ import (
 // Options.AllowUnsafeAccount says otherwise.
 
 // UnsafeAccountError refuses a database account with more rights than
-// starfix needs. Problems lists each, in words.
+// starfix needs. User is the account as CURRENT_USER() names it
+// (user@host), and Problems lists what is unsafe, in words. Its message
+// ends with the fix.
 type UnsafeAccountError struct {
 	User     string
 	Problems []string

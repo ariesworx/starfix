@@ -10,11 +10,12 @@ import (
 	"time"
 )
 
-// Paged reads (S-5). A reply is one frame of at most 4 MiB; seventy 64 KiB
-// comments made an issue's comments and history unreadable for everyone,
-// and broke the connection that asked. These reads return the newest page
-// first and a cursor to the one before it, each page at most limit rows
-// and about MaxPageBytes of text.
+// Paged reads (S-5). A reply is one frame of at most 4 MiB, which seventy
+// 64 KiB comments read whole would overflow, making an issue's comments
+// and history unreadable for everyone and breaking the connection that
+// asked. These reads return the newest page first and a cursor to the one
+// before it, each page at most limit rows (DefaultPage when 0, at most
+// MaxPage) and about MaxPageBytes of text.
 const (
 	DefaultPage  = 100
 	MaxPage      = 500
@@ -22,8 +23,8 @@ const (
 )
 
 // CommentPage is one page of an issue's comments, oldest first. Earlier
-// is the cursor of the page before, empty on the first; Total counts the
-// issue's comments.
+// is the cursor of the page before it, empty when no older comments
+// remain; Total counts all the issue's comments.
 type CommentPage struct {
 	Comments []Comment
 	Earlier  Cursor
@@ -46,11 +47,14 @@ type pagePos struct {
 	Seq int64  `json:"s,omitempty"`
 }
 
+// encodePage makes p a Cursor; decodePage reverses it.
 func encodePage(p pagePos) Cursor {
 	b, _ := json.Marshal(p) //nolint:errchkjson // plain struct
 	return Cursor(base64.RawURLEncoding.EncodeToString(b))
 }
 
+// decodePage reads a cursor from encodePage, refusing a malformed one
+// with ErrInvalid.
 func decodePage(c Cursor) (pagePos, error) {
 	var p pagePos
 	b, err := base64.RawURLEncoding.DecodeString(string(c))
@@ -65,7 +69,8 @@ func decodePage(c Cursor) (pagePos, error) {
 
 // CommentsPage returns the newest page of id's comments before the
 // cursor (empty: the newest of all), at most limit (0 means DefaultPage,
-// at most MaxPage).
+// at most MaxPage), from one snapshot. A malformed cursor is refused with
+// ErrInvalid.
 func (s *Store) CommentsPage(ctx context.Context, id IssueID, before Cursor, limit int) (CommentPage, error) {
 	if err := id.Validate(); err != nil {
 		return CommentPage{}, err

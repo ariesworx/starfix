@@ -12,13 +12,18 @@ import (
 	"time"
 )
 
+// issueCols are the columns scanIssue reads, in its order, from issues
+// aliased i.
 const issueCols = `i.id, i.parent_id, i.title, i.body, i.design, i.acceptance, i.notes,
   i.status, i.priority, i.type, i.assignee, i.owner, i.due_at, i.defer_until,
   i.ephemeral, i.expires_at, i.pinned, i.template, i.metadata, i.close_reason,
   i.created_by, i.created_at, i.updated_at, i.closed_at, i.rev`
 
+// scanner is a *sql.Row or *sql.Rows.
 type scanner interface{ Scan(dest ...any) error }
 
+// scanIssue scans issueCols, then extra, into an Issue. NULL becomes the
+// zero value; Labels are left for attachLabels.
 func scanIssue(sc scanner, extra ...any) (Issue, error) {
 	var (
 		is                               Issue
@@ -47,6 +52,7 @@ func scanIssue(sc scanner, extra ...any) (Issue, error) {
 	return is, nil
 }
 
+// timePtr maps NULL to nil and a time to UTC.
 func timePtr(t sql.NullTime) *time.Time {
 	if !t.Valid {
 		return nil
@@ -71,6 +77,8 @@ func nullTime(t *time.Time) any {
 	return t.UTC().Truncate(time.Microsecond)
 }
 
+// nullJSON maps empty and JSON null metadata to NULL, and refuses
+// invalid JSON with ErrInvalid.
 func nullJSON(m json.RawMessage) (any, error) {
 	if len(m) == 0 || string(m) == "null" {
 		return nil, nil
@@ -81,7 +89,7 @@ func nullJSON(m json.RawMessage) (any, error) {
 	return string(m), nil
 }
 
-// loadIssue reads one issue with its labels.
+// loadIssue reads one issue with its labels, or returns ErrNotFound.
 func loadIssue(ctx context.Context, q querier, id IssueID) (Issue, error) {
 	is, err := scanIssue(q.QueryRowContext(ctx, `SELECT `+issueCols+` FROM issues i WHERE i.id = ?`, string(id)))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -129,10 +137,12 @@ func attachLabels(ctx context.Context, q querier, issues []*Issue) error {
 	return nil
 }
 
+// placeholders returns n comma-separated question marks.
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
+// exists reports whether the issue id exists.
 func exists(ctx context.Context, q querier, id IssueID) (bool, error) {
 	var n int
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id = ?`, string(id)).Scan(&n); err != nil {
@@ -141,6 +151,7 @@ func exists(ctx context.Context, q querier, id IssueID) (bool, error) {
 	return n > 0, nil
 }
 
+// mustExist returns ErrNotFound unless the issue id exists.
 func mustExist(ctx context.Context, q querier, id IssueID) error {
 	ok, err := exists(ctx, q, id)
 	if err != nil {
@@ -152,7 +163,7 @@ func mustExist(ctx context.Context, q querier, id IssueID) error {
 	return nil
 }
 
-// GetIssue returns one issue with its labels.
+// GetIssue returns one issue with its labels, or ErrNotFound.
 func (s *Store) GetIssue(ctx context.Context, id IssueID) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -160,6 +171,8 @@ func (s *Store) GetIssue(ctx context.Context, id IssueID) (Issue, error) {
 	return loadIssue(ctx, s.r, id)
 }
 
+// normalize refuses, with ErrInvalid, a new issue whose fields are not
+// valid, and fills in the defaults NewIssue documents.
 func (n *NewIssue) normalize() error {
 	if err := checkTitle(n.Title); err != nil {
 		return err
@@ -226,7 +239,7 @@ func (s *Store) checkNew(in NewIssue) error {
 }
 
 // checkTitle refuses a blank title or one that is not a single line of up
-// to 500 bytes.
+// to maxTitle bytes.
 func checkTitle(t string) error {
 	if strings.TrimSpace(t) == "" {
 		return fmt.Errorf("%w: title must be 1-%d bytes, not blank", ErrInvalid, maxTitle)
@@ -236,7 +249,12 @@ func checkTitle(t string) error {
 
 // CreateIssue creates an issue and returns it. With an IdempotencyKey, a
 // repeat of the same create returns the issue the first one made and writes
-// nothing. An assignee other than the actor gets an inbox item.
+// nothing, and the key reused for another request is refused with an
+// [*IdemError]. An assignee other than the actor gets an inbox item.
+//
+// Invalid input, or more labels or acceptance items than the store's
+// [Limits] allow, is refused with ErrInvalid; an ID in use with
+// ErrExists; a parent that does not exist with ErrNotFound.
 func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issue, error) {
 	if err := in.normalize(); err != nil {
 		return Issue{}, err
@@ -320,18 +338,20 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 }
 
 // UpdateIssue applies patch if the issue is still at rev expected, and
-// returns the new state. A new assignee other than the actor gets an inbox
-// item. A stale rev, or a concurrent write that keeps
-// winning, returns ErrConflict.
+// returns the new state; an empty patch returns the issue unchanged. A
+// new assignee other than the actor gets an inbox item. A stale rev, or a
+// concurrent write that keeps winning, returns ErrConflict; an expected
+// rev below 1 is refused with ErrInvalid.
 //
-// Holds come only from claims: status in_progress is refused (start sets
-// it), and so is a change of status or assignee while the issue is
-// claimed (finish or a releasing handoff ends the claim first). An issue
-// another principal holds is refused with a *ForbiddenError unless the
-// actor is an admin (guard). New acceptance text cannot tick items ("[x]"
-// counts only at create), and text that drops an item still open is
-// refused with an *AcceptanceError (Dropped): tick or waive it first, so
-// the change is on the record.
+// Holds come only from claims, so status in_progress is refused with
+// [ErrStatusInProgress] (StartIssue sets it), and a change of status or
+// assignee while the issue is claimed with ErrInvalid (finish, close or a
+// releasing handoff ends the claim first). An issue another principal
+// holds is refused with a [*ForbiddenError] unless the actor is an admin,
+// and a parent that would make a cycle with ErrCycle. New acceptance text
+// cannot tick items ("[x]" counts only at create), and text that drops an
+// item still open is refused with an [*AcceptanceError] (Dropped): tick
+// or waive it first, so the change is on the record.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -405,7 +425,8 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 }
 
 // errClaimedFields ends the refusal of a status or assignee change to a
-// claimed issue; the server matches it to name the next step.
+// claimed issue. starfixd recognizes that refusal by its "is claimed by"
+// text (internal/server/errors.go) to name the next step.
 const errClaimedFields = "status and assignee change only through finish, close or a releasing handoff"
 
 // ErrStatusInProgress refuses update's status in_progress: only start
@@ -439,7 +460,8 @@ func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []
 	return out, err
 }
 
-// columns turns the patch into SET clauses over a fixed column list.
+// columns validates the patch and turns it into SET clauses over a fixed
+// column list, with their arguments.
 func (p IssuePatch) columns() ([]string, []any, error) {
 	var sets []string
 	var args []any
@@ -530,16 +552,20 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 	return sets, args, nil
 }
 
-// CloseIssue closes an issue. expected 0 skips the revision check: close
-// wins over concurrent edits (design §8). An issue with acceptance items
-// neither ticked nor waived is refused with an *AcceptanceError.
+// CloseIssue closes an issue, ends any claim on it and returns it; when a
+// live claim was another session's, that session gets a claim.lost inbox
+// item. expected 0 skips the revision check: close wins over concurrent
+// edits (design §8). An issue with acceptance items neither ticked nor
+// waived is refused with an [*AcceptanceError], one another principal
+// holds with a [*ForbiddenError] unless the actor is an admin, and one
+// already closed with ErrInvalid.
 func (s *Store) CloseIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
 	return s.closeIssue(ctx, actor, id, expected, reason, false)
 }
 
 // ForceClose is CloseIssue that closes despite open acceptance items,
 // listing them in the close event as acceptance_overridden. Only an admin
-// may force; anyone else is refused with a *ForbiddenError.
+// may force; anyone else is refused with a [*ForbiddenError].
 func (s *Store) ForceClose(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
 	return s.closeIssue(ctx, actor, id, expected, reason, true)
 }
@@ -552,12 +578,15 @@ func (s *Store) closeIssue(ctx context.Context, actor Actor, id IssueID, expecte
 }
 
 // ReopenIssue reopens a closed issue. expected 0 skips the revision check.
-// Close and reopen of an issue another principal holds are refused with a
-// *ForbiddenError unless the actor is an admin (guard).
+// An issue another principal holds is refused with a [*ForbiddenError]
+// unless the actor is an admin, and one that is not closed with
+// ErrInvalid.
 func (s *Store) ReopenIssue(ctx context.Context, actor Actor, id IssueID, expected Rev) (Issue, error) {
 	return s.setClosed(ctx, actor, id, expected, false, "", false)
 }
 
+// setClosed closes the issue id (closing) or reopens it, for CloseIssue,
+// ForceClose and ReopenIssue.
 func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected Rev, closing bool, reason string, force bool) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -666,6 +695,9 @@ func diff(a, b Issue) (map[string]any, map[string]any) {
 	return before, after
 }
 
+// fieldMap returns an issue's JSON fields without labels, rev and
+// updated_at. An Issue always encodes, since its metadata is valid JSON,
+// so the error returns are not reached.
 func fieldMap(is Issue) map[string]any {
 	is.Labels = nil
 	b, err := json.Marshal(is)
