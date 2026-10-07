@@ -44,6 +44,35 @@ func TestJSONRefusesDuplicateKeys(t *testing.T) {
 	}
 }
 
+// Text after the object makes the file unreadable to the harness, so
+// setup refuses it rather than call it registered, or rewrite the file
+// without it.
+func TestJSONRefusesTextAfterTheObject(t *testing.T) {
+	a := Agents["gemini"]
+	tests := []struct{ name, in string }{
+		{"a word", `{"mcpServers":{}} x`},
+		{"a stray brace", `{"mcpServers":{}}}`},
+		{"a stray bracket", `{"mcpServers":{}} ]`},
+		{"a comment", "{\"mcpServers\":{}}\n// keep this\n"},
+		{"a second object", `{"mcpServers":{}} {}`},
+		{"a registered entry, then a brace", a.Snippet(DefaultEntry) + "}"},
+	}
+	const want = "not JSON: text after the object"
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if a.Registered([]byte(tc.in), DefaultEntry) {
+				t.Errorf("Registered(%q) = true, want false", tc.in)
+			}
+			if out, res, err := a.Apply([]byte(tc.in), DefaultEntry); err == nil || err.Error() != want {
+				t.Errorf("Apply(%q) = %q, %s, %v; want error %q", tc.in, out, res, err, want)
+			}
+			if out, res, err := a.Remove([]byte(tc.in)); err == nil || err.Error() != want {
+				t.Errorf("Remove(%q) = %q, %s, %v; want error %q", tc.in, out, res, err, want)
+			}
+		})
+	}
+}
+
 // An entry with the right command but extra keys runs something else:
 // --check reports it, and Apply replaces the entry wholesale (C-8).
 func TestRegisteredRefusesExtras(t *testing.T) {
