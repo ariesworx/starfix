@@ -231,14 +231,18 @@ func TestImportBacklog(t *testing.T) {
 		}
 	}
 
+	// at also runs in subtests, through the checks below, and from there
+	// may mark this test failed but not stop it.
 	at := func(s string) time.Time {
 		tm, err := time.Parse(time.RFC3339Nano, s)
 		if err != nil {
-			t.Fatal(err)
+			t.Error(err)
 		}
 		return tm.UTC()
 	}
-	get := func(id store.IssueID) store.Issue {
+	// get takes the subtest's t: only its own goroutine may stop it.
+	get := func(t *testing.T, id store.IssueID) store.Issue {
+		t.Helper()
 		is, err := s.GetIssue(ctx, id)
 		if err != nil {
 			t.Fatal(err)
@@ -289,7 +293,7 @@ func TestImportBacklog(t *testing.T) {
 	}
 	for _, tc := range issueCases {
 		t.Run(string(tc.id), func(t *testing.T) {
-			is := get(tc.id)
+			is := get(t, tc.id)
 			if tc.check(is) != "true" {
 				t.Errorf("stored as %s", mustJSON(t, is))
 			}

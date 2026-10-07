@@ -50,6 +50,7 @@ func Import(ctx context.Context, st *store.Store, r io.Reader, opts Options) (*R
 	return rep, im.comments(ctx, lines)
 }
 
+// Fix lines shared by several kinds of problem.
 const (
 	fixReexport = "correct it in bd and export again, or delete the line, then import again"
 	fixNone     = "none needed; this is informational"
@@ -87,6 +88,8 @@ func parse(r io.Reader, principal string, rep *Report) ([]line, error) {
 	}
 }
 
+// parseLine maps b, the text of line n. It returns false for a line it
+// skips or cannot map, having recorded that in rep.
 func parseLine(b []byte, n int, principal string, rep *Report) (line, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
@@ -141,6 +144,9 @@ func parseLine(b []byte, n int, principal string, rep *Report) (line, bool) {
 	return l, true
 }
 
+// warnMapping reports a change mapIssue made to issue id, on line n, to
+// fit the store. kind names the change and detail its subject, such as
+// the bd status or the field.
 func warnMapping(rep *Report, kind, detail, id string, n int) {
 	key := kind + ":" + detail
 	switch kind {
@@ -181,7 +187,8 @@ type importer struct {
 	opts   Options
 	rep    *Report
 	inFile map[store.IssueID]*line
-	// stored maps every issue in the store before the run to its parent.
+	// stored holds every issue in the store before the run; their parents
+	// are in g.
 	stored map[store.IssueID]bool
 	// done holds issues this run imported (or found up to date).
 	done map[store.IssueID]bool
@@ -196,7 +203,10 @@ type graph struct {
 	blocks map[store.IssueID][]store.IssueID
 }
 
-// path returns a chain to … from when to already reaches from, else nil.
+// path reports whether an edge from → to would close a cycle: when to
+// already reaches from, through parent links and blocking edges, it
+// returns that chain, to first and from last; otherwise nil. When from
+// and to are the same, the chain is that one issue.
 func (g *graph) path(from, to store.IssueID) []store.IssueID {
 	if from == to {
 		return []store.IssueID{to}
@@ -229,6 +239,7 @@ func (g *graph) path(from, to store.IssueID) []store.IssueID {
 	return nil
 }
 
+// chain joins ids with arrows, for messages.
 func chain(ids []store.IssueID) string {
 	s := make([]string, len(ids))
 	for i, id := range ids {
@@ -237,6 +248,7 @@ func chain(ids []store.IssueID) string {
 	return strings.Join(s, " → ")
 }
 
+// strs returns ids as strings, in order, each once.
 func strs(ids []store.IssueID) []string {
 	var out []string
 	for _, id := range ids {
@@ -247,6 +259,8 @@ func strs(ids []store.IssueID) []string {
 	return out
 }
 
+// loadStore reads the issues the store already holds into im.stored, and
+// their parent links and blocking edges into im.g.
 func (im *importer) loadStore(ctx context.Context) error {
 	im.stored = map[store.IssueID]bool{}
 	im.g = graph{parent: map[store.IssueID]store.IssueID{}, blocks: map[store.IssueID][]store.IssueID{}}
@@ -290,6 +304,7 @@ func recordError(err error) bool {
 	return false
 }
 
+// count adds outcome o to c.
 func count(c *Counts, o store.ImportOutcome) {
 	switch o {
 	case store.ImportCreated:
@@ -351,6 +366,10 @@ func (im *importer) order(lines []line) []*line {
 	return out
 }
 
+// issues imports the issues, parents first. A parent that is dangling, or
+// would close a cycle, is reported and dropped, and the issue imported
+// without it. Like deps and comments, it reports a problem with one record
+// and goes on; it returns only an error that stops the run.
 func (im *importer) issues(ctx context.Context, lines []line) error {
 	for _, l := range im.order(lines) {
 		is := l.issue
@@ -405,8 +424,11 @@ func (im *importer) issues(ctx context.Context, lines []line) error {
 	return nil
 }
 
+// exists reports whether id was in the store before the run, or this run
+// imported it (in a dry run, would have).
 func (im *importer) exists(id store.IssueID) bool { return im.done[id] || im.stored[id] }
 
+// deps imports every line's dependencies, once all the issues are in.
 func (im *importer) deps(ctx context.Context, lines []line) error {
 	for i := range lines {
 		l := &lines[i]
@@ -419,6 +441,9 @@ func (im *importer) deps(ctx context.Context, lines []line) error {
 	return nil
 }
 
+// dep imports one dependency of line l. An unsupported type, a missing
+// end, a self-dependency or a blocking edge that would close a cycle is
+// reported and skipped.
 func (im *importer) dep(ctx context.Context, l *line, ref depRef) error {
 	d := ref.dep
 	edge := fmt.Sprintf("%s → %s (%s)", d.From, d.To, ref.bdType)
@@ -490,6 +515,8 @@ func (im *importer) dep(ctx context.Context, l *line, ref depRef) error {
 	return nil
 }
 
+// comments imports the comments of the issues that did not fail, and
+// counts those of the issues that did as failed.
 func (im *importer) comments(ctx context.Context, lines []line) error {
 	for i := range lines {
 		l := &lines[i]

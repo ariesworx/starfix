@@ -102,6 +102,8 @@ func unheld(raw map[string]json.RawMessage) []string {
 	return out
 }
 
+// empty reports whether v holds nothing worth keeping: nothing, null, or
+// a zero value.
 func empty(v json.RawMessage) bool {
 	switch string(bytes.TrimSpace(v)) {
 	case "", "null", `""`, "0", "false", "[]", "{}":
@@ -141,11 +143,15 @@ func decodeMetadata(raw json.RawMessage, emptyObjectIsNone bool) (json.RawMessag
 	return json.RawMessage(buf.Bytes()), nil
 }
 
+// coreStatus maps the statuses bd and starfix share; mapIssue maps the
+// rest.
 var coreStatus = map[string]store.Status{
 	"": store.StatusOpen, "open": store.StatusOpen, "in_progress": store.StatusInProgress,
 	"blocked": store.StatusBlocked, "deferred": store.StatusDeferred, "closed": store.StatusClosed,
 }
 
+// coreType maps the issue types bd and starfix share. mapIssue stores
+// any other as a task, labeled "bd-type:<name>" when that is a valid label.
 var coreType = map[string]store.IssueType{
 	"": store.TypeTask, "bug": store.TypeBug, "feature": store.TypeFeature,
 	"task": store.TypeTask, "epic": store.TypeEpic, "chore": store.TypeChore,
@@ -154,6 +160,7 @@ var coreType = map[string]store.IssueType{
 // commentIDShape is the form starfix gives comment IDs.
 var commentIDShape = regexp.MustCompile(`^[a-z2-7]{16}$`)
 
+// idEncoding spells comment IDs in commentIDShape's alphabet.
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // commentID maps a bd comment ID to a starfix one. bd IDs are UUIDs (once
@@ -181,13 +188,17 @@ func commentID(issue store.IssueID, raw json.RawMessage, c bdComment) string {
 
 // line is one parsed issue line, mapped to the store's types.
 type line struct {
-	n        int
-	issue    store.Issue
-	parents  []store.IssueID
+	n     int // the line number
+	issue store.Issue
+	// parents are its parent-child targets; the first is used.
+	parents []store.IssueID
+	// deps are its other outgoing dependencies.
 	deps     []depRef
 	comments []store.Comment
 }
 
+// depRef is a dependency with the type bd gave it, which messages name
+// when the store's differs or the store has none.
 type depRef struct {
 	dep    store.Dep
 	bdType string
@@ -360,6 +371,8 @@ func cleanFields(is *store.Issue, warn func(kind, detail string)) {
 	}
 }
 
+// cleanLine returns [safetext.CleanLine] of v, and warns, naming field,
+// when that changes it.
 func cleanLine(field, v string, warn func(kind, detail string)) string {
 	c := safetext.CleanLine(v)
 	if c != v {
@@ -368,6 +381,7 @@ func cleanLine(field, v string, warn func(kind, detail string)) string {
 	return c
 }
 
+// cleanText is cleanLine for multi-line text, with [safetext.CleanText].
 func cleanText(field, v string, warn func(kind, detail string)) string {
 	c := safetext.CleanText(v)
 	if c != v {

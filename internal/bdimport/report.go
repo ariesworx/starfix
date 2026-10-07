@@ -15,6 +15,7 @@ type Counts struct {
 	Failed int `json:"failed"`
 }
 
+// total counts the records of every outcome.
 func (c Counts) total() int { return c.Created + c.Updated + c.Unchanged + c.Stale + c.Failed }
 
 // Levels of a Problem.
@@ -49,7 +50,7 @@ type Report struct {
 	Skipped  int       `json:"skipped"`
 	Problems []Problem `json:"problems"`
 
-	merged map[string]int
+	merged map[string]int // a warning's key → its index in Problems
 }
 
 // Errors counts error-level problems.
@@ -98,7 +99,8 @@ func plural(n int, w string) string {
 	return w + "s"
 }
 
-// fail records an error.
+// fail records an error and returns it, so the caller can add its IDs.
+// The pointer is valid only until the next problem is recorded.
 func (r *Report) fail(kind string, lineNo int, fix, format string, a ...any) *Problem {
 	p := Problem{Level: LevelError, Kind: kind, Message: fmt.Sprintf(format, a...), Fix: fix}
 	if lineNo > 0 {
