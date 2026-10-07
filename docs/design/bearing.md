@@ -147,8 +147,10 @@ rely on it alone.
   human approval.
 - **Queue only until the server runs.** The train orders, tests and opens pull
   requests; a human merges. Merging by the train waits for the server
-  `bearingd`, is then opt-in per project, and still requires green CI. Never
-  force-push; never push to a protected branch.
+  `bearingd`, is then opt-in per project, and still requires green CI. The
+  one exception is an epic branch: from B3 the train may merge a child with
+  green CI into `epic/*`, never `main` (§3.13). Never force-push; never push to
+  a protected branch.
 - Only the merge train holds push credentials. Agents never do.
 
 ### 3.6 Structured handoff
@@ -283,8 +285,9 @@ share files, and depend on each other's code, not just each other's status.
    epic; epics are where reservations would pay off first, if the log shows
    they are needed.
 6. **Discovered work waits.** A child an agent files during the epic is created
-   `deferred` with `discovered-from`. It is dispatched only after a human (or a
-   per-epic policy, such as "under N points and under budget") accepts it. Bugs
+   `deferred` with `discovered-from`. It is dispatched only after a human
+   accepts it. A per-epic policy (such as "under N points and under budget")
+   may replace the human later, once spend forecasts are trustworthy. Bugs
    outside the epic go to the backlog, not into the epic.
 7. **Budget for the whole epic.** The governor caps spend across all children
    (`per_epic_usd`), forecasts remaining cost from children done so far, and
@@ -371,7 +374,7 @@ Bearing stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan)).
 | B0 | Supervisor (§3.1), typed state (§3.2), `bearing who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
 | B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), conflict log (§3.4), Codex and Gemini | 3 |
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
-| B3 | Merge train in queue mode (§3.5), formula runner (§3.10), epics (§3.13) | 6 (locks, gates, molecules) |
+| B3 | Merge train in queue mode, merging only into `epic/*` (§3.5), formula runner (§3.10), epics (§3.13) | 6 (locks, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
 | B5 | Server `bearingd` running unattended; merge train may merge (opt-in) | 6 |
 | — | Reservations (§3.4), only if the conflict log shows rework is expensive | 6 (reservations) |
@@ -390,20 +393,12 @@ claims, no orphaned processes and no reaped live agents.
 | 4 | Build the Gas City shim (§6). |
 | 5 | Worktrees and pull requests handle conflicts; log them, and defer reservations until the log justifies them (§3.4). |
 | 6 | Bearing lives in this repository as `cmd/bearing` and `cmd/bearingd`, in the same Go module, released under one tag with starfix, so it never ships against a protocol starfix does not speak. |
+| 7 | Epics integrate on an `epic/<id>` branch by default; small epics may opt into `integration = "trunk"` (§3.13). |
+| 8 | A human accepts discovered children; a per-epic policy may come later, once spend forecasts are trustworthy (§3.13). |
+| 9 | A person or a planning agent may plan an epic; dispatch always waits for a human to approve the plan (§3.13). |
+| 10 | From B3 the merge train may merge children with green CI into `epic/*`, never `main`, before the server runs; `main` still waits for a human. This narrows decision 2 (§3.5, §3.13). |
 
 ## 8. Open questions
 
-1. **Epic integration default** (§3.13). An epic branch keeps `main` whole but
-   adds a long-lived branch to keep fresh. Trunk with per-child pull requests is
-   simpler but lands half-done epics on `main` unless the code is hidden behind
-   flags. Recommended: branch by default, trunk opt-in for small epics.
-2. **Who may accept discovered children** (§3.13). Recommended: a human by
-   default; a per-epic policy later, once spend forecasts are trustworthy.
-3. **Who plans epics.** A person, or a planning agent whose output a person
-   approves. Recommended: both allowed; dispatch always waits for approval.
-4. **Epic-branch merges before the server runs.** Decision 2 keeps the train
-   to queueing until the server `bearingd` exists. Landing children on an epic
-   branch is a merge, though not to `main`. Either a human merges each child
-   into the epic branch until then, or the train may merge into `epic/*` only
-   (never `main`) from B3. Recommended: allow `epic/*` merges with green CI from
-   B3; `main` still waits for a human.
+None at present.
+
