@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -110,7 +111,7 @@ func (s *Store) Prune(ctx context.Context, agentKeep, inboxKeep time.Duration) (
 			}
 			stale = append(stale, [2]string{p, sess})
 		}
-		if err := rows.Close(); err != nil {
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return fmt.Errorf("prune agents: %w", err)
 		}
 		for _, k := range stale {

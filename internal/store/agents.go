@@ -181,7 +181,7 @@ func capSessions(ctx context.Context, w *wtx, principal string) error {
 		}
 		old = append(old, sess)
 	}
-	if err := rows.Close(); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("oldest sessions of %s: %w", principal, err)
 	}
 	for _, sess := range old {
