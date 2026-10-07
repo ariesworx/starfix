@@ -103,9 +103,15 @@ func TestStartHandoffFinish(t *testing.T) {
 		t.Fatalf("comments:\n%s", out)
 	}
 
+	// Only bob, or an admin, may change it while he holds it (D1).
 	r = alice.run("v0.2.0", "finish", id)
-	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "fix: leave it to bob") {
+	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "sfx: "+id+" is held by bob (session cli) until ") ||
+		!strings.Contains(r.stderr, "fix: ask bob to hand it off (`sfx handoff "+id+" --release`)") {
 		t.Fatalf("alice finish: exit %d\n%s", r.code, r.stderr)
+	}
+	r = alice.run("v0.2.0", "update", id, "--title", "mine", "--json")
+	if e := decode[map[string]proto.Error](t, r.stdout)["error"]; r.code != cli.ExitFailure || e.Code != proto.CodeForbidden {
+		t.Fatalf("alice update: exit %d %+v", r.code, e)
 	}
 	r = bob.run("v0.2.0", "finish", id, "--reason", "fixed")
 	if r.code != cli.ExitFailure || !strings.Contains(r.stderr, "acceptance items neither ticked nor waived: 1\nfix: tick what is met with `sfx accept "+id+" 1`") {

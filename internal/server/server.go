@@ -288,8 +288,8 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bridge frame: %w", err)
 	}
-	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) {
-		return nil, fmt.Errorf("first frame is %q, not a bridge frame with a valid principal", f.T)
+	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) || store.Reserved(f.Principal) {
+		return nil, fmt.Errorf("first frame is %q, not a bridge frame with a valid, unreserved principal", f.T)
 	}
 	sess.actor.Principal = f.Principal
 

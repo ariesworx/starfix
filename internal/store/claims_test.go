@@ -36,7 +36,7 @@ func TestClaimTakeAndTakeover(t *testing.T) {
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{Title: "work"})
 
-	_, c1, err := s.StartIssue(ctx, alice, is.ID, 0)
+	_, c1, err := s.StartIssue(ctx, alice, is.ID, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestClaimTakeAndTakeover(t *testing.T) {
 	// no event.
 	clk.add(time.Minute)
 	seq := lastSeq(t, s)
-	_, c2, err := s.StartIssue(ctx, alice, is.ID, time.Hour)
+	_, c2, err := s.StartIssue(ctx, alice, is.ID, time.Hour, false)
 	if err != nil || c2.Epoch != 1 || !c2.ExpiresAt.Equal(clk.now().Add(time.Hour)) {
 		t.Fatalf("same session: %+v, %v", c2, err)
 	}
@@ -56,9 +56,8 @@ func TestClaimTakeAndTakeover(t *testing.T) {
 		t.Error("renewing by start wrote an event")
 	}
 
-	// Another session of the same principal takes it over.
-	alice2 := Actor{Principal: "alice", Session: "sess-a2", Machine: "desktop"}
-	_, c3, err := s.StartIssue(ctx, alice2, is.ID, 0)
+	// Another session of the same principal takes it over, when asked to.
+	_, c3, err := s.StartIssue(ctx, alice2, is.ID, 0, true)
 	if err != nil || c3.Epoch != 2 || c3.Holder != alice2 {
 		t.Fatalf("takeover: %+v, %v", c3, err)
 	}
@@ -71,7 +70,7 @@ func TestClaimTakeAndTakeover(t *testing.T) {
 	}
 
 	// Another principal is refused while the lease runs.
-	if _, _, err := s.StartIssue(ctx, bob, is.ID, 0); !errors.As(err, new(*HeldError)) {
+	if _, _, err := s.StartIssue(ctx, bob, is.ID, 0, false); !errors.As(err, new(*HeldError)) {
 		t.Fatalf("bob while held: %v", err)
 	}
 
@@ -89,17 +88,17 @@ func TestClaimExpiry(t *testing.T) {
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{Title: "work"})
 	other := mustCreate(t, s, NewIssue{Title: "other"})
-	if _, _, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice, is.ID, 0, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.StartIssue(ctx, alice, other.ID, time.Hour); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice, other.ID, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// Past the lease, the claim holds nothing even before the reaper runs:
 	// bob may take it, under a new epoch.
 	clk.add(DefaultLease + time.Second)
-	got, c, err := s.StartIssue(ctx, bob, is.ID, 0)
+	got, c, err := s.StartIssue(ctx, bob, is.ID, 0, false)
 	if err != nil || c.Epoch != 2 || got.Assignee != "bob" {
 		t.Fatalf("take expired: %+v %+v, %v", got, c, err)
 	}
@@ -134,7 +133,7 @@ func TestClaimExpiry(t *testing.T) {
 		t.Fatalf("stale epoch after reap: %v", err)
 	}
 	// Taking it again raises the epoch past every earlier holder.
-	if _, c, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil || c.Epoch != 3 {
+	if _, c, err := s.StartIssue(ctx, alice, is.ID, 0, false); err != nil || c.Epoch != 3 {
 		t.Fatalf("retake: %+v, %v", c, err)
 	}
 }
@@ -144,11 +143,10 @@ func TestRenewClaims(t *testing.T) {
 	ctx := t.Context()
 	a := mustCreate(t, s, NewIssue{Title: "a"})
 	b := mustCreate(t, s, NewIssue{Title: "b"})
-	alice2 := Actor{Principal: "alice", Session: "sess-a2", Machine: "desktop"}
-	if _, _, err := s.StartIssue(ctx, alice, a.ID, 0); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice, a.ID, 0, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.StartIssue(ctx, alice2, b.ID, 0); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice2, b.ID, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	start := clk.now()
@@ -189,7 +187,7 @@ func TestRenewClaims(t *testing.T) {
 	if _, err := s.RenewClaims(ctx, alice, time.Second, false); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("short lease: %v", err)
 	}
-	if _, _, err := s.StartIssue(ctx, alice, a.ID, 8*24*time.Hour); !errors.Is(err, ErrInvalid) {
+	if _, _, err := s.StartIssue(ctx, alice, a.ID, 8*24*time.Hour, false); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("long lease: %v", err)
 	}
 }
@@ -200,12 +198,12 @@ func TestClaimEndsOnCloseAndRelease(t *testing.T) {
 	a := mustCreate(t, s, NewIssue{Title: "a"})
 	b := mustCreate(t, s, NewIssue{Title: "b"})
 	for _, id := range []IssueID{a.ID, b.ID} {
-		if _, _, err := s.StartIssue(ctx, alice, id, 0); err != nil {
+		if _, _, err := s.StartIssue(ctx, alice, id, 0, false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Anyone may close; the claim ends with it.
-	if _, err := s.CloseIssue(ctx, bob, a.ID, 0, "dup"); err != nil {
+	// An admin may close it; the claim ends with it.
+	if _, err := s.CloseIssue(ctx, dana, a.ID, 0, "dup"); err != nil {
 		t.Fatal(err)
 	}
 	// Release with a stale epoch is refused; with the current one it ends
@@ -225,14 +223,15 @@ func TestClaimEndsOnCloseAndRelease(t *testing.T) {
 	if err != nil || len(held) != 0 {
 		t.Fatalf("alice's claims: %+v, %v", held, err)
 	}
-	if _, c, err := s.StartIssue(ctx, bob, b.ID, 0); err != nil || c.Epoch != 2 {
+	if _, c, err := s.StartIssue(ctx, bob, b.ID, 0, false); err != nil || c.Epoch != 2 {
 		t.Fatalf("bob takes released: %+v, %v", c, err)
 	}
 }
 
-// An issue set in_progress without a claim (by hand, or before claims
-// existed) stays held by its assignee, with no lease to run out.
-func TestUnclaimedInProgressStaysHeld(t *testing.T) {
+// An issue in_progress without a claim (before claims existed, or
+// imported) holds nothing: the reaper leaves it alone, and anyone may
+// start it.
+func TestUnclaimedInProgressHoldsNothing(t *testing.T) {
 	s, clk := clockStore(t)
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{Title: "old", Status: StatusInProgress, Assignee: "alice"})
@@ -240,10 +239,7 @@ func TestUnclaimedInProgressStaysHeld(t *testing.T) {
 	if reaped, err := s.ReapClaims(ctx); err != nil || len(reaped) != 0 {
 		t.Fatalf("reap: %+v, %v", reaped, err)
 	}
-	if _, _, err := s.StartIssue(ctx, bob, is.ID, 0); !errors.As(err, new(*HeldError)) {
-		t.Fatalf("bob: %v", err)
-	}
-	if _, c, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil || c.Epoch != 1 {
-		t.Fatalf("alice claims her own: %+v, %v", c, err)
+	if got, c, err := s.StartIssue(ctx, bob, is.ID, 0, false); err != nil || c.Epoch != 1 || got.Assignee != "bob" {
+		t.Fatalf("bob starts it: %+v %+v, %v", got, c, err)
 	}
 }

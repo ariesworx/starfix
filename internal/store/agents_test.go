@@ -107,7 +107,7 @@ func TestWho(t *testing.T) {
 		id    IssueID
 		lease time.Duration
 	}{{alice, lapsed.ID, time.Minute}, {alice, a2.ID, 0}, {alice, a1.ID, 0}, {alice2, b1.ID, 0}} {
-		if _, _, err := s.StartIssue(ctx, take.a, take.id, take.lease); err != nil {
+		if _, _, err := s.StartIssue(ctx, take.a, take.id, take.lease, false); err != nil {
 			t.Fatal(err)
 		}
 	}

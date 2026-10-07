@@ -134,6 +134,7 @@ socket: /run/starfix/starfixd.sock
 # systemd_unit: starfixd.service   # lets `starfixd upgrade` restart and health-check it
 # log_level: info                  # debug adds a line per request; warn, error
 # log_format: text                 # or json, for a log shipper
+# admins: [alice]                  # may change issues others hold and force a close
 YAML
 starfixd serve        # run it under systemd
 ```
@@ -207,21 +208,21 @@ command's usage; `--json` prints one JSON document, errors included.
 
 | Command | Does |
 |---|---|
-| `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it |
+| `start [ID]` | Claim an issue (the top ready one without ID) for `--for` (default 8h, at most 24h) and show it with its last handoff and branch; `--branch` checks the branch out, `--worktree DIR` makes a worktree on it; `--take` takes it over from another session of yours that holds it |
 | `finish ID` | Close your issue with `--reason`, a `--handoff` note and `--discovered TITLE` work, in one step; ends the claim. The note can carry the handoff fields below. `--tick 1,3` and `--waive N=REASON` settle acceptance items first; it is refused while any is open |
-| `accept ID N...` | Tick acceptance items (`--undo` unticks, `--waive REASON` waives them). Items come from the acceptance text: each Markdown list item (`- [ ] x`, `- x`, `1. x`), or the whole text as one; `start` and `show` print them as a checklist |
+| `accept ID N...` | Tick acceptance items (`--undo` unticks, `--waive REASON` waives them). Items come from the acceptance text: each Markdown list item (`- [ ] x`, `- x`, `1. x`), or the whole text as one; `start` and `show` print them as a checklist. A `- [x]` box counts as ticked only in the text an issue is created or imported with; later edits to the text tick nothing |
 | `handoff ID NOTE` | Leave a note for whoever continues; `--release` ends the claim and unassigns it so another can start it. Optional fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P`, which puts it in P's inbox. `start` and `show` print the latest; the worktree, a path on your machine, only to your own principal |
 | `inbox` | List your unread inbox, newest first: lost claims, handoffs to you, mentions, assignments (`--all` includes read ones, `-n N`); `--ack ID`, repeatable or comma-separated, or `--ack-all` marks them read |
 | `watch` | Print your inbox items as they happen, until interrupted (ctrl-c exits 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it fell behind and missed items (`sfx inbox` lists them) |
-| `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline |
+| `away DURATION` | Extend all your claims, in every session, to at least now plus DURATION (up to 7d), for example before going offline. Only from your own terminal: the server refuses it from an agent's session (`STARFIX_SESSION` or a harness session id set) |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d): principal, session, machine, harness, when last seen and the issues each holds. Every principal sees every machine name |
 | `create` | Create an issue and print its id; similar closed issues, if any, go to stderr |
 | `show` | Show an issue, its dependencies, acceptance checklist and similar closed issues (`--compact` for short) |
 | `list` | List open issues (`--status`, `--all`) |
 | `ready` | List issues nothing holds back |
 | `blocked` | List issues held back by open blockers |
-| `update` | Change fields; `--rev N` makes it a strict compare-and-swap |
-| `close`, `reopen` | Close or reopen an issue. Close is refused while an acceptance item is open; `--force` closes anyway and records the open items in the event |
+| `update` | Change fields; `--rev N` makes it a strict compare-and-swap. It cannot set `in_progress` (`start` does), change the status or assignee of a claimed issue, or drop an acceptance item that is still open |
+| `close`, `reopen` | Close or reopen an issue. Close is refused while an acceptance item is open; `--force`, for admins only, closes anyway and records the open items in the event |
 | `dep` | Add or remove a dependency: FROM depends on TO |
 | `label` | Add or remove labels |
 | `comment`, `comments` | Add a comment; list an issue's comments |
@@ -236,7 +237,9 @@ command's usage; `--json` prints one JSON document, errors included.
 | `version` | Print the version |
 
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
-refused.
+refused. A refusal because someone else holds the issue, or because the
+change is for admins, exits 1 like any other; `--json` gives its code,
+`forbidden`.
 
 #### Untrusted text
 
@@ -273,6 +276,14 @@ keeps it from acting on a terminal or posing as its own output:
 Settings come from flags, then `STARFIXD_*` environment variables, then
 `/etc/starfix/starfixd.yaml`, then defaults. A password is refused on the
 command line, and a config file that holds one must be mode 0600.
+
+Admins are principals listed under `admins:` in the config file, or in
+`$STARFIXD_ADMINS` (comma-separated); `serve` reads them when it starts.
+Only an admin may change an issue another principal holds, or
+`close --force`; each such override is recorded as an `admin.override`
+event naming the holder. Nothing over the protocol or MCP reads or changes
+the list. The names `starfixd` (the claim reaper) and `import` (the bd
+importer) are reserved: no key may use them, and neither may be an admin.
 
 `starfixd upgrade` restarts the unit as the daemon's user through `sudo -n`,
 so give that user exactly this rule (`visudo -f /etc/sudoers.d/starfix`,
@@ -392,13 +403,19 @@ records a handoff note and files the work found on the way, linked
 itself.
 
 Taking an issue claims it: it becomes `in_progress`, assigned to you, and
-leased to your session. Another principal's `start`, `finish` or release
-is refused, with the next ready issue to take instead, until the lease runs
-out; then the server returns the issue to `open`. An agent's lease is 15
-minutes, and `sfx mcp` renews it every minute while the agent runs, so a
-session that dies lets its issues go within 15 minutes. A claim taken from
-a terminal lasts 8 hours (`--for`), and `sfx away 4h` extends all of yours.
-Your own new session can take over your claim at once. Each new holder
+leased to your session. Only a claim holds an issue; `update` cannot set
+`in_progress`. While the lease runs, another principal's `start` is
+refused with the next ready issue to take instead, and its `update`,
+`close`, `reopen`, `finish`, `handoff` and `accept` are refused with
+`forbidden`, naming the holder: ask them to hand it off, wait for the
+lease, or ask an admin. Anyone may still `comment`, label or link it. When
+the lease runs out the server returns the issue to `open`. An agent's
+lease is 15 minutes, and `sfx mcp` renews it every minute while the agent
+runs, so a session that dies lets its issues go within 15 minutes. A claim
+taken from a terminal lasts 8 hours (`--for`, at most 24h), and
+`sfx away 4h` extends all of yours. Another session of your own takes over
+your live claim only when asked (`sfx start ID --take`, or the MCP
+`start` tool's `take`); the same session reconnecting keeps it. Each new holder
 raises the claim's epoch; `finish` and `handoff --release` refuse an epoch
 other than the current one (`--epoch N`; `sfx mcp` passes it), so a
 session that lost its claim cannot close work someone has since taken.
@@ -406,7 +423,8 @@ session that lost its claim cannot close work someone has since taken.
 
 Each principal has an inbox. The server puts an item there in the same
 transaction as its cause: `claim.lost` when the reaper ends your
-session's expired claim or another session takes it over; `handoff` when
+session's expired claim, another session takes it over, or someone else
+(an admin, or your other session) closes or releases it; `handoff` when
 a handoff names you with `--to`; `mention` when a comment, or a handoff or
 finish note, says `@you` (only principals the server has seen, and never
 yourself); `assigned` when someone else assigns you an issue. `sfx inbox`

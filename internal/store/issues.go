@@ -293,6 +293,9 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 			return Issue{}, fmt.Errorf("insert label: %w", err)
 		}
 	}
+	if err := tickInText(ctx, w, id, in.Acceptance); err != nil {
+		return Issue{}, err
+	}
 	out, err := loadIssue(ctx, w.tx, id)
 	if err != nil {
 		return Issue{}, err
@@ -304,6 +307,15 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // returns the new state. A new assignee other than the actor gets an inbox
 // item. A stale rev, or a concurrent write that keeps
 // winning, returns ErrConflict.
+//
+// Holds come only from claims: status in_progress is refused (start sets
+// it), and so is a change of status or assignee while the issue is
+// claimed (finish or a releasing handoff ends the claim first). An issue
+// another principal holds is refused with a *ForbiddenError unless the
+// actor is an admin (guard). New acceptance text cannot tick items ("[x]"
+// counts only at create), and text that drops an item still open is
+// refused with an *AcceptanceError (Dropped): tick or waive it first, so
+// the change is on the record.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -327,14 +339,30 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		if patch.Status != nil && before.Status == StatusClosed {
 			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
 		}
+		if len(sets) == 0 {
+			out = before
+			return nil
+		}
+		c, err := loadClaim(ctx, w.tx, id)
+		if err != nil {
+			return err
+		}
+		if err := w.guard(ctx, c, "update"); err != nil {
+			return err
+		}
+		if c.active(w.now) && (patch.Status != nil && *patch.Status != before.Status ||
+			patch.Assignee != nil && *patch.Assignee != before.Assignee) {
+			return fmt.Errorf("%w: issue %s is claimed by %s/%s; %s", ErrInvalid, id, c.Holder.Principal, c.Holder.Session, errClaimedFields)
+		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
 			if err := checkEdge(ctx, w.tx, id, *patch.ParentID); err != nil {
 				return err
 			}
 		}
-		if len(sets) == 0 {
-			out = before
-			return nil
+		if patch.Acceptance != nil {
+			if err := checkDropped(ctx, w.tx, before, *patch.Acceptance); err != nil {
+				return err
+			}
 		}
 		out, err = casUpdate(ctx, w, before, sets, args)
 		if err != nil {
@@ -354,6 +382,14 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 	}
 	return out, nil
 }
+
+// errClaimedFields ends the refusal of a status or assignee change to a
+// claimed issue; the server matches it to name the next step.
+const errClaimedFields = "status and assignee change only through finish, close or a releasing handoff"
+
+// ErrStatusInProgress refuses update's status in_progress: only start
+// sets it, with a claim. It wraps ErrInvalid.
+var ErrStatusInProgress = fmt.Errorf("%w: status in_progress is set only by start, which claims the issue", ErrInvalid)
 
 // casUpdateSQL is the one UPDATE of issues. {sets} comes from a fixed
 // column list, never from input.
@@ -406,6 +442,9 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 	if p.Status != nil {
 		if !p.Status.Valid() || *p.Status == StatusClosed {
 			return nil, nil, fmt.Errorf("%w: status %q (close with CloseIssue)", ErrInvalid, *p.Status)
+		}
+		if *p.Status == StatusInProgress {
+			return nil, nil, ErrStatusInProgress
 		}
 		add("status", string(*p.Status))
 	}
@@ -474,7 +513,8 @@ func (s *Store) CloseIssue(ctx context.Context, actor Actor, id IssueID, expecte
 }
 
 // ForceClose is CloseIssue that closes despite open acceptance items,
-// listing them in the close event as acceptance_overridden.
+// listing them in the close event as acceptance_overridden. Only an admin
+// may force; anyone else is refused with a *ForbiddenError.
 func (s *Store) ForceClose(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
 	return s.closeIssue(ctx, actor, id, expected, reason, true)
 }
@@ -487,6 +527,8 @@ func (s *Store) closeIssue(ctx context.Context, actor Actor, id IssueID, expecte
 }
 
 // ReopenIssue reopens a closed issue. expected 0 skips the revision check.
+// Close and reopen of an issue another principal holds are refused with a
+// *ForbiddenError unless the actor is an admin (guard).
 func (s *Store) ReopenIssue(ctx context.Context, actor Actor, id IssueID, expected Rev) (Issue, error) {
 	return s.setClosed(ctx, actor, id, expected, false, "", false)
 }
@@ -506,6 +548,20 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 		}
 		if expected != 0 && before.Rev != expected {
 			return fmt.Errorf("issue %s at rev %d, not %d: %w", id, before.Rev, expected, ErrConflict)
+		}
+		if force && !w.admin {
+			return &ForbiddenError{ID: id, Action: "close --force"}
+		}
+		c, err := loadClaim(ctx, w.tx, id)
+		if err != nil {
+			return err
+		}
+		op := "reopen"
+		if closing {
+			op = "close"
+		}
+		if err := w.guard(ctx, c, op); err != nil {
+			return err
 		}
 		if closing {
 			out, err = closeTx(ctx, w, before, reason, force)
@@ -543,6 +599,9 @@ func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force boo
 	}
 	c, err := loadClaim(ctx, w.tx, before.ID)
 	if err != nil {
+		return Issue{}, err
+	}
+	if err := w.ended(ctx, c, "closed"); err != nil {
 		return Issue{}, err
 	}
 	if err := releaseClaim(ctx, w, c); err != nil {

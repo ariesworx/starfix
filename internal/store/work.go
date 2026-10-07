@@ -18,14 +18,15 @@ import (
 const MaxDiscovered = 20
 
 // StartIssue takes an issue for the actor for lease (DefaultLease when
-// zero): it claims it and sets it in_progress, assigned to the actor's
-// principal. With an empty id it takes the first issue Ready would list,
-// or returns ErrNothingReady. Taking an issue the actor's own session
-// holds extends the lease and changes nothing else; taking one another
-// session of the same principal holds takes it over under a new epoch;
-// one another principal holds is refused with a *HeldError, and a closed
-// one with ErrInvalid.
-func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease time.Duration) (Issue, Claim, error) {
+// zero, at most MaxClaimLease): it claims it and sets it in_progress,
+// assigned to the actor's principal. With an empty id it takes the first
+// issue Ready would list, or returns ErrNothingReady. Taking an issue the
+// actor's own session holds extends the lease and changes nothing else.
+// One another session of the same principal holds under a live claim is
+// refused with a *HeldError (Own), unless take is set, which takes it
+// over under a new epoch; one another principal holds is refused with a
+// *HeldError, and a closed one with ErrInvalid.
+func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease time.Duration, take bool) (Issue, Claim, error) {
 	if id != "" {
 		if err := id.Validate(); err != nil {
 			return Issue{}, Claim{}, err
@@ -34,7 +35,7 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 	if lease == 0 {
 		lease = DefaultLease
 	}
-	if err := checkLease(lease); err != nil {
+	if err := checkLease(lease, MaxClaimLease); err != nil {
 		return Issue{}, Claim{}, err
 	}
 	var out Issue
@@ -61,10 +62,13 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 		if err != nil {
 			return err
 		}
-		if by := heldBy(c, before, w.now); by != "" && by != w.actor.Principal {
-			return &HeldError{ID: target, By: by}
+		if c.active(w.now) && c.Holder != w.actor {
+			own := c.Holder.Principal == w.actor.Principal
+			if !own || !take {
+				return &HeldError{ID: target, By: c.Holder.Principal, Own: own, Session: c.Holder.Session}
+			}
 		}
-		if claim, err = take(ctx, w, c, lease); err != nil {
+		if claim, err = takeClaim(ctx, w, c, lease); err != nil {
 			return err
 		}
 		out = before
@@ -112,9 +116,9 @@ type finished struct {
 // and files the work discovered while doing it, all in one transaction:
 // either everything is written or nothing is. It returns the closed issue
 // and the new IDs, in the order given. An issue another principal holds
-// is refused with a *HeldError (close overrides that); a non-zero epoch
-// that is not the claim's current one with a *StaleEpochError; a closed
-// issue with ErrInvalid.
+// is refused with a *ForbiddenError unless the actor is an admin (guard);
+// a non-zero epoch that is not the claim's current one with a
+// *StaleEpochError; a closed issue with ErrInvalid.
 func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, f Finish) (Issue, []IssueID, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, nil, err
@@ -174,7 +178,10 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 		if err != nil {
 			return err
 		}
-		if err := checkHold(c, before, w.actor, epoch, w.now); err != nil {
+		if err := w.guard(ctx, c, "finish"); err != nil {
+			return err
+		}
+		if err := checkEpoch(c, epoch); err != nil {
 			return err
 		}
 		if !f.Accept.empty() {
@@ -212,10 +219,11 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 // without closing it, telling the principal it is handed to and those its
 // note mentions. With
 // release it also lets the issue go, so another can start it: the claim
-// ends, in_progress becomes open and the assignee is cleared. Releasing an
-// issue another principal holds is refused with a *HeldError, a stale
-// epoch with a *StaleEpochError, and a closed issue with ErrInvalid; a
-// note alone is accepted on any issue. With an idempotency key (idem), a
+// ends, in_progress becomes open and the assignee is cleared. A handoff
+// on an issue another principal holds is refused with a *ForbiddenError
+// unless the actor is an admin (guard; a comment needs no hold); a
+// release naming a stale epoch with a *StaleEpochError, and a release of
+// a closed issue with ErrInvalid. With an idempotency key (idem), a
 // repeat returns the first result and writes nothing.
 func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool, idem string) (Issue, error) {
 	if err := id.Validate(); err != nil {
@@ -245,15 +253,21 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 		if err != nil {
 			return err
 		}
+		c, err := loadClaim(ctx, w.tx, id)
+		if err != nil {
+			return err
+		}
+		if err := w.guard(ctx, c, "handoff"); err != nil {
+			return err
+		}
 		if release {
 			if before.Status == StatusClosed {
 				return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
 			}
-			c, err := loadClaim(ctx, w.tx, id)
-			if err != nil {
+			if err := checkEpoch(c, epoch); err != nil {
 				return err
 			}
-			if err := checkHold(c, before, w.actor, epoch, w.now); err != nil {
+			if err := w.ended(ctx, c, "released"); err != nil {
 				return err
 			}
 			if err := releaseClaim(ctx, w, c); err != nil {

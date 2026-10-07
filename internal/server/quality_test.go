@@ -83,7 +83,11 @@ func TestDispatchAcceptance(t *testing.T) {
 	}
 
 	b := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "other", Acceptance: "must be fast"})
-	mustCall[proto.WriteResult](t, s, bob, proto.OpClose, proto.CloseArgs{ID: b.ID, Force: true})
+	if _, perr := call[proto.WriteResult](t, s, bob, proto.OpClose, proto.CloseArgs{ID: b.ID, Force: true}); perr == nil ||
+		perr.Code != proto.CodeForbidden || perr.Message != "close --force is for starfix admins" {
+		t.Fatalf("force close by bob = %+v", perr)
+	}
+	mustCall[proto.WriteResult](t, s, dana, proto.OpClose, proto.CloseArgs{ID: b.ID, Force: true})
 }
 
 // create and show name up to three similar closed issues.

@@ -17,10 +17,12 @@ import (
 var (
 	issueTypes   = []any{"task", "bug", "feature", "epic", "chore"}
 	openStatuses = []any{"open", "in_progress", "blocked", "deferred"}
-	allStatuses  = append(append([]any{}, openStatuses...), "closed")
-	depTypes     = []any{"blocks", "conditional-blocks", "waits-for", "related", "discovered-from", "duplicates", "supersedes"}
-	actions      = []any{"add", "rm"}
-	states       = []any{"done", "partial", "blocked"}
+	// setStatuses are what update may set: start alone sets in_progress.
+	setStatuses = []any{"open", "blocked", "deferred"}
+	allStatuses = append(append([]any{}, openStatuses...), "closed")
+	depTypes    = []any{"blocks", "conditional-blocks", "waits-for", "related", "discovered-from", "duplicates", "supersedes"}
+	actions     = []any{"add", "rm"}
+	states      = []any{"done", "partial", "blocked"}
 )
 
 // Inputs. Field tags are the schema's descriptions; keep them terse, since
@@ -159,7 +161,8 @@ type PageIn struct {
 
 // StartIn takes an issue.
 type StartIn struct {
-	ID string `json:"id,omitempty"`
+	ID   string `json:"id,omitempty"`
+	Take bool   `json:"take,omitempty"`
 }
 
 // FinishIn closes an issue with what the next person needs.
@@ -433,7 +436,7 @@ func (s *Server) register() {
 	add(s, tool{name: "inbox", desc: "Lost claims, handoffs, mentions, assignments; ack marks read.", ann: idem, retry: true,
 		showsInbox: true},
 		func(ctx context.Context, c Conn, in InboxIn) (Inbox, error) { return inbox(ctx, c, in) })
-	add(s, tool{name: "start", desc: "Take an issue (default: top ready); returns it, its handoff and a branch.", ann: write},
+	add(s, tool{name: "start", desc: "Take an issue (default: top ready): it, its handoff, a branch.", ann: write},
 		func(ctx context.Context, c Conn, in StartIn) (Started, error) {
 			out, epoch, err := start(ctx, c, in)
 			if err == nil && epoch > 0 {
@@ -530,7 +533,7 @@ func (s *Server) register() {
 			return Created{ID: r.ID, Rev: r.Rev, Similar: similarLine(r.Similar)}, err
 		})
 	add(s, tool{name: "update", desc: "Change the fields given.", ann: write,
-		enums: enums{"status": openStatuses, "type": issueTypes}},
+		enums: enums{"status": setStatuses, "type": issueTypes}},
 		func(ctx context.Context, c Conn, in UpdateIn) (proto.WriteResult, error) { return update(ctx, c, in) })
 	add(s, tool{name: "close", desc: "Close a finished issue.", ann: write},
 		func(ctx context.Context, c Conn, in CloseIn) (proto.WriteResult, error) {
@@ -608,7 +611,7 @@ func list(ctx context.Context, c Conn, in ListIn) (Issues, error) {
 // from a server without claims).
 func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 	var r proto.StartResult
-	if err := c.Call(ctx, proto.OpStart, proto.StartArgs{ID: in.ID, Lease: Lease}, &r); err != nil {
+	if err := c.Call(ctx, proto.OpStart, proto.StartArgs{ID: in.ID, Lease: Lease, Take: in.Take}, &r); err != nil {
 		return Started{}, 0, err
 	}
 	is := r.Issue

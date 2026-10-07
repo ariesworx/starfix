@@ -195,7 +195,7 @@ func TestPushFanOut(t *testing.T) {
 	a := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
 	mustCall[proto.CommentResult](t, s, alice, proto.OpComment, proto.CommentArgs{ID: a.ID, Body: "@bob look"})
 	mustStart := func(who store.Actor) {
-		mustCall[proto.StartResult](t, s, who, proto.OpStart, proto.StartArgs{ID: a.ID})
+		mustCall[proto.StartResult](t, s, who, proto.OpStart, proto.StartArgs{ID: a.ID, Take: true})
 	}
 	mustStart(bob)
 	mustStart(store.Actor{Principal: "bob", Session: "s-b2", Machine: "m"}) // takes over bob's claim

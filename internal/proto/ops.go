@@ -323,11 +323,14 @@ type HistoryResult struct {
 }
 
 // StartArgs takes an issue: the one named, or the top ready one. Lease is
-// how long the claim lasts unless renewed, as a duration such as 15m, 8h
-// or 2d (1m to 7d); empty takes the server's default, 15m.
+// how long the claim lasts unless renewed, as a duration such as 15m or 8h
+// (1m to 24h); empty takes the server's default, 15m. Take takes over a
+// live claim another session of the caller's own principal holds; without
+// it such a start is refused.
 type StartArgs struct {
 	ID    string `json:"id,omitempty"`
 	Lease string `json:"lease,omitempty"`
+	Take  bool   `json:"take,omitempty"`
 }
 
 // StartResult is the issue taken, in full, its latest handoff note with
@@ -352,11 +355,17 @@ type Claim struct {
 }
 
 // RenewArgs extends the caller's claims to at least now plus Lease (empty
-// takes 15m). All renews every session's claims, not only this one's.
+// takes 15m; at most 24h). All renews every session's claims, not only
+// this one's, for up to 7d; the server accepts it only from CLISession, a
+// person's own terminal.
 type RenewArgs struct {
 	Lease string `json:"lease,omitempty"`
 	All   bool   `json:"all,omitempty"`
 }
+
+// CLISession is the session of a person's own `sfx` commands, run without
+// a harness session id: one per principal and machine.
+const CLISession = "cli"
 
 // ClaimsResult lists claims, soonest to expire first.
 type ClaimsResult struct {

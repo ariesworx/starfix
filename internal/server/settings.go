@@ -10,7 +10,9 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 
+	"github.com/ariesworx/starfix/internal/store"
 	"github.com/go-sql-driver/mysql"
 	"go.yaml.in/yaml/v3"
 )
@@ -40,6 +42,12 @@ type Settings struct {
 	LogLevel string `yaml:"log_level"`
 	// LogFormat is text (slog's key=value) or json. Default text.
 	LogFormat string `yaml:"log_format"`
+	// Admins are the principals who may change issues others hold and
+	// force a close (decision D2). They are set here, or in
+	// STARFIXD_ADMINS as a comma-separated list, and nowhere else:
+	// nothing over the protocol reads or changes them. None may be
+	// reserved (store.ReservedPrincipals).
+	Admins []string `yaml:"admins"`
 }
 
 // UnitPattern is what a systemd unit name may look like. It cannot start
@@ -55,6 +63,8 @@ const (
 	// EnvLogLevel and EnvLogFormat set LogLevel and LogFormat.
 	EnvLogLevel  = "STARFIXD_LOG_LEVEL"
 	EnvLogFormat = "STARFIXD_LOG_FORMAT"
+	// EnvAdmins sets Admins, comma-separated.
+	EnvAdmins = "STARFIXD_ADMINS"
 )
 
 // ResolveSettings merges, highest precedence first: flags, the environment,
@@ -96,6 +106,20 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 			if f.v != "" {
 				*f.dst = f.v
 			}
+		}
+	}
+	out.Admins = file.Admins
+	if v := getenv(EnvAdmins); v != "" {
+		out.Admins = nil
+		for a := range strings.SplitSeq(v, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				out.Admins = append(out.Admins, a)
+			}
+		}
+	}
+	for _, a := range out.Admins {
+		if !PrincipalPattern.MatchString(a) || store.Reserved(a) {
+			return Settings{}, fmt.Errorf("admin %q is not a principal name, or is reserved for the server; fix: list the admins' principal names under admins: or in %s", a, EnvAdmins)
 		}
 	}
 	if out.SystemdUnit != "" && !UnitPattern.MatchString(out.SystemdUnit) {

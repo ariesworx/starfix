@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/store"
 )
 
 // Bridge is `starfixd stdio`, the forced command of every developer key. It
@@ -18,9 +19,9 @@ import (
 // When the daemon cannot be reached, Bridge writes a refusing welcome to
 // out, so the client reports a typed error rather than a dropped session.
 func Bridge(ctx context.Context, socket, principal string, in io.Reader, out io.Writer) error {
-	if !PrincipalPattern.MatchString(principal) {
+	if !PrincipalPattern.MatchString(principal) || store.Reserved(principal) {
 		e := proto.Errf(proto.CodeAuth, "the server admin should fix this key's authorized_keys line",
-			"this key's forced command names an invalid principal")
+			"this key's forced command names an invalid or reserved principal")
 		return errors.Join(e, refuse(out, e))
 	}
 	var d net.Dialer

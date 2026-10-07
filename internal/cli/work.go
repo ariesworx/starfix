@@ -24,9 +24,10 @@ type started struct {
 const cliLease = "8h"
 
 func cmdStart(ctx context.Context, r *runner, args []string) error {
-	const usage = "start [ID] [--for DURATION] [--branch | --worktree DIR]"
+	const usage = "start [ID] [--for DURATION] [--take] [--branch | --worktree DIR]"
 	fs := r.newFlags("start")
-	lease := fs.String("for", cliLease, "how long the claim lasts (1m to 7d); `sfx away` extends it")
+	lease := fs.String("for", cliLease, "how long the claim lasts (1m to 24h); `sfx away` extends it")
+	take := fs.Bool("take", false, "take it over from another session of yours that holds it")
 	branch := fs.Bool("branch", false, "create or switch to the issue's branch here")
 	worktree := fs.String("worktree", "", "create a worktree at DIR on the issue's branch")
 	pos, err := parse(fs, args, usage)
@@ -39,7 +40,7 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 	if *branch && *worktree != "" {
 		return usagef(usage, "give --branch or --worktree, not both")
 	}
-	in := proto.StartArgs{Lease: *lease}
+	in := proto.StartArgs{Lease: *lease, Take: *take}
 	if len(pos) == 1 {
 		in.ID = pos[0]
 	}

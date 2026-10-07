@@ -89,6 +89,8 @@ type daemonOpts struct {
 	// now, if set, is the store's clock. The reaper and the agents'
 	// renewals are then off, so claims expire only when the test says.
 	now func() time.Time
+	// admins are the store's admins.
+	admins []string
 }
 
 func newWorld(t *testing.T, o daemonOpts) *world {
@@ -119,7 +121,7 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 			t.Fatal(err)
 		}
 		w.dsn = dsn
-		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now})
+		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now, Admins: o.admins})
 		if err != nil {
 			t.Fatal(err)
 		}

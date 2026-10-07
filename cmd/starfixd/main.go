@@ -42,7 +42,10 @@ const usage = `usage:
   starfixd version
 
 The database DSN comes from --dsn (no password allowed there), $STARFIXD_DSN,
-or dsn: in the config file (default /etc/starfix/starfixd.yaml, mode 0600).`
+or dsn: in the config file (default /etc/starfix/starfixd.yaml, mode 0600).
+Admins, who may change issues others hold and force a close, are listed
+under admins: in the config file or in $STARFIXD_ADMINS (comma-separated);
+serve reads them at start.`
 
 type usageError string
 
@@ -139,7 +142,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, Logger: log})
+	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, Logger: log, Admins: s.Admins})
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -152,7 +155,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return errors.Join(err, st.Close())
 	}
-	log.Info("starfixd serving", "version", version.Version, "socket", s.Socket, "project", s.Project)
+	log.Info("starfixd serving", "version", version.Version, "socket", s.Socket, "project", s.Project, "admins", s.Admins)
 	err = srv.Serve(ctx, l)
 	return errors.Join(err, st.Close())
 }

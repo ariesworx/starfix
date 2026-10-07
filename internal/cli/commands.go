@@ -43,7 +43,7 @@ func (f *fields) register(fs *flag.FlagSet, withTitle bool) {
 	fs.StringVar(&f.design, "design", "", "design notes, or -")
 	fs.StringVar(&f.acceptance, "acceptance", "", "acceptance criteria, or -")
 	fs.StringVar(&f.notes, "notes", "", "notes, or -")
-	fs.StringVar(&f.status, "status", "", "open, in_progress, blocked or deferred")
+	fs.StringVar(&f.status, "status", "", "open, blocked or deferred (`sfx start` sets in_progress)")
 	fs.StringVar(&f.typ, "t", "", "type: bug, feature, task, epic or chore")
 	fs.StringVar(&f.typ, "type", "", "type")
 	fs.StringVar(&f.prio, "p", "", "priority 0-4")
@@ -456,7 +456,7 @@ func cmdClose(ctx context.Context, r *runner, args []string) error {
 	fs := r.newFlags("close")
 	var in proto.CloseArgs
 	fs.StringVar(&in.Reason, "reason", "", "why it was closed")
-	fs.BoolVar(&in.Force, "force", false, "close even with acceptance items open; the event records them")
+	fs.BoolVar(&in.Force, "force", false, "admins only: close even with acceptance items open; the event records them")
 	fs.Int64Var(&in.Rev, "rev", 0, "refuse if the issue changed since this revision")
 	pos, err := parse(fs, args, usage)
 	if err != nil {

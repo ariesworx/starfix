@@ -98,7 +98,10 @@ skip without it too.
    without cgo. Pin GitHub Actions by commit SHA with a version comment.
 5. **Store writes go through `Store.write`**, on the single writer
    connection, one SQL transaction per operation. Do not open another
-   writer or write to Dolt from anywhere else.
+   writer or write to Dolt from anywhere else. A write that changes an
+   issue (its fields, status, handoffs or acceptance) first calls
+   `wtx.guard` with the issue's claim (`store/authz.go`), so only the
+   holder's principal or an admin may change an issue someone holds.
 6. **Every `UPDATE` sets `write_id = ?`** to a value unique to that write.
    Dolt detects conflicts per cell, not per row, so `rev = rev + 1` alone
    lets two concurrent writers both succeed silently (stage 0,

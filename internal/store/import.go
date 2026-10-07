@@ -239,6 +239,9 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 				append(args, wid)...); err != nil {
 				return fmt.Errorf("insert issue: %w", err)
 			}
+			if err := tickInText(ctx, w, in.ID, in.Acceptance); err != nil {
+				return err
+			}
 			res.Outcome, add = ImportCreated, in.Labels
 		case err != nil:
 			return err
@@ -261,6 +264,9 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 				}
 				if n != 1 {
 					return fmt.Errorf("issue %s changed during import: %w", in.ID, ErrConflict)
+				}
+				if err := tickInText(ctx, w, in.ID, in.Acceptance); err != nil {
+					return err
 				}
 				after, err := loadIssue(ctx, w.tx, in.ID)
 				if err != nil {
