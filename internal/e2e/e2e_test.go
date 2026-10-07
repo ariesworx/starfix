@@ -302,7 +302,7 @@ func (u *user) ok(args ...string) string {
 	u.w.t.Helper()
 	r := u.run("v0.2.0", args...)
 	if r.code != 0 {
-		u.w.t.Fatalf("starfix %s: exit %d\n%s%s", strings.Join(args, " "), r.code, r.stdout, r.stderr)
+		u.w.t.Fatalf("sf %s: exit %d\n%s%s", strings.Join(args, " "), r.code, r.stdout, r.stderr)
 	}
 	return r.stdout
 }
@@ -408,7 +408,7 @@ func TestConflict(t *testing.T) {
 	bob.ok("update", id, "--rev", "1", "-p", "0")
 
 	r := alice.run("v0.2.0", "update", id, "--rev", "1", "--title", "mine")
-	want := fmt.Sprintf("starfix: %s changed since rev 1 (now rev 2 by bob)\nfix: re-read with `starfix show %s`\n", id, id)
+	want := fmt.Sprintf("sf: %s changed since rev 1 (now rev 2 by bob)\nfix: re-read with `sf show %s`\n", id, id)
 	if r.code != cli.ExitFailure || r.stderr != want || r.stdout != "" {
 		t.Fatalf("exit %d\nstderr %q\nwant   %q", r.code, r.stderr, want)
 	}
@@ -438,9 +438,9 @@ func TestRefusals(t *testing.T) {
 		{name: "unknown key", u: other, args: []string{"ready"}, code: cli.ExitFailure,
 			want: []string{"refused your SSH key", "fix: send your public key"}},
 		{name: "not found", u: w.newUser("dave", ""), args: []string{"show", "sf-zzzzzzzz"}, code: cli.ExitFailure,
-			want: []string{"starfix: issue sf-zzzzzzzz not found\nfix: find the id with `starfix list`"}},
+			want: []string{"sf: issue sf-zzzzzzzz not found\nfix: find the id with `sf list`"}},
 		{name: "usage", u: other, args: []string{"show"}, code: cli.ExitUsage,
-			want: []string{"show needs exactly one issue id", "fix: usage: starfix show ID"}},
+			want: []string{"show needs exactly one issue id", "fix: usage: sf show ID"}},
 		{name: "unknown command", u: other, args: []string{"explode"}, code: cli.ExitUsage,
 			want: []string{`unknown command "explode"`}},
 	}
@@ -466,7 +466,7 @@ func TestProtocolRangeRefusal(t *testing.T) {
 	if r.code != cli.ExitVersion {
 		t.Fatalf("exit %d, want %d\n%s", r.code, cli.ExitVersion, r.stderr)
 	}
-	want := "starfix: starfix speaks protocol 1; the server (v0.2.0) needs 2 to 3\nfix: upgrade this client: `starfix upgrade`\n"
+	want := "sf: starfix speaks protocol 1; the server (v0.2.0) needs 2 to 3\nfix: upgrade this client: `sf upgrade`\n"
 	if r.stderr != want {
 		t.Fatalf("stderr %q\nwant   %q", r.stderr, want)
 	}
@@ -480,7 +480,7 @@ func TestOlderClientWarns(t *testing.T) {
 	w := newWorld(t, daemonOpts{})
 	alice := w.newUser("alice", "")
 	r := alice.run("v0.1.0", "ready")
-	if r.code != 0 || r.stderr != "starfix: starfix v0.1.0 is older than the server (v0.2.0); run `starfix upgrade`\n" {
+	if r.code != 0 || r.stderr != "sf: starfix v0.1.0 is older than the server (v0.2.0); run `sf upgrade`\n" {
 		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
 	}
 	if r := alice.run("v0.2.0", "ready"); r.stderr != "" {

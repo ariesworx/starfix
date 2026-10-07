@@ -110,7 +110,7 @@ func TestCheckProto(t *testing.T) {
 		{"in range", 1, 1, 1, true, ""},
 		{"one back", 1, 1, 2, true, ""},
 		{"one forward", 3, 2, 3, true, ""},
-		{"client too old", 1, 2, 3, false, "starfix upgrade"},
+		{"client too old", 1, 2, 3, false, "sf upgrade"},
 		{"client too new", 4, 2, 3, false, "starfixd upgrade"},
 		{"empty range", 1, 2, 1, false, "protocol range"},
 		{"zero range", 1, 0, 0, false, "protocol range"},
@@ -165,7 +165,7 @@ func TestCompareVersions(t *testing.T) {
 
 func TestOlderClientWarning(t *testing.T) {
 	tests := []struct{ client, server, want string }{
-		{"v0.1.0", "v0.2.0", "starfix v0.1.0 is older than the server (v0.2.0); run `starfix upgrade`"},
+		{"v0.1.0", "v0.2.0", "starfix v0.1.0 is older than the server (v0.2.0); run `sf upgrade`"},
 		{"v0.2.0", "v0.2.0", ""},
 		{"v0.3.0", "v0.2.0", ""},
 		{"dev", "v0.2.0", ""},

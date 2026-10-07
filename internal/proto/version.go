@@ -23,7 +23,7 @@ func CheckProto(p, lo, hi int, serverVersion string) *Error {
 		return Errf(CodeVersion, "ask the server admin to check starfixd's protocol range",
 			fmt.Sprintf("server advertises an empty protocol range [%d,%d]", lo, hi))
 	case p < lo:
-		return Errf(CodeVersion, "upgrade this client: `starfix upgrade`",
+		return Errf(CodeVersion, "upgrade this client: `sf upgrade`",
 			fmt.Sprintf("starfix speaks protocol %d; the server (%s) needs %d to %d", p, orDev(serverVersion), lo, hi))
 	case p > hi:
 		return Errf(CodeVersion, "ask the server admin to run `starfixd upgrade`, or install the starfix release that matches the server",
@@ -110,7 +110,7 @@ func parseVersion(s string) (semver, bool) {
 // its server, or "" when there is nothing to say.
 func OlderClientWarning(client, server string) string {
 	if c, ok := CompareVersions(client, server); ok && c < 0 {
-		return fmt.Sprintf("starfix %s is older than the server (%s); run `starfix upgrade`", client, server)
+		return fmt.Sprintf("starfix %s is older than the server (%s); run `sf upgrade`", client, server)
 	}
 	return ""
 }

@@ -119,7 +119,7 @@ func Run(ctx context.Context, args []string, env Env) int {
 	if len(args) == 0 || args[0] == "help" {
 		if len(args) > 1 {
 			if c := lookup(args[1]); c != nil {
-				_, _ = fmt.Fprintf(env.Stdout, "usage: starfix %s\n\n%s\n", c.usage, c.summary)
+				_, _ = fmt.Fprintf(env.Stdout, "usage: sf %s\n\n%s\n", c.usage, c.summary)
 				return ExitOK
 			}
 		}
@@ -154,7 +154,7 @@ func (r *runner) globals(args []string) ([]string, error) {
 		switch {
 		case a == "-C" || a == "--C":
 			if len(args) < 2 {
-				return nil, usagef("starfix [-C DIR] [--json] COMMAND", "-C needs a directory")
+				return nil, usagef("sf [-C DIR] [--json] COMMAND", "-C needs a directory")
 			}
 			r.dir, args = args[1], args[2:]
 		case strings.HasPrefix(a, "-C="):
@@ -166,7 +166,7 @@ func (r *runner) globals(args []string) ([]string, error) {
 		case a == "--version" || a == "-version":
 			return []string{"version"}, nil
 		case strings.HasPrefix(a, "-"):
-			return nil, usagef("starfix [-C DIR] [--json] COMMAND", "unknown flag %s", a)
+			return nil, usagef("sf [-C DIR] [--json] COMMAND", "unknown flag %s", a)
 		default:
 			return args, nil
 		}
@@ -175,13 +175,13 @@ func (r *runner) globals(args []string) ([]string, error) {
 }
 
 func (r *runner) help(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: starfix [-C DIR] [--json] COMMAND [ARGS]")
+	_, _ = fmt.Fprintln(w, "usage: sf [-C DIR] [--json] COMMAND [ARGS]")
 	_, _ = fmt.Fprintln(w)
 	for _, c := range commands {
 		_, _ = fmt.Fprintf(w, "  %-9s %s\n", c.name, c.summary)
 	}
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "`starfix help COMMAND` shows a command's usage. --json prints one JSON document.")
+	_, _ = fmt.Fprintln(w, "`sf help COMMAND` shows a command's usage. --json prints one JSON document.")
 }
 
 // fail reports err and returns its exit code. Every failure ends with a
@@ -194,9 +194,9 @@ func (r *runner) fail(err error) int {
 	switch {
 	case errors.As(err, &ue):
 		code, exit, msg = proto.CodeInvalid, ExitUsage, ue.msg
-		fix = "run `starfix help` for the commands"
+		fix = "run `sf help` for the commands"
 		if ue.usage != "" {
-			fix = "usage: starfix " + ue.usage
+			fix = "usage: sf " + ue.usage
 		}
 	case errors.As(err, &pe):
 		code, msg, fix = pe.Code, pe.Message, pe.Fix
@@ -207,7 +207,7 @@ func (r *runner) fail(err error) int {
 	if r.json {
 		r.emit(map[string]*proto.Error{"error": {Code: code, Message: msg, Fix: fix}})
 	} else {
-		_, _ = fmt.Fprintf(r.env.Stderr, "starfix: %s\n", msg)
+		_, _ = fmt.Fprintf(r.env.Stderr, "sf: %s\n", msg)
 		if fix != "" {
 			_, _ = fmt.Fprintf(r.env.Stderr, "fix: %s\n", fix)
 		}
@@ -219,7 +219,7 @@ func (r *runner) fail(err error) int {
 func (r *runner) emit(v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		_, _ = fmt.Fprintf(r.env.Stderr, "starfix: encode output: %v\n", err)
+		_, _ = fmt.Fprintf(r.env.Stderr, "sf: encode output: %v\n", err)
 		return
 	}
 	_, _ = fmt.Fprintf(r.env.Stdout, "%s\n", b)
@@ -235,7 +235,7 @@ func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 		return nil, err
 	}
 	if w := c.Warning(r.env.Version); w != "" {
-		_, _ = fmt.Fprintf(r.env.Stderr, "starfix: %s\n", w)
+		_, _ = fmt.Fprintf(r.env.Stderr, "sf: %s\n", w)
 	}
 	r.conn = c
 	return c, nil
