@@ -25,7 +25,7 @@ removes.
 2. **Stateless.** Every fact lives in starfix. A Bearings restart loses nothing
    and adopts its running children.
 3. **Event-driven, never polling.** Bearings subscribes to the starfix event
-   stream (SSE). No status loops, no per-operation CLI processes.
+   stream (`evt` frames pushed over the SSH connection). No status loops, no per-operation CLI processes.
 4. **Identity is the SSH principal plus the session**, as in starfix. Never a
    path, a working directory or an environment variable.
 5. **Safe by default.** Pull-request mode with a human gate. No merge without
@@ -50,7 +50,7 @@ removes.
  │  agent CLIs (Claude Code, Codex, Gemini), one process group │
  │  and one git worktree each, optionally sandboxed            │
  └──────┬──────────────────────────────────────────────────────┘
-        │ starfix client: MCP for agents, RPC + SSE for bearingsd
+        │ starfix client: MCP for agents, RPC + event push for bearingsd
         ▼
      starfixd ─── Dolt
 ```
@@ -78,12 +78,12 @@ addresses.
 |---|---|---|---|
 | 1 | **Supervisor with lease coupling** | claims, epochs, leases, agents registry | claims stuck `in_progress`; leases reading expired on live agents; orphaned processes |
 | 2 | **Typed agent state** | agents registry, events | usage limits indistinguishable from hangs |
-| 3 | **Event-driven patrol** | SSE events, reaper, gates | LLM patrol loops, heartbeat drift, idle token burn |
+| 3 | **Event-driven patrol** | event push, reaper, gates | LLM patrol loops, heartbeat drift, idle token burn |
 | 4 | **Conflict log; reservations later** | events; later reservations | rework from overlapping work, unmeasured |
 | 5 | **Safe merge train** | locks, gates, events | merges on red CI, force-push recovery |
 | 6 | **Structured handoff** | handoffs, scoped memory, prime | lost reasoning when a session ends |
 | 7 | **Budget and concurrency governor** | semaphores, cost tracking (starfix §12.1) | rate-limit exhaustion, runaway spend |
-| 8 | **MCP inbox instead of keystrokes** | inbox, SSE, `sfx setup` | send-keys fragility, provider-specific hooks |
+| 8 | **MCP inbox instead of keystrokes** | inbox, event push, `sfx setup` | send-keys fragility, provider-specific hooks |
 | 9 | **Dispatch policy** | ready, claims, labels | first-come dispatch, manual assignment |
 | 10 | **Formula runner** | molecules, idempotency keys, gates | duplicate workflow instances |
 | 11 | **Observability** | events, agents, digest | many stores, polling dashboards |
@@ -319,6 +319,41 @@ code moves only through the epic branch on the git remote. A laptop and a
 server can work the same epic, and a child resumed on another machine starts
 from its handoff and the branch.
 
+### 3.14 Unattended operation
+
+Work continues while no developer is online, such as overnight or over a
+weekend, but no LLM leads it (decision 11).
+
+- **Autonomy window.** A person opens a window from the CLI with a scope (a
+  project, epic or label set), a budget, a pull-request cap and an expiry of
+  at most 72 hours. Workers may start work only inside an open window.
+  Expiry is the dead-man switch; closing the window is the kill switch.
+  starfixd stores and enforces it, so a crashed or misbehaving `bearingsd`
+  cannot extend it.
+- **Pre-approved queue.** Before leaving, people approve the work in scope.
+  Stateless workers pull ready issues from it with leases. A model plans only
+  while a person is present; unattended, nothing adds work to the queue.
+- **Where it runs.** On a server the team controls (decision 12). Hosted
+  agent sandboxes generally reach the internet only through HTTP proxies or
+  domain allowlists, and starfix speaks SSH.
+- **Credentials.** Provider API keys only, never a subscription login
+  (decision 14). Pushes use a bot identity that cannot bypass branch rules or
+  change workflows, with short-lived tokens checked before a window opens.
+- **Merges.** Into `epic/*` with green CI when the window opts in (decision
+  16); never into `main` (decision 17).
+- **Park for a person** rather than guess: any change that deletes or weakens
+  a test (decision 18), any change to `go.mod` or `go.sum` (decision 19), and
+  any refusal the worker cannot resolve. Parked work waits in the inbox and
+  the morning digest.
+- **Circuit breakers.** The governor stops dispatch on repeated failures,
+  error-rate spikes, provider rate limits or outages, and budget exhaustion,
+  and never retries into a storm.
+- **Starfix needs:** the window itself; narrower default rights, so a worker
+  cannot edit or close work outside its claim; distinct agent identities
+  instead of many sessions under one developer's key; a person's claim that
+  lapses during a window parks instead of becoming ready; and a claim epoch
+  that fences git pushes, so two workers cannot push one branch.
+
 ## 4. Configuration
 
 One TOML file per project, `bearings.toml`, plus a per-machine file for local
@@ -374,14 +409,17 @@ Bearings stages depend on starfix stages ([starfix.md §13](starfix.md#13-plan))
 
 | Stage | Delivers | Needs starfix |
 |---|---|---|
-| B0 | Supervisor (§3.1), typed state (§3.2), `bearings who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, SSE) |
+| B0 | Supervisor (§3.1), typed state (§3.2), `bearings who`, provider allowlist, one provider (Claude Code) | 3 (leases, agents, inbox, event push) |
 | B1 | Event-driven patrol (§3.3), handoff (§3.6), inbox delivery (§3.8), conflict log (§3.4), Codex and Gemini | 3 |
 | B2 | Dispatch policy and pools (§3.9), governor (§3.7), live board (§3.11) | 3–4 (cost) |
 | B3 | Merge train in queue mode, merging only into `epic/*` (§3.5), formula runner (§3.10), epics (§3.13) | 6 (locks, gates, molecules) |
 | B4 | Sandboxed workers (§3.12), HTML status page, OpenTelemetry | 3 |
-| B5 | Server `bearingsd` running unattended; merge train may merge (opt-in) | 6 |
+| B5 | Server `bearingsd` running unattended inside autonomy windows (§3.14); merge train may merge into `epic/*` (opt-in) | 3 plus the autonomy window, scoped rights and git fencing (§3.14) |
 | — | Reservations (§3.4), only if the conflict log shows rework is expensive | 6 (reservations) |
 | — | Gas City shim: an `exec:` beads provider backed by starfix, so Gas City users can try it | 1 (issues, deps, ready) |
+
+B5 is built right after B1, ahead of B2–B4 (decision 13): unattended work
+is the goal, and B5 needs only the starfix primitives in §3.14.
 
 Gate for B0: a dozen agents across two machines run for a day with no stuck
 claims, no orphaned processes and no reaped live agents.
@@ -390,7 +428,7 @@ claims, no orphaned processes and no reaped live agents.
 
 | # | Decision |
 |---|---|
-| 1 | Developer machines first; a server `bearingsd` follows once proven, for work while no developer is online (§2). |
+| 1 | Developer machines first; a server `bearingsd` follows once proven, for work while no developer is online (§2). Decision 13 moves it to right after B1. |
 | 2 | The merge train only queues, tests and opens pull requests until the server runs (§3.5). |
 | 3 | Sandboxes are containers, on macOS and Linux (§3.12). |
 | 4 | Build the Gas City shim (§6). |
@@ -400,6 +438,16 @@ claims, no orphaned processes and no reaped live agents.
 | 8 | A human accepts discovered children; a per-epic policy may come later, once spend forecasts are trustworthy (§3.13). |
 | 9 | A person or a planning agent may plan an epic; dispatch always waits for a human to approve the plan (§3.13). |
 | 10 | From B3 the merge train may merge children with green CI into `epic/*`, never `main`, before the server runs; `main` still waits for a human. This narrows decision 2 (§3.5, §3.13). |
+| 11 | No LLM leads unattended work. Unattended, stateless workers pull a queue people approved, inside an autonomy window; a model plans only while a person is present (§3.14). |
+| 12 | Unattended workers run on a server the team controls, not in hosted sandboxes (§3.14). |
+| 13 | B5 (server `bearingsd`) follows B1, ahead of B2–B4 (§6). |
+| 14 | Unattended runs use provider API keys only, never subscription logins (§3.14). |
+| 15 | An autonomy window lasts at most 72 hours (§3.14). |
+| 16 | A window may opt in to merging green children into `epic/*` (§3.14). |
+| 17 | Unattended work never merges into `main` (§3.14). |
+| 18 | A change that deletes or weakens a test parks for a person (§3.14). |
+| 19 | A change to `go.mod` or `go.sum` parks for a person (§3.14). |
+| 20 | An HTTPS transport for hosted sandboxes waits; SSH stays the only transport for now. |
 
 ## 8. Open questions
 
