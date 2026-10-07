@@ -1,10 +1,13 @@
 package client
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 const (
@@ -70,8 +73,13 @@ func TestLoadConfigWalksUp(t *testing.T) {
 	if p, err := c.KeyPath(); err != nil || p != filepath.Join(root, "keys", "me") {
 		t.Fatalf("key path %q %v", p, err)
 	}
-	if _, err := LoadConfig(t.TempDir()); err == nil || !strings.Contains(err.Error(), "not found") {
+	_, err = LoadConfig(t.TempDir())
+	var pe *proto.Error
+	if !errors.Is(err, ErrNoConfig) || !errors.As(err, &pe) || pe.Fix == "" || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("no config: %v", err)
+	}
+	if _, err := LoadConfig(filepath.Join(root, ConfigFile, "x")); errors.Is(err, ErrNoConfig) {
+		t.Fatalf("a config that cannot be read is not a missing one: %v", err)
 	}
 }
 

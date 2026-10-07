@@ -74,9 +74,9 @@ func init() {
 		{"start", "start [ID] [--branch | --worktree DIR]", "take an issue (the top ready one without ID) and show it", cmdStart},
 		{"finish", "finish ID [--reason TEXT] [--handoff TEXT|-] [--discovered TITLE]...", "close your issue with a handoff note and discovered work", cmdFinish},
 		{"handoff", "handoff ID NOTE...|- [--release]", "leave a note for whoever continues; --release lets it go", cmdHandoff},
-		{"prime", "prime", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
+		{"prime", "prime [--hook]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
-		{"setup", "setup claude-code|codex|gemini [--write|--check|--remove] [--global] [--command PATH]", "register starfix mcp with an agent", cmdSetup},
+		{"setup", "setup claude-code|codex|cursor|gemini|vscode [--write|--check|--remove] [--global] [--command PATH]", "set an agent up: MCP config, instruction pointer, session hook", cmdSetup},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
 }
@@ -97,6 +97,8 @@ type runner struct {
 	json bool
 	dir  string
 	conn *mcpserver.RepoConn
+	// session overrides the environment's session id (prime --hook).
+	session string
 }
 
 // Run executes one starfix command line (without the program name) and
@@ -250,7 +252,11 @@ func (r *runner) clientOptions() client.Options {
 	if err != nil || host == "" {
 		host = "unknown"
 	}
-	return client.Options{Version: r.env.Version, Session: client.SessionFromEnv(r.env.Getenv),
+	session := r.session
+	if session == "" {
+		session = client.SessionFromEnv(r.env.Getenv)
+	}
+	return client.Options{Version: r.env.Version, Session: session,
 		Machine: host, Getenv: r.env.Getenv}
 }
 

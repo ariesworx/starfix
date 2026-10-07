@@ -55,6 +55,19 @@ var (
 	fprRE  = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
 )
 
+// ErrNoConfig matches, with errors.Is, LoadConfig's error when neither
+// the directory nor any parent holds ConfigFile. The error is also a
+// *proto.Error for errors.As.
+var ErrNoConfig = errors.New(ConfigFile + " not found")
+
+type noConfigError struct{ pe *proto.Error }
+
+func (e noConfigError) Error() string { return e.pe.Error() }
+
+func (e noConfigError) Unwrap() error { return e.pe }
+
+func (noConfigError) Is(target error) bool { return target == ErrNoConfig }
+
 // LoadConfig finds .starfix.yaml in dir or the nearest parent that has one.
 func LoadConfig(dir string) (*Config, error) {
 	dir, err := filepath.Abs(dir)
@@ -77,9 +90,9 @@ func LoadConfig(dir string) (*Config, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil, proto.Errf(proto.CodeInvalid,
+			return nil, noConfigError{proto.Errf(proto.CodeInvalid,
 				"run starfix inside a repository that has one, or pass -C DIR",
-				ConfigFile+" not found here or in any parent directory")
+				ConfigFile+" not found here or in any parent directory")}
 		}
 		dir = parent
 	}

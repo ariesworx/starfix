@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,25 @@ func TestMCPAgentSession(t *testing.T) {
 
 	if out := alice.ok("prime"); !strings.Contains(out, "in progress:\n  "+b.ID+" P2 Write the docs\n") {
 		t.Fatalf("sfx prime:\n%s", out)
+	}
+
+	// As a SessionStart hook: the hook input's session id is used, and
+	// the text arrives as additionalContext.
+	var hookOut, errb bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"prime", "--hook"}, cli.Env{
+		Stdin:  strings.NewReader(`{"session_id":"cc-hook","cwd":` + strconv.Quote(alice.repo) + `,"hook_event_name":"SessionStart"}`),
+		Stdout: &hookOut, Stderr: &errb, Getenv: func(k string) string { return alice.env[k] },
+		Hostname: func() (string, error) { return "laptop-test", nil }, Version: "v0.2.0",
+	}); code != 0 || errb.Len() != 0 {
+		t.Fatalf("prime --hook: exit %d %s", code, errb.String())
+	}
+	hook := decode[struct {
+		Out struct {
+			Context string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}](t, hookOut.String())
+	if !strings.Contains(hook.Out.Context, "session cc-hook\n") || !strings.Contains(hook.Out.Context, b.ID+" P2 Write the docs") {
+		t.Fatalf("prime --hook:\n%s", hookOut.String())
 	}
 
 	show := decode[mcpserver.Issue](t, ag.ok("show", map[string]any{"id": a.ID}))
