@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,16 +15,17 @@ import (
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
-// cmdSetup prints, or with --write makes, the MCP registration for an
-// agent. It edits the project's own config unless --global says the
-// person's home config may be touched.
+// cmdSetup prints, or with --write makes, an agent's starfix setup: the
+// MCP registration, the pointer block in its instruction file and, where
+// the harness has one, the SessionStart hook. It edits the project's own
+// files unless --global says the person's home ones may be touched.
 func cmdSetup(_ context.Context, r *runner, args []string) error {
-	const usage = "setup claude-code|codex|gemini [--write|--check|--remove] [--global] [--command PATH]"
+	const usage = "setup claude-code|codex|cursor|gemini|vscode [--write|--check|--remove] [--global] [--command PATH]"
 	fs := r.newFlags("setup")
-	write := fs.Bool("write", false, "edit the config file")
-	check := fs.Bool("check", false, "fail unless the registration is in place")
-	remove := fs.Bool("remove", false, "take the registration out")
-	global := fs.Bool("global", false, "the user's config in the home directory, not the project's")
+	write := fs.Bool("write", false, "edit the files")
+	check := fs.Bool("check", false, "fail unless everything is in place")
+	remove := fs.Bool("remove", false, "take starfix out of the files")
+	global := fs.Bool("global", false, "the user's files in the home directory, not the project's")
 	entry := agentsetup.DefaultEntry
 	fs.StringVar(&entry.Command, "command", entry.Command, "how the agent runs starfix")
 	pos, err := parse(fs, args, usage)
@@ -49,94 +51,170 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	if entry.Command == "" || strings.ContainsAny(entry.Command, "\x00\n") {
 		return usagef(usage, "--command must be a program name or path")
 	}
+	if *global && agent.Global == "" {
+		return proto.Errf(proto.CodeInvalid, agent.NoGlobal,
+			agent.Title+" keeps its user MCP config in a per-platform profile that setup does not edit")
+	}
 
-	path, err := r.setupPath(agent, *global)
+	root, err := r.setupRoot(*global)
 	if err != nil {
 		return err
-	}
-	content, mode, err := readConfig(path)
-	if err != nil {
-		return err
-	}
-	rel := agent.Project // shown relative to the repository root
-	if *global {
-		rel = path
 	}
 	again := "sfx setup " + agent.Name
 	if *global {
 		again += " --global"
 	}
-
-	var out []byte
-	var res agentsetup.Result
-	switch {
-	case *check:
-		if !agent.Registered(content, entry) {
-			return proto.Errf(proto.CodeNotFound, "run `"+again+" --write`",
-				fmt.Sprintf("%s does not register starfix for %s", rel, agent.Title))
+	var files []setupFile
+	for _, t := range agent.Targets(*global) {
+		f := setupFile{Target: t, path: filepath.Join(root, filepath.FromSlash(t.Path)), rel: t.Path}
+		if *global {
+			f.rel = f.path
 		}
-		r.report(map[string]string{"path": rel, "result": "registered"}, rel+": registered")
-		return nil
-	case *remove:
-		out, res, err = agent.Remove(content)
-	case *write:
-		out, res, err = agent.Apply(content, entry)
-	default:
-		r.printSnippet(agent, entry, rel, again, *global)
-		return nil
-	}
-	if err != nil {
-		return proto.Errf(proto.CodeInvalid, "fix the file by hand, or move it aside and rerun",
-			fmt.Sprintf("cannot edit %s: %v", rel, err))
-	}
-	if res != agentsetup.Unchanged {
-		if err := writeConfig(path, out, mode); err != nil {
+		if f.content, f.mode, err = readConfig(f.path); err != nil {
 			return err
 		}
+		files = append(files, f)
 	}
-	msg := rel + ": " + res.String()
-	if res == agentsetup.Added && agent.Note != "" && !*global {
-		msg += "\n" + agent.Note
+
+	switch {
+	case *check:
+		var missing []string
+		for _, f := range files {
+			if !f.Registered(f.content, entry) {
+				missing = append(missing, f.rel)
+			}
+		}
+		if len(missing) > 0 {
+			return proto.Errf(proto.CodeNotFound, "run `"+again+" --write`",
+				fmt.Sprintf("starfix is not set up for %s in %s", agent.Title, strings.Join(missing, ", ")))
+		}
+		r.reportFiles(files, "registered", "")
+		return nil
+	case !*write && !*remove:
+		r.printSnippets(agent, entry, files, again, *global)
+		return nil
 	}
-	r.report(map[string]string{"path": rel, "result": res.String()}, msg)
+	// Work out every edit before writing any, so a file that cannot be
+	// parsed leaves all of them as they were.
+	for i := range files {
+		f := &files[i]
+		if *remove {
+			f.out, f.res, err = f.Remove(f.content, entry)
+		} else {
+			f.out, f.res, err = f.Apply(f.content, entry)
+		}
+		if err != nil {
+			return proto.Errf(proto.CodeInvalid, "fix the file by hand, or move it aside and rerun",
+				fmt.Sprintf("cannot edit %s: %v", f.rel, err))
+		}
+	}
+	note := ""
+	for _, f := range files {
+		switch {
+		case f.res == agentsetup.Unchanged:
+			continue
+		case f.res == agentsetup.Removed && f.Kind == agentsetup.KindPointer && len(f.out) == 0:
+			err = removeConfig(f.path) // the file held only the pointer
+		default:
+			err = writeConfig(f.path, f.out, f.mode)
+		}
+		if err != nil {
+			return err
+		}
+		if f.Kind == agentsetup.KindMCP && f.res == agentsetup.Added && !*global {
+			note = agent.Note
+		}
+	}
+	r.reportFiles(files, "", note)
 	return nil
 }
 
-func (r *runner) report(doc map[string]string, text string) {
+// setupFile is one target and its state on disk.
+type setupFile struct {
+	agentsetup.Target
+	path, rel string
+	content   []byte
+	mode      fs.FileMode
+	out       []byte
+	res       agentsetup.Result
+}
+
+// reportFiles prints each file's result, or result for all of them.
+func (r *runner) reportFiles(files []setupFile, result, note string) {
+	type line struct {
+		Path   string `json:"path"`
+		Kind   string `json:"kind"`
+		Result string `json:"result"`
+	}
+	doc := struct {
+		Files []line `json:"files"`
+	}{Files: []line{}}
+	var b strings.Builder
+	for _, f := range files {
+		res := result
+		if res == "" {
+			res = f.res.String()
+		}
+		doc.Files = append(doc.Files, line{f.rel, f.Kind.String(), res})
+		fmt.Fprintf(&b, "%s: %s\n", f.rel, res)
+	}
+	if note != "" {
+		b.WriteString(note + "\n")
+	}
 	if r.json {
 		r.emit(doc)
 		return
 	}
-	_, _ = fmt.Fprintln(r.env.Stdout, text)
+	_, _ = io.WriteString(r.env.Stdout, b.String())
 }
 
-func (r *runner) printSnippet(agent agentsetup.Agent, entry agentsetup.Entry, rel, again string, global bool) {
-	snippet := agent.Snippet(entry)
+func (r *runner) printSnippets(agent agentsetup.Agent, entry agentsetup.Entry, files []setupFile, again string, global bool) {
 	if r.json {
-		r.emit(map[string]string{"path": rel, "snippet": snippet})
+		type snip struct {
+			Path    string `json:"path"`
+			Kind    string `json:"kind"`
+			Snippet string `json:"snippet"`
+		}
+		doc := struct {
+			Files []snip `json:"files"`
+		}{}
+		for _, f := range files {
+			doc.Files = append(doc.Files, snip{f.rel, f.Kind.String(), f.Snippet(entry)})
+		}
+		r.emit(doc)
 		return
 	}
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(r.env.Stdout, format, a...) }
-	p("# %s: add to %s, or run `%s --write`\n%s", agent.Title, rel, again, snippet)
-	if agent.Note != "" && !global {
-		p("# %s\n", agent.Note)
+	p("# %s: run `%s --write` to make these edits, or make them by hand\n", agent.Title, again)
+	for _, f := range files {
+		switch f.Kind {
+		case agentsetup.KindMCP:
+			p("\n# MCP server: add to %s\n%s", f.rel, f.Snippet(entry))
+			if agent.Note != "" && !global {
+				p("# %s\n", agent.Note)
+			}
+		case agentsetup.KindPointer:
+			p("\n# pointer: add to %s\n%s", f.rel, f.Snippet(entry))
+		case agentsetup.KindHook:
+			p("\n# SessionStart hook: merge into %s\n%s", f.rel, f.Snippet(entry))
+		}
 	}
 	if agent.SessionEnv != "" {
-		p("# session id: read from %s\n", agent.SessionEnv)
+		p("\n# session id: read from %s\n", agent.SessionEnv)
 	} else {
-		p("# session id: %s sets none; the server assigns one unless STARFIX_SESSION is set\n", agent.Title)
+		p("\n# session id: %s sets none; the server assigns one unless STARFIX_SESSION is set\n", agent.Title)
 	}
 }
 
-// setupPath is the config file to edit: the project's, at the root of the
-// repository that holds .starfix.yaml, or with global the user's.
-func (r *runner) setupPath(agent agentsetup.Agent, global bool) (string, error) {
+// setupRoot is the directory the targets are relative to: the root of the
+// repository that holds .starfix.yaml or, with global, the home directory.
+func (r *runner) setupRoot(global bool) (string, error) {
 	if global {
 		home, err := r.env.UserHomeDir()
 		if err != nil || home == "" {
 			return "", proto.Errf(proto.CodeInvalid, "set HOME, or drop --global", "cannot find the home directory")
 		}
-		return filepath.Join(home, filepath.FromSlash(agent.Global)), nil
+		return home, nil
 	}
 	cfg, err := client.LoadConfig(r.dir)
 	if err != nil {
@@ -146,7 +224,7 @@ func (r *runner) setupPath(agent agentsetup.Agent, global bool) (string, error) 
 		}
 		return "", proto.Errf(proto.CodeInvalid, "correct "+client.ConfigFile+"; see the README's quick start", err.Error())
 	}
-	return filepath.Join(cfg.Root, filepath.FromSlash(agent.Project)), nil
+	return cfg.Root, nil
 }
 
 // readConfig reads a config file; a missing one is empty, mode 0644.
@@ -165,6 +243,14 @@ func readConfig(path string) ([]byte, fs.FileMode, error) {
 	return b, st.Mode().Perm(), nil
 }
 
+// removeConfig deletes a file setup emptied.
+func removeConfig(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return proto.Errf(proto.CodeInvalid, "check the directory's permissions", fmt.Sprintf("remove %s: %v", path, err))
+	}
+	return nil
+}
+
 // writeConfig replaces path atomically, keeping its mode. A project
 // config is meant to be committed, so a new one is 0644; it holds no
 // secret.
@@ -173,7 +259,7 @@ func writeConfig(path string, b []byte, mode fs.FileMode) error {
 		return proto.Errf(proto.CodeInvalid, "check the directory's permissions", fmt.Sprintf("write %s: %v", path, err))
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // .codex/ or .gemini/ in the repository
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // .codex/, .claude/ and the like, in the repository
 		return fail(err)
 	}
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")

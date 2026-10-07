@@ -157,9 +157,9 @@ command's usage; `--json` prints one JSON document, errors included.
 | `label` | Add or remove labels |
 | `comment`, `comments` | Add a comment; list an issue's comments |
 | `history` | List an issue's changes |
-| `prime` | A session's orientation: your in-progress issues, top ready work, version notices |
+| `prime` | A session's orientation: your in-progress issues, top ready work, version notices; `--hook` for a SessionStart hook |
 | `mcp` | The MCP server for agents, on stdin and stdout |
-| `setup AGENT` | Register `sfx mcp` with `claude-code`, `codex` or `gemini` |
+| `setup AGENT` | Set up `claude-code`, `codex`, `cursor`, `gemini` or `vscode`: MCP config, instruction pointer, SessionStart hook |
 | `version` | Print the version |
 
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
@@ -181,20 +181,42 @@ command line, and a config file that holds one must be mode 0600.
 
 ## Agents
 
-Agents use starfix through MCP; they never need a shell. Register the
-server once per repository and commit the file it writes:
+Agents use starfix through MCP; they never need a shell. Set each agent
+up once per repository and commit the files it writes:
 
 ```sh
-sfx setup claude-code           # print the snippet and where it goes
-sfx setup claude-code --write   # write .mcp.json; safe to rerun
-sfx setup codex --write         # .codex/config.toml
-sfx setup gemini --write        # .gemini/settings.json
-sfx setup codex --check         # fails, with a fix, if it is missing
+sfx setup claude-code           # print what it would write, and where
+sfx setup claude-code --write   # write them; safe to rerun
+sfx setup codex --check         # fails, with a fix, if anything is missing
+sfx setup codex --remove        # take starfix out again
 ```
 
-`--global` edits the config in your home directory instead; nothing
-outside the repository is touched without it. `--command PATH` sets how
-the agent runs `sfx` when it is not on PATH.
+| Agent | MCP config | Pointer | SessionStart hook |
+|---|---|---|---|
+| `claude-code` | `.mcp.json` | `CLAUDE.md` | `.claude/settings.json` |
+| `codex` | `.codex/config.toml` | `AGENTS.md` | none |
+| `gemini` | `.gemini/settings.json` | `GEMINI.md` | none |
+| `cursor` | `.cursor/mcp.json` | `.cursor/rules/starfix.mdc` | none |
+| `vscode` | `.vscode/mcp.json` | `.github/copilot-instructions.md` | none |
+
+The pointer is a short block between `<!-- starfix:begin -->` and
+`<!-- starfix:end -->` telling the agent to use the starfix tools and to
+`prime`, `start` and `finish`; the rest of the file is left alone. Cursor's
+is a rule file of starfix's own. `--remove` takes the block out, and
+deletes the file if nothing else is left in it. The Claude Code hook runs
+`sfx prime --hook` when a session starts, resumes, clears or compacts: it
+adds prime to the session's context under the hook's session id, prints
+nothing outside a starfix repository, and on any error adds a one-line
+note instead of failing the session. Existing files keep their other
+keys, their order and their mode; a second run changes nothing.
+
+`--global` edits the files in your home directory instead (for Claude Code
+`~/.claude.json`, `~/.claude/CLAUDE.md` and `~/.claude/settings.json`; for
+Codex and Gemini CLI their `~/.codex/` and `~/.gemini/` files; for Cursor
+the MCP config only); nothing outside the repository is touched without
+it. VS Code keeps its user MCP config in a per-platform profile, so
+`--global` is refused for `vscode`. `--command PATH` sets how the agent
+runs `sfx` when it is not on PATH.
 
 A session is two calls: `start` takes the top ready issue (or a named
 one) and returns it with its acceptance criteria, the last handoff and a
@@ -218,7 +240,7 @@ the agent's environment:
 | Agent | Session id |
 |---|---|
 | Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
-| Codex, Gemini CLI | none set; `sfx mcp` picks one per process (`m-…`) |
+| Codex, Gemini CLI, Cursor, VS Code | none set; `sfx mcp` picks one per process (`m-…`) |
 | any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
 
 One SSH connection serves an MCP session. It opens on the first tool call

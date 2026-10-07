@@ -72,6 +72,53 @@ func TestApply(t *testing.T) {
   }
 }
 `},
+		{name: "vscode new file", agent: "vscode", result: Added, want: `{
+  "servers": {
+    "starfix": {
+      "type": "stdio",
+      "command": "sfx",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
+`},
+		{name: "vscode keeps inputs and other servers", agent: "vscode", result: Added,
+			in: `{"inputs": [{"id": "tok", "type": "promptString"}], "servers": {"gh": {"type": "http", "url": "https://mcp.example.com"}}}`,
+			want: `{
+  "inputs": [
+    {
+      "id": "tok",
+      "type": "promptString"
+    }
+  ],
+  "servers": {
+    "gh": {
+      "type": "http",
+      "url": "https://mcp.example.com"
+    },
+    "starfix": {
+      "type": "stdio",
+      "command": "sfx",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
+`},
+		{name: "cursor new file", agent: "cursor", result: Added, want: `{
+  "mcpServers": {
+    "starfix": {
+      "command": "sfx",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
+`},
 		{name: "codex new file", agent: "codex", result: Added,
 			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n"},
 		{name: "codex appends after other tables", agent: "codex", result: Added,
@@ -120,6 +167,7 @@ func TestApplyLeavesRegisteredFileAlone(t *testing.T) {
 func TestRemove(t *testing.T) {
 	tests := []struct{ agent, in, want string }{
 		{"claude-code", `{"mcpServers": {"a": {}, "starfix": {"command": "starfix"}}}`, "{\n  \"mcpServers\": {\n    \"a\": {}\n  }\n}\n"},
+		{"vscode", `{"servers": {"starfix": {"command": "sfx"}}, "mcpServers": {"starfix": {}}}`, "{\n  \"servers\": {},\n  \"mcpServers\": {\n    \"starfix\": {}\n  }\n}\n"},
 		{"codex", "x = 1\n\n[mcp_servers.starfix]\ncommand = \"starfix\"\n\n[mcp_servers.starfix.env]\nA = \"b\"\n\n[other]\ny = 2\n",
 			"x = 1\n\n[other]\ny = 2\n"},
 	}
