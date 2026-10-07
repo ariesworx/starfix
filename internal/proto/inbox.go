@@ -23,8 +23,10 @@ const (
 	EvResync = "resync"
 )
 
-// InboxItem is one inbox item. Session is set when the item concerns one
-// session of the principal (a lost claim), and empty for the principal's.
+// InboxItem is one inbox item. Kind is claim.lost, assigned, mention or
+// handoff. Session is set when the item concerns one session of the
+// principal (a lost claim), and empty when any of its sessions may read
+// it.
 type InboxItem struct {
 	ID      int64      `json:"id"`
 	Session string     `json:"session,omitempty"`
