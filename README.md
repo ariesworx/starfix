@@ -70,14 +70,39 @@ machine.
 
 ## Install
 
-Each [release](https://github.com/ariesworx/starfix/releases) carries `sfx`
-for Linux, macOS and Windows and `starfixd` for Linux, on amd64 and arm64,
-as `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows), with
-`checksums.txt` and its Ed25519 signature `checksums.txt.sig`. Unpack the
-binary onto your `PATH`; from then on `sfx upgrade` and `starfixd upgrade`
-fetch, verify and install new releases (Commands). `go install …@latest`
-(Quick start) builds the same code from source, unsigned. No release has
-been published yet.
+On Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ariesworx/starfix/main/install.sh | sh
+```
+
+It installs the latest `sfx` to `~/.local/bin` after checking the release's
+Ed25519 signature (with OpenSSL 3; without it, it warns and checks only the
+sha256) and the archive's sha256, and prints the line to add if that
+directory is not on your `PATH`. It never uses sudo or edits your shell
+files. Options go after `sh -s --`:
+
+| Option | Does |
+|---|---|
+| `--version vX.Y.Z` | Install that release instead of the latest |
+| `--dir DIR` | Install into DIR (default `~/.local/bin`) |
+| `--server` | Install `starfixd` instead (Linux) |
+| `--require-signature` | Fail rather than warn when openssl cannot check the signature |
+
+From then on `sfx upgrade` and `starfixd upgrade` fetch, verify and install
+new releases (Commands).
+
+Or install by hand: each [release](https://github.com/ariesworx/starfix/releases)
+carries `sfx` for Linux, macOS and Windows and `starfixd` for Linux, on
+amd64 and arm64, as `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on
+Windows), with `checksums.txt` and its Ed25519 signature
+`checksums.txt.sig`. Unpack the binary onto your `PATH`. On Windows, use the
+zip, or the script inside WSL.
+
+`go install github.com/ariesworx/starfix/cmd/sfx@latest` builds the same
+code from source, unsigned, into `$(go env GOBIN)` or `$(go env GOPATH)/bin`;
+under a version manager such as mise that is the manager's own directory,
+which changes with the Go version. Prefer the script.
 
 To verify a download by hand, work from a checkout of the release's tag, so
 the public keys come from the repository rather than the download:
@@ -132,7 +157,7 @@ server:
 Then, on each developer machine:
 
 ```sh
-go install github.com/ariesworx/starfix/cmd/sfx@latest
+curl -fsSL https://raw.githubusercontent.com/ariesworx/starfix/main/install.sh | sh
 sfx create "Fix the login redirect" -p 1 -t bug
 sfx ready
 sfx update sf-a1b2c3d4 --status in_progress
@@ -335,6 +360,7 @@ gofmt -l . && go vet ./...
 golangci-lint run ./...
 go test -race ./...
 GOOS=windows go build ./cmd/...   # the client must build on every developer OS
+shellcheck install.sh
 ```
 
 | Path | Holds |
@@ -351,10 +377,28 @@ GOOS=windows go build ./cmd/...   # the client must build on every developer OS
 | `internal/e2e` | End-to-end tests through an in-process SSH server |
 | `spike/dolt` | Stage 0 experiments (not built into the binaries) |
 | `docs/design` | Design documents |
+| `install.sh` | The one-line installer (README, Install); tested by `internal/release` |
 
 Branch with a type prefix (`feature/`, `fix/`, `docs/`, `maintenance/`,
 `refactor/`) and title pull requests the same way. `main` takes squash merges
 with green CI.
+
+### Security checks
+
+| Check | Runs |
+|---|---|
+| golangci-lint, with gosec, staticcheck, errcheck, govet and revive | Every pull request and push to `main` |
+| `govulncheck` against the Go vulnerability database | Every pull request and push, weekly on `main` (Mondays), and before every release build |
+| `go mod download && go mod verify` | Every pull request and push, and before every release build |
+| CodeQL, `security-extended` queries | Every pull request and push, and weekly |
+| Dependabot, for Go modules and GitHub Actions | Weekly; minor and patch updates grouped |
+
+Dependencies are not vendored. `go.sum` pins each module's content hash and
+the Go checksum database rejects a module that was changed after
+publication; `go mod verify` checks that the local module cache has not
+changed since download.
+The dependency list is kept small on purpose. Every action is pinned by
+commit SHA.
 
 **Contributing with an AI agent:** [AGENTS.md](AGENTS.md) holds the rules and
 the full CI gate for any coding agent; `CLAUDE.md` and `GEMINI.md` import it.

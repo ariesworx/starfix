@@ -5,7 +5,7 @@ the rest in two jobs:
 
 | Job | Secrets | Does |
 |---|---|---|
-| `build` | none | Builds `sfx` for linux, darwin and windows on amd64 and arm64, and `starfixd` for linux on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -X …version.Version=<tag>"`); packs each into `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) with the LICENSE and README; writes `checksums.txt` (sha256); attests build provenance for every archive; uploads them as a workflow artifact |
+| `build` | none | Downloads and verifies the modules (`go mod verify`) into a clean cache and runs `govulncheck`, failing on a known vulnerability; builds `sfx` for linux, darwin and windows on amd64 and arm64, and `starfixd` for linux on amd64 and arm64 (`CGO_ENABLED=0`, `-trimpath`, `-ldflags "-s -w -X …version.Version=<tag>"`); packs each into `<bin>_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows) with the LICENSE and README; writes `checksums.txt` (sha256); attests build provenance for every archive; uploads them as a workflow artifact |
 | `sign-and-publish` | `STARFIX_RELEASE_KEY`, in the `release` environment | Waits for the maintainer's approval; checks the archives against `checksums.txt`; signs it into `checksums.txt.sig` with `internal/tools/releasekey`; creates the GitHub release with every file |
 
 `checksums.txt.sig` is one line: the standard base64 of a raw Ed25519
@@ -125,9 +125,14 @@ must ship in a release before anything is signed with it.
    back up `new.key` offline and delete it locally.
 4. Release again (signed with the new key). Clients older than step 2
    refuse this release; they upgrade to the step-2 release first by hand.
+   `install.sh` trusts one key, as a PEM: switch it to the new one
+   (`go run ./internal/tools/releasekey` prints raw keys; the PEM is the
+   base64 of `302a300506032b6570032100` and the 32 key bytes) in a pull
+   request that merges as this release is published. A test keeps it in
+   `keys.go`.
 5. After a while, remove the old key from `keys.go` by pull request.
 
 If the old key is compromised, skip the overlap: remove it from `keys.go`
-in the same pull request that adds the new one, replace the secret, and
+and `install.sh` in the same pull request that adds the new one, replace the secret, and
 release. Every client older than that release refuses it and has to be
 reinstalled by hand (README, Install); say so in the release notes.
