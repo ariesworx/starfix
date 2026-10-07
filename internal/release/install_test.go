@@ -133,6 +133,7 @@ func runInstall(t *testing.T, srv *httptest.Server, fake string, env []string, a
 // opensslEd25519 reports whether the openssl on PATH can verify Ed25519,
 // which the signature cases need.
 func opensslEd25519(t *testing.T) bool {
+	t.Helper()
 	dir := t.TempDir()
 	key := filepath.Join(dir, "k")
 	for _, args := range [][]string{

@@ -10,8 +10,8 @@ import (
 )
 
 // Verifier checks that sig is a valid signature over checksums for the
-// release tagged tag. It is the one place the signature scheme lives, so
-// it can change without touching callers.
+// release tagged tag, and returns nil only if it is. It is the one place
+// the signature scheme lives, so it can change without touching callers.
 type Verifier interface {
 	Verify(ctx context.Context, checksums, sig []byte, tag string) error
 }
@@ -38,7 +38,10 @@ type Ed25519 struct {
 	Keys []ed25519.PublicKey
 }
 
-// Verify implements Verifier.
+// Verify implements Verifier. It returns nil when sig verifies under any
+// of the keys, [ErrNoKey] when there are none, an error wrapping
+// [ErrSignature] when sig is malformed or no key matches, and the error
+// from [Keys] when the built-in list does not parse.
 func (v Ed25519) Verify(_ context.Context, checksums, sig []byte, _ string) error {
 	keys := v.Keys
 	if keys == nil {
@@ -55,6 +58,7 @@ func (v Ed25519) Verify(_ context.Context, checksums, sig []byte, _ string) erro
 		return err
 	}
 	for _, k := range keys {
+		// ed25519.Verify panics on a key of the wrong length.
 		if len(k) == ed25519.PublicKeySize && ed25519.Verify(k, checksums, raw) {
 			return nil
 		}
@@ -62,7 +66,8 @@ func (v Ed25519) Verify(_ context.Context, checksums, sig []byte, _ string) erro
 	return fmt.Errorf("%w: no release key matches", ErrSignature)
 }
 
-// DecodeSignature parses the contents of a .sig file.
+// DecodeSignature parses the contents of a .sig file and returns the raw
+// signature. Its error wraps [ErrSignature].
 func DecodeSignature(sig []byte) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(sig)))
 	if err != nil {
@@ -74,12 +79,14 @@ func DecodeSignature(sig []byte) ([]byte, error) {
 	return raw, nil
 }
 
-// EncodeSignature is the contents of a .sig file for raw.
+// EncodeSignature returns the contents of a .sig file for raw: its
+// standard base64 and a newline.
 func EncodeSignature(raw []byte) []byte {
 	return []byte(base64.StdEncoding.EncodeToString(raw) + "\n")
 }
 
-// EncodeKey is how a public key is written in keys.go.
+// EncodeKey returns k as keys.go lists it: the standard base64 of its
+// 32 bytes.
 func EncodeKey(k ed25519.PublicKey) string {
 	return base64.StdEncoding.EncodeToString(k)
 }
@@ -89,7 +96,8 @@ func Keys() ([]ed25519.PublicKey, error) {
 	return ParseKeys(releaseKeys)
 }
 
-// ParseKeys parses base64 Ed25519 public keys.
+// ParseKeys parses Ed25519 public keys written as [EncodeKey] writes
+// them. One that does not parse fails the whole list.
 func ParseKeys(enc []string) ([]ed25519.PublicKey, error) {
 	keys := make([]ed25519.PublicKey, 0, len(enc))
 	for _, s := range enc {

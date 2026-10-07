@@ -1,11 +1,3 @@
-// Package release finds, downloads and verifies starfix releases, and
-// swaps a running binary for a new one.
-//
-// A release on GitHub carries one archive per binary and platform, a
-// checksums.txt (sha256) and checksums.txt.sig, an Ed25519 signature over
-// checksums.txt (see Ed25519). Fetch trusts an archive only when that
-// signature verifies against a key built into this binary and the
-// archive's sha256 is listed in checksums.txt.
 package release
 
 import (
@@ -47,10 +39,13 @@ const (
 	maxBinary    = 256 << 20
 )
 
-// TagPattern is what a release tag may look like.
+// TagPattern matches a release tag: vMAJOR.MINOR.PATCH without leading
+// zeros, then optionally a hyphen and up to 32 letters, digits, dots and
+// hyphens.
 var TagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,32})?$`)
 
-// ErrNotFound means the release or one of its assets does not exist.
+// ErrNotFound means the release, one of its assets, the archive's line in
+// checksums.txt, or the executable in the archive does not exist.
 var ErrNotFound = errors.New("not found")
 
 // ErrMismatch means a download's sha256 differs from checksums.txt.
@@ -81,6 +76,7 @@ type Asset struct {
 	URL  string `json:"browser_download_url"`
 }
 
+// base returns the API root without a trailing slash.
 func (c *Client) base() string {
 	if c.BaseURL == "" {
 		return "https://api.github.com"
@@ -103,12 +99,13 @@ func (c *Client) http() *http.Client {
 }
 
 // Latest returns the newest published release (GitHub excludes drafts and
-// prereleases).
+// prereleases). With none, the error wraps [ErrNotFound].
 func (c *Client) Latest(ctx context.Context) (*Release, error) {
 	return c.release(ctx, "/repos/"+c.repo()+"/releases/latest")
 }
 
-// ByTag returns the release tagged tag.
+// ByTag returns the release tagged tag, which must match [TagPattern].
+// With none, the error wraps [ErrNotFound].
 func (c *Client) ByTag(ctx context.Context, tag string) (*Release, error) {
 	if !TagPattern.MatchString(tag) {
 		return nil, fmt.Errorf("release tag %q is not of the form vMAJOR.MINOR.PATCH", tag)
@@ -116,6 +113,8 @@ func (c *Client) ByTag(ctx context.Context, tag string) (*Release, error) {
 	return c.release(ctx, "/repos/"+c.repo()+"/releases/tags/"+tag)
 }
 
+// release reads the release at API path p, refusing one whose tag does
+// not match TagPattern.
 func (c *Client) release(ctx context.Context, p string) (*Release, error) {
 	b, err := c.get(ctx, c.base()+p, maxMeta, "application/vnd.github+json")
 	if err != nil {
@@ -131,6 +130,9 @@ func (c *Client) release(ctx context.Context, p string) (*Release, error) {
 	return &r, nil
 }
 
+// get returns the body of URL u, refusing one over limit bytes. A
+// non-empty accept marks an API request, which also names the API version.
+// A 404 wraps ErrNotFound.
 func (c *Client) get(ctx context.Context, u string, limit int64, accept string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -183,6 +185,7 @@ func ArchiveName(bin, tag, goos, goarch string) string {
 	return fmt.Sprintf("%s_%s_%s_%s%s", bin, strings.TrimPrefix(tag, "v"), goos, goarch, ext)
 }
 
+// asset returns the asset called name, or an error wrapping ErrNotFound.
 func (r *Release) asset(name string) (Asset, error) {
 	for _, a := range r.Assets {
 		if a.Name == name {
@@ -194,7 +197,13 @@ func (r *Release) asset(name string) (Asset, error) {
 
 // Fetch downloads bin for goos/goarch from rel and returns the executable's
 // bytes, after verifying the signature on checksums.txt and the archive's
-// checksum against it.
+// checksum against it. c.Verifier must be set.
+//
+// The error wraps [ErrSignature] when the release is unsigned, the
+// Verifier's error when it refuses the signature ([ErrSignature] or
+// [ErrNoKey] from [Ed25519]), [ErrMismatch] when the archive's checksum
+// differs, and [ErrNotFound] when the archive, checksums.txt, its line
+// for the archive or the executable in it is missing.
 func (c *Client) Fetch(ctx context.Context, rel *Release, bin, goos, goarch string) ([]byte, error) {
 	if c.Verifier == nil {
 		return nil, errors.New("release: no signature verifier")
@@ -240,6 +249,8 @@ func (c *Client) Fetch(ctx context.Context, rel *Release, bin, goos, goarch stri
 	return fromTarGz(data, exe)
 }
 
+// download returns rel's asset called name, refusing more than limit
+// bytes.
 func (c *Client) download(ctx context.Context, rel *Release, name string, limit int64) ([]byte, error) {
 	a, err := rel.asset(name)
 	if err != nil {
@@ -248,6 +259,8 @@ func (c *Client) download(ctx context.Context, rel *Release, name string, limit 
 	return c.downloadAsset(ctx, a, limit)
 }
 
+// downloadAsset returns a's contents, refusing more than limit bytes, or
+// a URL with no host or a scheme other than the API's.
 func (c *Client) downloadAsset(ctx context.Context, a Asset, limit int64) ([]byte, error) {
 	u, err := url.Parse(a.URL)
 	if err != nil {
@@ -289,6 +302,8 @@ func lookupSum(sums []byte, name string) ([]byte, error) {
 	return nil, fmt.Errorf("%s does not list %s: %w", ChecksumsName, name, ErrNotFound)
 }
 
+// fromTarGz returns the first regular file named exe, in any directory, in
+// the gzipped tar data.
 func fromTarGz(data []byte, exe string) ([]byte, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -309,6 +324,7 @@ func fromTarGz(data []byte, exe string) ([]byte, error) {
 	}
 }
 
+// fromZip is fromTarGz for a zip archive.
 func fromZip(data []byte, exe string) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -328,6 +344,8 @@ func fromZip(data []byte, exe string) ([]byte, error) {
 	return nil, fmt.Errorf("archive holds no %s: %w", exe, ErrNotFound)
 }
 
+// readLimited reads the executable called name from r, refusing one that
+// is empty or larger than maxBinary.
 func readLimited(r io.Reader, name string) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(r, maxBinary+1))
 	if err != nil {
