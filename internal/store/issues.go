@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"time"
@@ -182,8 +183,8 @@ func (n *NewIssue) normalize() error {
 	if !n.Type.Valid() {
 		return fmt.Errorf("%w: type %q", ErrInvalid, n.Type)
 	}
-	if len(n.IdempotencyKey) > 128 {
-		return fmt.Errorf("%w: idempotency key longer than 128", ErrInvalid)
+	if err := validIdem(n.IdempotencyKey); err != nil {
+		return err
 	}
 	for _, l := range n.Labels {
 		if err := validLabel(l); err != nil {
@@ -220,22 +221,13 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 	}
 	var out Issue
 	err = s.write(ctx, actor, func(w *wtx) error {
-		if in.IdempotencyKey != "" {
-			var op Op
-			var target string
-			err := w.tx.QueryRowContext(ctx, `SELECT op, target FROM events WHERE idem_key = ?`, in.IdempotencyKey).Scan(&op, &target)
-			switch {
-			case err == nil:
-				if op != OpIssueCreate || (in.ID != "" && IssueID(target) != in.ID) {
-					return fmt.Errorf("%w: idempotency key already used by %s on %s", ErrInvalid, op, target)
-				}
-				out, err = loadIssue(ctx, w.tx, IssueID(target))
-				return err
-			case !errors.Is(err, sql.ErrNoRows):
-				return fmt.Errorf("idempotency lookup: %w", err)
-			}
+		if done, err := w.replay(ctx, in.IdempotencyKey, "create", in, &out); done || err != nil {
+			return err
 		}
 		if out, err = insertIssue(ctx, w, id, in, meta); err != nil {
+			return err
+		}
+		if err := w.settle(out); err != nil {
 			return err
 		}
 		return w.notifyAssigned(ctx, out)
@@ -286,7 +278,7 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 	if err != nil {
 		return Issue{}, err
 	}
-	return out, w.event(ctx, OpIssueCreate, string(id), nil, out, in.IdempotencyKey)
+	return out, w.event(ctx, OpIssueCreate, string(id), nil, out)
 }
 
 // UpdateIssue applies patch if the issue is still at rev expected, and
@@ -330,7 +322,7 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return err
 		}
 		b, a := diff(before, out)
-		if err := w.event(ctx, OpIssueUpdate, string(id), b, a, ""); err != nil {
+		if err := w.event(ctx, OpIssueUpdate, string(id), b, a); err != nil {
 			return err
 		}
 		if out.Assignee != before.Assignee {
@@ -448,20 +440,31 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 }
 
 // CloseIssue closes an issue. expected 0 skips the revision check: close
-// wins over concurrent edits (design §8).
+// wins over concurrent edits (design §8). An issue with acceptance items
+// neither ticked nor waived is refused with an *AcceptanceError.
 func (s *Store) CloseIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
+	return s.closeIssue(ctx, actor, id, expected, reason, false)
+}
+
+// ForceClose is CloseIssue that closes despite open acceptance items,
+// listing them in the close event as acceptance_overridden.
+func (s *Store) ForceClose(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
+	return s.closeIssue(ctx, actor, id, expected, reason, true)
+}
+
+func (s *Store) closeIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string, force bool) (Issue, error) {
 	if len(reason) > 2000 {
 		return Issue{}, fmt.Errorf("%w: reason longer than 2000", ErrInvalid)
 	}
-	return s.setClosed(ctx, actor, id, expected, true, reason)
+	return s.setClosed(ctx, actor, id, expected, true, reason, force)
 }
 
 // ReopenIssue reopens a closed issue. expected 0 skips the revision check.
 func (s *Store) ReopenIssue(ctx context.Context, actor Actor, id IssueID, expected Rev) (Issue, error) {
-	return s.setClosed(ctx, actor, id, expected, false, "")
+	return s.setClosed(ctx, actor, id, expected, false, "", false)
 }
 
-func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected Rev, closing bool, reason string) (Issue, error) {
+func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected Rev, closing bool, reason string, force bool) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
@@ -478,13 +481,13 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 			return fmt.Errorf("issue %s at rev %d, not %d: %w", id, before.Rev, expected, ErrConflict)
 		}
 		if closing {
-			out, err = closeTx(ctx, w, before, reason)
+			out, err = closeTx(ctx, w, before, reason, force)
 			return err
 		}
 		if before.Status != StatusClosed {
 			return fmt.Errorf("%w: issue %s is not closed", ErrInvalid, id)
 		}
-		out, err = setStatus(ctx, w, before, OpIssueReopen, []any{string(StatusOpen), nil, nil})
+		out, err = setStatus(ctx, w, before, OpIssueReopen, []any{string(StatusOpen), nil, nil}, nil)
 		return err
 	})
 	if err != nil {
@@ -494,10 +497,22 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 }
 
 // closeTx closes before, read in w, ends any claim on it and records the
-// event.
-func closeTx(ctx context.Context, w *wtx, before Issue, reason string) (Issue, error) {
+// event. Open acceptance items refuse it, unless force, which records
+// them in the event.
+func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force bool) (Issue, error) {
 	if before.Status == StatusClosed {
 		return Issue{}, fmt.Errorf("%w: issue %s is already closed", ErrInvalid, before.ID)
+	}
+	items, err := acceptanceItems(ctx, w.tx, before)
+	if err != nil {
+		return Issue{}, err
+	}
+	var extra map[string]any
+	if open := openItems(items); len(open) > 0 {
+		if !force {
+			return Issue{}, &AcceptanceError{ID: before.ID, Open: open}
+		}
+		extra = map[string]any{"acceptance_overridden": open}
 	}
 	c, err := loadClaim(ctx, w.tx, before.ID)
 	if err != nil {
@@ -506,17 +521,19 @@ func closeTx(ctx context.Context, w *wtx, before Issue, reason string) (Issue, e
 	if err := releaseClaim(ctx, w, c); err != nil {
 		return Issue{}, err
 	}
-	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)})
+	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)}, extra)
 }
 
-// setStatus writes status, closed_at and close_reason and records op.
-func setStatus(ctx context.Context, w *wtx, before Issue, op Op, args []any) (Issue, error) {
+// setStatus writes status, closed_at and close_reason and records op,
+// with extra added to the event's after state.
+func setStatus(ctx context.Context, w *wtx, before Issue, op Op, args []any, extra map[string]any) (Issue, error) {
 	out, err := casUpdate(ctx, w, before, []string{"status = ?", "closed_at = ?", "close_reason = ?"}, args)
 	if err != nil {
 		return Issue{}, err
 	}
 	b, a := diff(before, out)
-	return out, w.event(ctx, op, string(before.ID), b, a, "")
+	maps.Copy(a, extra)
+	return out, w.event(ctx, op, string(before.ID), b, a)
 }
 
 // diff returns the changed fields of an issue, old and new. Bookkeeping

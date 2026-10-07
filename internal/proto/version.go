@@ -13,9 +13,12 @@ import (
 // Protocol 2 adds claims: start's lease and claim, the epoch on finish and
 // handoff, show's claim, renew, and who (the agents registry); then the
 // inbox (inbox, ack, watch and the evt frames it pushes) and the handoff
-// fields on finish and handoff. who and the inbox were added before
-// protocol 2 shipped in a release (v0.1.0 speaks 1), so without another
-// bump. A protocol 1 client sends none of them and gets the default lease.
+// fields on finish and handoff; then idempotency keys on comment, finish
+// and handoff, the acceptance checklist (accept, finish's ticked and
+// waived, close's force) and similar closed issues in create's and
+// show's results. Everything after claims was added before protocol 2
+// shipped in a release (v0.1.0 speaks 1), so without another bump. A
+// protocol 1 client sends none of them and gets the default lease.
 const (
 	Proto    = 2
 	ProtoMin = 1

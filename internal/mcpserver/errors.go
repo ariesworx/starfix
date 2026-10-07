@@ -73,6 +73,8 @@ func nextStep(pe *proto.Error) string {
 			return "tell the user: " + pe.Fix
 		}
 		return "correct the arguments and retry"
+	case proto.CodeAcceptance:
+		return "call finish with ticked: [numbers met] and waived: {number: reason} for the rest; show lists the items"
 	case proto.CodeUnavailable:
 		return "retry once; if it fails again, tell the user: " + personFix(pe)
 	}

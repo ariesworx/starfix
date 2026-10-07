@@ -27,12 +27,18 @@ var (
 	ErrNothingReady = fmt.Errorf("nothing is ready to start: %w", ErrNotFound)
 	// ErrSchemaTooNew: the database was migrated by a newer starfix.
 	ErrSchemaTooNew = errors.New("database schema is newer than this binary")
+
+	// errRetry marks a failure that rerunning the write resolves.
+	errRetry = errors.New("retry")
 )
 
 // retryable reports whether err is Dolt's signal that a concurrent
 // transaction won: a serialization failure (1213), a lock timeout, or a
 // constraint violation produced by transaction sequencing (1105).
 func retryable(err error) bool {
+	if errors.Is(err, errRetry) {
+		return true
+	}
 	var me *mysql.MySQLError
 	if !errors.As(err, &me) {
 		return false
@@ -62,6 +68,24 @@ func (e *HeldError) Error() string { return fmt.Sprintf("issue %s is in progress
 
 // Unwrap makes errors.Is(err, ErrConflict) hold.
 func (e *HeldError) Unwrap() error { return ErrConflict }
+
+// IdemError refuses an idempotency key the principal already used for a
+// different request, or used more than IdemTTL ago (Expired). It wraps
+// ErrConflict.
+type IdemError struct {
+	Key     string
+	Expired bool
+}
+
+func (e *IdemError) Error() string {
+	if e.Expired {
+		return fmt.Sprintf("idempotency key %q expired: it was used more than %s ago", e.Key, IdemTTL)
+	}
+	return fmt.Sprintf("idempotency key %q was already used for a different request", e.Key)
+}
+
+// Unwrap makes errors.Is(err, ErrConflict) hold.
+func (e *IdemError) Unwrap() error { return ErrConflict }
 
 // StaleEpochError refuses a finish or release that names a claim epoch
 // other than the current one: the issue was taken again since. It wraps

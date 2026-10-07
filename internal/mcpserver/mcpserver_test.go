@@ -192,7 +192,8 @@ func TestTools(t *testing.T) {
 	// Design §5 aims for about 2k tokens for the whole verb set. These 20
 	// tools are about 7 KiB, some 1.8k real tokens; the budget below is
 	// in Tokens' deliberately high estimate, raised from 2,200 to 2,400
-	// for the inbox and the structured handoff. Counted is what a model reads:
+	// for the inbox and the structured handoff; finish's ticked and waived
+	// fit by trimming descriptions. Counted is what a model reads:
 	// names, descriptions and input schemas; annotations steer the
 	// harness's approval prompts.
 	type seen struct {
