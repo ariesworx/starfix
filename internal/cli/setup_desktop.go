@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,14 +48,18 @@ func (r *runner) setupDesktop(agent agentsetup.Agent, command string, mode setup
 	entry := agentsetup.DesktopEntry(command, root)
 	again := "sfx setup " + agent.Name
 
-	d := &diskFile{path: path}
-	if d.orig, d.mode, err = readConfig(path); err != nil {
+	// The config is the person's: new, it is private, since it holds every
+	// server's env, other servers' tokens among them. On Windows it is under
+	// %APPDATA%, which need not be under home: then only its directory and
+	// the file itself are checked.
+	base := fileBase{dir: home, user: true, home: home}
+	if rel, err := filepath.Rel(home, path); home == "" || err != nil || strings.HasPrefix(rel, "..") {
+		base.dir = filepath.Dir(filepath.Dir(path))
+	}
+	d := &diskFile{path: path, base: base}
+	if err := d.read(); err != nil {
 		return err
 	}
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		d.mode = 0o600 // it holds every server's env, other servers' tokens among them
-	}
-	d.cur = d.orig
 	if dir, ok := agent.ProjectDir(d.orig, entry.Server); ok && dir != root && mode != (setupMode{}) {
 		return proto.Errf(proto.CodeExists,
 			fmt.Sprintf("remove it with `sfx -C %s setup %s --remove`, or rename this checkout's directory", dir, agent.Name),

@@ -37,12 +37,17 @@ func runIn(t *testing.T, home string, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-// snapshot reads every file under dir.
+// snapshot reads every file under dir, and where each link points.
 func snapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 { // recorded, never followed
+			target, err := os.Readlink(p)
+			files[p] = "-> " + target
 			return err
 		}
 		b, err := os.ReadFile(p) //nolint:gosec // a test's own temp files
