@@ -25,7 +25,7 @@ what. starfix makes that safe:
   agent dies, the lease lapses within 15 minutes and the issue is ready
   again. An agent that lost its claim cannot close work someone else has
   since taken.
-- **One authority.** Every change goes through one server, which puts them
+- **One authority.** All changes go through one server, which puts them
   in order. There are no database merges and no conflicts to resolve.
 - **Identity comes from SSH keys.** The server's sshd decides who you are.
   A client cannot claim to be someone else.
