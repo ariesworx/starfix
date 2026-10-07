@@ -20,7 +20,7 @@ func TestStart(t *testing.T) {
 	}
 
 	// Without an id, start takes what ready lists first.
-	got, err := s.StartIssue(ctx, alice, "")
+	got, _, err := s.StartIssue(ctx, alice, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestStart(t *testing.T) {
 
 	// The same principal again: unchanged, no event.
 	seq := lastSeq(t, s)
-	again, err := s.StartIssue(ctx, alice, high.ID)
+	again, _, err := s.StartIssue(ctx, alice, high.ID, 0)
 	if err != nil || again.Rev != got.Rev {
 		t.Fatalf("start again: %+v, %v", again, err)
 	}
@@ -39,23 +39,23 @@ func TestStart(t *testing.T) {
 	}
 
 	// Another principal is refused, with who holds it.
-	_, err = s.StartIssue(ctx, bob, high.ID)
+	_, _, err = s.StartIssue(ctx, bob, high.ID, 0)
 	var held *HeldError
 	if !errors.As(err, &held) || held.By != "alice" || held.ID != high.ID || !errors.Is(err, ErrConflict) {
 		t.Fatalf("start held: %v", err)
 	}
 
 	// By id, an issue ready does not list can be taken too.
-	if got, err := s.StartIssue(ctx, bob, top.ID); err != nil || got.Assignee != "bob" {
+	if got, _, err := s.StartIssue(ctx, bob, top.ID, 0); err != nil || got.Assignee != "bob" {
 		t.Fatalf("start blocked by id: %+v, %v", got, err)
 	}
-	if got, err := s.StartIssue(ctx, bob, ""); err != nil || got.ID != blocker.ID {
+	if got, _, err := s.StartIssue(ctx, bob, "", 0); err != nil || got.ID != blocker.ID {
 		t.Fatalf("start next: %+v, %v", got, err)
 	}
-	if got, err := s.StartIssue(ctx, bob, ""); err != nil || got.ID != low.ID {
+	if got, _, err := s.StartIssue(ctx, bob, "", 0); err != nil || got.ID != low.ID {
 		t.Fatalf("start last: %+v, %v", got, err)
 	}
-	if _, err := s.StartIssue(ctx, bob, ""); !errors.Is(err, ErrNothingReady) || !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.StartIssue(ctx, bob, "", 0); !errors.Is(err, ErrNothingReady) || !errors.Is(err, ErrNotFound) {
 		t.Fatalf("start with nothing ready: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestStart(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := s.StartIssue(ctx, alice, tc.id); !errors.Is(err, tc.want) {
+			if _, _, err := s.StartIssue(ctx, alice, tc.id, 0); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
@@ -95,8 +95,8 @@ func TestStartRace(t *testing.T) {
 	s2.beforeCommit = b.hook
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, errs[0] = s1.StartIssue(t.Context(), alice, is.ID) })
-	wg.Go(func() { _, errs[1] = s2.StartIssue(t.Context(), bob, is.ID) })
+	wg.Go(func() { _, _, errs[0] = s1.StartIssue(t.Context(), alice, is.ID, 0) })
+	wg.Go(func() { _, _, errs[1] = s2.StartIssue(t.Context(), bob, is.ID, 0) })
 	wg.Wait()
 	assertOneWinner(t, errs)
 	got, err := s1.GetIssue(t.Context(), is.ID)
@@ -130,7 +130,7 @@ func TestStartTopReadyConcurrent(t *testing.T) {
 		wg.Go(func() {
 			a := Actor{Principal: fmt.Sprintf("p%d", i), Session: "s", Machine: "m"}
 			var is Issue
-			is, errs[i] = s.StartIssue(t.Context(), a, "")
+			is, _, errs[i] = s.StartIssue(t.Context(), a, "", 0)
 			ids[i] = is.ID
 		})
 	}
@@ -148,14 +148,14 @@ func TestFinish(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 	is := mustCreate(t, s, NewIssue{Title: "work"})
-	if _, err := s.StartIssue(ctx, alice, is.ID); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.FinishIssue(ctx, bob, is.ID, Finish{}); !errors.Is(err, ErrConflict) {
+	if _, _, err := s.FinishIssue(ctx, bob, is.ID, 0, Finish{}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("finish held by alice: %v", err)
 	}
 
-	got, created, err := s.FinishIssue(ctx, alice, is.ID, Finish{Reason: "done", Handoff: "watch the cache",
+	got, created, err := s.FinishIssue(ctx, alice, is.ID, 0, Finish{Reason: "done", Handoff: "watch the cache",
 		Discovered: []NewIssue{{Title: "flaky test", Type: TypeBug, Priority: prio(P1)}, {Title: "rename x"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestFinish(t *testing.T) {
 	if err != nil || h == nil || h.Body != "watch the cache" || h.Kind != CommentHandoff || h.Author != "alice" {
 		t.Fatalf("handoff: %+v, %v", h, err)
 	}
-	if _, _, err := s.FinishIssue(ctx, alice, is.ID, Finish{}); !errors.Is(err, ErrInvalid) {
+	if _, _, err := s.FinishIssue(ctx, alice, is.ID, 0, Finish{}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("finish twice: %v", err)
 	}
 	assertGapless(t, s)
@@ -216,12 +216,12 @@ func TestFinishIsAtomic(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := s.FinishIssue(ctx, alice, is.ID, tc.f); !errors.Is(err, tc.want) {
+			if _, _, err := s.FinishIssue(ctx, alice, is.ID, 0, tc.f); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	if _, _, err := s.FinishIssue(ctx, alice, "tst-nope", Finish{}); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.FinishIssue(ctx, alice, "tst-nope", 0, Finish{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("finish missing: %v", err)
 	}
 	if lastSeq(t, s) != seq {
@@ -244,19 +244,19 @@ func TestHandoff(t *testing.T) {
 	if h, err := s.LastHandoff(ctx, is.ID); err != nil || h != nil {
 		t.Fatalf("no handoff yet: %+v, %v", h, err)
 	}
-	if _, err := s.StartIssue(ctx, alice, is.ID); err != nil {
+	if _, _, err := s.StartIssue(ctx, alice, is.ID, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	// A note alone changes nothing about who holds the issue; anyone may add one.
-	got, err := s.HandoffIssue(ctx, bob, is.ID, "first", false)
+	got, err := s.HandoffIssue(ctx, bob, is.ID, 0, "first", false)
 	if err != nil || got.Rev != 2 || got.Assignee != "alice" {
 		t.Fatalf("note: %+v, %v", got, err)
 	}
-	if _, err := s.HandoffIssue(ctx, bob, is.ID, "mine now", true); !errors.Is(err, ErrConflict) {
+	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, "mine now", true); !errors.Is(err, ErrConflict) {
 		t.Fatalf("release by a non-holder: %v", err)
 	}
-	got, err = s.HandoffIssue(ctx, alice, is.ID, "second", true)
+	got, err = s.HandoffIssue(ctx, alice, is.ID, 0, "second", true)
 	if err != nil || got.Status != StatusOpen || got.Assignee != "" || got.Rev != 3 {
 		t.Fatalf("release: %+v, %v", got, err)
 	}
@@ -264,7 +264,7 @@ func TestHandoff(t *testing.T) {
 		t.Fatalf("last handoff: %+v, %v", h, err)
 	}
 	// Released, it can be started by someone else.
-	if got, err := s.StartIssue(ctx, bob, is.ID); err != nil || got.Assignee != "bob" {
+	if got, _, err := s.StartIssue(ctx, bob, is.ID, 0); err != nil || got.Assignee != "bob" {
 		t.Fatalf("start after release: %+v, %v", got, err)
 	}
 
@@ -292,12 +292,12 @@ func TestHandoff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := s.HandoffIssue(ctx, bob, is.ID, tc.note, tc.release); !errors.Is(err, tc.want) {
+			if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, tc.note, tc.release); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	if _, err := s.HandoffIssue(ctx, bob, is.ID, "after close", false); err != nil {
+	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, "after close", false); err != nil {
 		t.Errorf("note on a closed issue: %v", err)
 	}
 	assertGapless(t, s)

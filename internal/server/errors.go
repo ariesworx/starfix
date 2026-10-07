@@ -19,6 +19,7 @@ func command(op string) string { return strings.ReplaceAll(op, ".", " ") }
 func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error) *proto.Error {
 	text := err.Error()
 	var held *store.HeldError
+	var stale *store.StaleEpochError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
@@ -26,6 +27,14 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 
 	case errors.As(err, &held):
 		return s.held(ctx, op, held)
+
+	case errors.As(err, &stale):
+		msg := fmt.Sprintf("your claim on %s (epoch %d) was lost; it is now epoch %d", stale.ID, stale.Epoch, stale.Current)
+		if stale.By.Principal != "" {
+			msg += fmt.Sprintf(", held by %s/%s", stale.By.Principal, stale.By.Session)
+		}
+		return proto.Errf(proto.CodeConflict,
+			fmt.Sprintf("stop work on it; keep anything useful as a comment (`sfx comment %s`), or start it again if it is free", stale.ID), msg)
 
 	case errors.Is(err, store.ErrConflict):
 		return s.conflict(ctx, id, rev)

@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -29,19 +27,8 @@ func parseSince(s string) (time.Time, time.Duration, error) {
 	}
 	bad := fmt.Errorf("%w: since %q must be a time (RFC 3339), a date (2006-01-02) or a duration such as 24h or 7d",
 		store.ErrInvalid, s)
-	if unit := s[len(s)-1]; unit == 'd' || unit == 'w' {
-		n, err := strconv.Atoi(s[:len(s)-1])
-		if err != nil || n < 1 || n > 10000 || strings.HasPrefix(s, "+") {
-			return time.Time{}, 0, bad
-		}
-		day := 24 * time.Hour
-		if unit == 'w' {
-			day *= 7
-		}
-		return time.Time{}, time.Duration(n) * day, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
+	d, err := proto.ParseDuration(s)
+	if err != nil {
 		return time.Time{}, 0, bad
 	}
 	return time.Time{}, d, nil

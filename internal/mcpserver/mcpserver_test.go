@@ -100,6 +100,12 @@ func (d *dialer) dial(context.Context) (Conn, error) {
 
 func connect(t *testing.T, conns ...*fakeConn) (*mcp.ClientSession, *dialer) {
 	t.Helper()
+	cs, d, _ := connectServer(t, conns...)
+	return cs, d
+}
+
+func connectServer(t *testing.T, conns ...*fakeConn) (*mcp.ClientSession, *dialer, *Server) {
+	t.Helper()
 	d := &dialer{conns: conns}
 	s := New(Options{Version: "v0.2.0", Dial: d.dial})
 	t.Cleanup(func() { _ = s.Close() })
@@ -113,7 +119,7 @@ func connect(t *testing.T, conns ...*fakeConn) (*mcp.ClientSession, *dialer) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cs.Close() })
-	return cs, d
+	return cs, d, s
 }
 
 func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
@@ -620,5 +626,73 @@ func TestDigest(t *testing.T) {
 				t.Errorf("in progress %+v", ip)
 			}
 		})
+	}
+}
+
+// start claims for Lease and remembers the epoch: finish and a releasing
+// handoff pass it, and the renewer keeps it alive until the server says
+// the claim is gone, which the next prime reports.
+func TestClaimsFollowTheSession(t *testing.T) {
+	var mu sync.Mutex
+	held := []proto.Claim{{ID: "sf-1", Epoch: 3}, {ID: "sf-2", Epoch: 1}}
+	f := &fakeConn{who: "alice", reply: func(op string, args any) (any, error) {
+		switch op {
+		case proto.OpStart:
+			id := args.(proto.StartArgs).ID
+			epoch := int64(3)
+			if id == "sf-2" {
+				epoch = 1
+			}
+			return proto.StartResult{Issue: proto.Issue{ID: id, Type: "task"}, Claim: &proto.Claim{ID: id, Epoch: epoch}}, nil
+		case proto.OpRenew:
+			mu.Lock()
+			defer mu.Unlock()
+			return proto.ClaimsResult{Claims: held}, nil
+		case proto.OpList, proto.OpReady:
+			return proto.ListResult{Issues: []proto.Summary{}}, nil
+		case proto.OpFinish:
+			return proto.FinishResult{ID: "sf-1", Rev: 4}, nil
+		}
+		return proto.WriteResult{ID: "sf-2", Rev: 2}, nil
+	}}
+	cs, _, s := connectServer(t, f)
+	ctx := t.Context()
+
+	s.Renew(ctx) // nothing held: no call
+	callTool(t, cs, "start", map[string]any{"id": "sf-1"})
+	callTool(t, cs, "start", map[string]any{"id": "sf-2"})
+	s.Renew(ctx)
+
+	// sf-2's claim lapses on the server.
+	mu.Lock()
+	held = held[:1]
+	mu.Unlock()
+	s.Renew(ctx)
+	var p Prime
+	if err := json.Unmarshal([]byte(text(t, callTool(t, cs, "prime", nil))), &p); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.Lost, []string{"sf-2"}) {
+		t.Fatalf("lost: %v", p.Lost)
+	}
+	if !strings.Contains(p.Text(), "lost claim (stop work on it): sf-2") {
+		t.Fatalf("prime text:\n%s", p.Text())
+	}
+	callTool(t, cs, "finish", map[string]any{"id": "sf-1"})
+	callTool(t, cs, "handoff", map[string]any{"id": "sf-2", "note": "n", "release": true})
+	s.Renew(ctx) // nothing held again
+
+	want := []string{"start", "start", "renew", "renew", "list", "ready", "finish", "handoff"}
+	if got := f.ops(); !slices.Equal(got, want) {
+		t.Fatalf("ops %v, want %v", got, want)
+	}
+	if a := f.calls[0].args.(proto.StartArgs); a.Lease != Lease {
+		t.Errorf("start lease %q", a.Lease)
+	}
+	if a := f.calls[6].args.(proto.FinishArgs); a.Epoch != 3 {
+		t.Errorf("finish epoch %d, want 3", a.Epoch)
+	}
+	if a := f.calls[7].args.(proto.HandoffArgs); a.Epoch != 0 {
+		t.Errorf("release of a lost claim sent epoch %d", a.Epoch)
 	}
 }

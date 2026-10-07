@@ -139,7 +139,7 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 		return usagef(usage, "mcp takes no arguments")
 	}
 	opts := r.clientOptions()
-	if opts.Session == "" {
+	if client.SessionFromEnv(r.env.Getenv) == "" {
 		// No harness session id: pick one for this process, so a reconnect
 		// keeps the session's history under one id.
 		opts.Session = client.NewSessionID()

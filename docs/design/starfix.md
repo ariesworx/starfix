@@ -200,6 +200,15 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 | Cross-project deps need a local checkout | Rows on the server, notified on change |
 | Gates are polled and cross-project gates never resolve | Server gate runner; GitHub webhooks |
 
+**As built (stage 3, claims, 7 Oct 2026).** Where the build differs from the above:
+- `claims` has one row per issue ever taken: holder (principal, session, machine), `epoch`, `claimed_at`, `expires_at` (migration 0004). A released or expired claim keeps its row with no holder, so the epoch only rises. There is no `provisional` flag until offline claims (stage 5).
+- `start` is the claim: it leases the issue and sets it `in_progress`, assigned to the principal, in one transaction. There is no separate `claim` tool. The same session starting again only extends the lease; another session of the same principal takes over at once under a new epoch, because a person who restarts their agent should not wait out the lease; another principal waits for expiry.
+- Leases: an agent's is 15 minutes, renewed every minute by `sfx mcp` while it runs (protocol op `renew`). A person's own commands take 8 hours (`sfx start --for`), because nothing renews them, and run as session `cli`, one per machine. `sfx away D` extends every claim you hold, in every session, up to 7 days. A renewal never shortens a lease, and rewrites the row only when less than half the lease is left; renewals are not events.
+- Fencing: `finish` and `handoff --release` take an optional epoch and refuse any other (`sfx mcp` passes the one its `start` returned). Closing an issue ends its claim, whoever closes it.
+- Reaper: `starfixd serve` ends lapsed claims every 30 s as `starfixd/reaper`, recording `claim.expire` and returning the issue to `open`, unassigned, if it is still the holder's. A lapsed claim holds nothing even before the reaper runs. Inbox items for lost claims come with the inbox; until then the next `prime` of the session that lost one lists it under `lost`.
+- An issue `in_progress` with no claim row (imported, set by hand, or taken before claims) stays held by its assignee with no lease, as in stage 2.
+- Protocol 2 carries these fields; servers still accept protocol 1 clients, whose `start` gets the 15-minute default.
+
 ## 8. Offline and conflicts
 
 The client keeps a SQLite read cache of everything you can see, plus an outbox of operations. Each operation carries the `rev` it was based on, a hybrid logical clock stamp and an idempotency key. On reconnect the outbox replays in order; the server applies each operation or parks it as a conflict. Sync never blocks on a conflict.

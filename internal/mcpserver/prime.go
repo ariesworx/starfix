@@ -21,6 +21,9 @@ type Prime struct {
 	// More: an issue list was cut to fit the budget.
 	More    bool     `json:"more,omitempty"`
 	Notices []string `json:"notices,omitempty"`
+	// Lost are issues this session started whose claim has since lapsed
+	// or been taken over: stop work on them.
+	Lost []string `json:"lost,omitempty"`
 }
 
 // How much prime shows.
@@ -88,6 +91,9 @@ func (p *Prime) Text() string {
 	fmt.Fprintf(&b, "starfix: project %s, you are %s, session %s\n", p.Project, who, p.Session)
 	for _, n := range p.Notices {
 		fmt.Fprintf(&b, "notice: %s\n", n)
+	}
+	if len(p.Lost) > 0 {
+		fmt.Fprintf(&b, "lost claim (stop work on it): %s\n", strings.Join(p.Lost, " "))
 	}
 	section := func(name, empty string, list []proto.Summary) {
 		if len(list) == 0 {
