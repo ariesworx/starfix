@@ -277,6 +277,7 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 		if done, err := w.replay(ctx, in.IdempotencyKey, "create", in, &out); done || err != nil {
 			return err
 		}
+		var err error
 		if out, err = insertIssue(ctx, w, id, in, meta); err != nil {
 			return err
 		}
@@ -294,9 +295,11 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 // insertIssue writes a normalized new issue with the given ID and records
 // its create event.
 func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any) (Issue, error) {
-	if ok, err := exists(ctx, w.tx, id); err != nil {
+	ok, err := exists(ctx, w.tx, id)
+	if err != nil {
 		return Issue{}, err
-	} else if ok {
+	}
+	if ok {
 		return Issue{}, fmt.Errorf("issue %s: %w", id, ErrExists)
 	}
 	if in.ParentID != "" {
@@ -454,10 +457,13 @@ func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []
 		return Issue{}, fmt.Errorf("issue %s changed during update: %w", before.ID, ErrConflict)
 	}
 	out, err := loadIssue(ctx, w.tx, before.ID)
+	if err != nil {
+		return Issue{}, err
+	}
 	if before.Status == StatusClosed || out.Status == StatusClosed {
 		w.closedChanged = true
 	}
-	return out, err
+	return out, nil
 }
 
 // columns validates the patch and turns it into SET clauses over a fixed

@@ -380,6 +380,7 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
 				return err
 			}
 		}
+		var err error
 		if out, err = planDep(ctx, w.tx, d); err != nil || out != ImportCreated {
 			return err
 		}
@@ -422,8 +423,7 @@ func normalizeComment(c Comment) (Comment, error) {
 			return Comment{}, fmt.Errorf("comment %s: %w", c.ID, err)
 		}
 	}
-	switch {
-	case c.CreatedAt.IsZero():
+	if c.CreatedAt.IsZero() {
 		return Comment{}, fmt.Errorf("%w: comment %s: created_at is required", ErrInvalid, c.ID)
 	}
 	c.CreatedAt = c.CreatedAt.UTC().Truncate(time.Microsecond)
@@ -470,6 +470,7 @@ func (s *Store) ImportComment(ctx context.Context, actor Actor, c Comment) (Impo
 		if err := mustExist(ctx, w.tx, c.Issue); err != nil {
 			return err
 		}
+		var err error
 		if out, err = planComment(ctx, w.tx, c); err != nil || out != ImportCreated {
 			return err
 		}

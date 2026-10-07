@@ -57,11 +57,16 @@ func TestBatchedCommits(t *testing.T) {
 	tick()
 	base := commits("starfix: events through 0")
 
+	// Not mustCreate: t.Fatal must not run off the test goroutine.
 	var wg sync.WaitGroup
-	for range 20 {
-		wg.Go(func() { mustCreate(t, s, NewIssue{}) })
+	errs := make([]error, 20)
+	for i := range errs {
+		wg.Go(func() { _, errs[i] = s.CreateIssue(t.Context(), alice, NewIssue{Title: "issue"}) })
 	}
 	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
 	tick()
 	if n := commits("starfix: events through 20"); n != base+1 {
 		t.Errorf("20 writes then a tick made %d commits, want 1", n-base)

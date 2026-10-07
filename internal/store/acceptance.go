@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -432,12 +433,7 @@ func setItemState(ctx context.Context, w *wtx, id IssueID, it AcceptanceItem, st
 
 // mapKeys returns m's keys in order.
 func mapKeys(m map[int]string) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 // checkItems refuses acceptance text with more than most items.
