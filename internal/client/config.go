@@ -68,16 +68,41 @@ func (e noConfigError) Unwrap() error { return e.pe }
 
 func (noConfigError) Is(target error) bool { return target == ErrNoConfig }
 
-// LoadConfig finds .starfix.yaml in dir or the nearest parent that has one.
+// LoadConfig finds .starfix.yaml in dir or the nearest parent that has
+// one. The search stops at the repository's top level (the first
+// directory holding .git, a directory or a worktree's file) and at the
+// home directory, never above them: a config in a shared parent such as
+// /tmp, or a drive root on Windows, must not capture a checkout that has
+// none of its own. The file found must be a regular file; on Unix it
+// must also be the user's own and writable by no one else, since it
+// names the server every command and hook connects to. Windows has no
+// owner or mode check here (its ACLs are not Unix bits), so there the
+// boundary is the only guard.
 func LoadConfig(dir string) (*Config, error) {
+	home, _ := os.UserHomeDir() // no home: the search stops at .git or the root
+	return loadConfig(dir, home)
+}
+
+func loadConfig(dir, home string) (*Config, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	var homeInfo fs.FileInfo
+	if home != "" {
+		homeInfo, _ = os.Stat(home) // a missing home bounds nothing
+	}
 	for {
 		path := filepath.Join(dir, ConfigFile)
-		b, err := os.ReadFile(path) //nolint:gosec // the repository's own config
+		fi, err := os.Stat(path)
 		if err == nil {
+			if err := checkConfigFile(path, fi); err != nil {
+				return nil, err
+			}
+			b, err := os.ReadFile(path) //nolint:gosec // the repository's own config, checked above
+			if err != nil {
+				return nil, fmt.Errorf("config: %w", err)
+			}
 			c, err := ParseConfig(b)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", path, err)
@@ -89,13 +114,48 @@ func LoadConfig(dir string) (*Config, error) {
 			return nil, fmt.Errorf("config: %w", err)
 		}
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || isRepoTop(dir) || sameDir(dir, homeInfo) {
 			return nil, noConfigError{proto.Errf(proto.CodeInvalid,
-				"run starfix inside a repository that has one, or pass -C DIR",
+				"run starfix inside a repository that has one, or pass -C DIR; the search stops at the repository's top level and at your home directory",
 				ConfigFile+" not found here or in any parent directory")}
 		}
 		dir = parent
 	}
+}
+
+// isRepoTop reports whether dir holds .git: a directory, or the file a
+// worktree or submodule has.
+func isRepoTop(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
+// sameDir reports whether dir is the directory home describes.
+func sameDir(dir string, home fs.FileInfo) bool {
+	if home == nil {
+		return false
+	}
+	fi, err := os.Stat(dir)
+	return err == nil && os.SameFile(fi, home)
+}
+
+// checkConfigFile refuses a config that is not a regular file or that
+// someone else could have written.
+func checkConfigFile(path string, fi fs.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return proto.Errf(proto.CodeInvalid, "replace it with the project's "+ConfigFile+" file",
+			path+" is not a regular file")
+	}
+	if !OwnedByUser(fi) {
+		return proto.Errf(proto.CodeInvalid,
+			"check where it came from; if it is your project's, copy it into your checkout as your own file, else delete it",
+			path+" is owned by another user; starfix reads only your own "+ConfigFile)
+	}
+	if groupOrWorldWritable(fi) {
+		return proto.Errf(proto.CodeInvalid, "run `chmod go-w "+path+"`",
+			fmt.Sprintf("%s is writable by other users (mode %04o)", path, fi.Mode().Perm()))
+	}
+	return nil
 }
 
 // ParseConfig reads and validates a config, filling defaults. Unknown keys

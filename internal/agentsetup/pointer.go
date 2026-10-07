@@ -148,3 +148,20 @@ func pointerSnippet(style pointerStyle) string {
 	}
 	return strings.Join(pointerLines(""), "\n") + "\n"
 }
+
+// splitLines splits content into lines without the final newline's empty
+// tail.
+func splitLines(content []byte) []string {
+	s := strings.TrimSuffix(string(content), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func joinLines(lines []string) []byte {
+	if len(lines) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
