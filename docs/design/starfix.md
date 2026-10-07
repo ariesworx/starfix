@@ -2,11 +2,11 @@
 
 6 Oct 2026. Status: accepted draft. Based on a survey of bd 1.2.2 (source, docs, changelog, open issues and PRs) and [database.md](database.md).
 
-starfix is an issue tracker, shared memory and coordination layer for AI coding agents working across sessions and machines. It is one Go module and two binaries; the client command is `sf`, short for starfix:
+starfix is an issue tracker, shared memory and coordination layer for AI coding agents working across sessions and machines. It is one Go module and two binaries; the client command is `sfx`, short for starfix:
 
 | Binary | Runs | Role |
 |---|---|---|
-| `sf` | each developer machine | MCP server for agents (stdio), admin CLI for people, local cache and op log |
+| `sfx` | each developer machine | MCP server for agents (stdio), admin CLI for people, local cache and op log |
 | `starfixd` | the shared server | the single authority: claims, leases, events, memory, sync |
 
 It replaces bd and needs neither bd nor beads-remote. beads-remote's SSH, pinning and provisioning code moves in.
@@ -103,11 +103,11 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 | `vc`, `branch`, `backup`, `compact` (Dolt), `flatten`, `gc` | Replace | The server owns history and backups (server-side backups); no client can rewrite it |
 | Semantic compaction, `restore` | Port | Non-destructive: original kept in `compactions` |
 | `prune`, `purge`, `delete`, `rename`, `rename-prefix` | Port | Admin CLI only; each one transaction; delete is a tombstone plus an admin purge |
-| JSONL import/export | Port | bd-compatible both ways, so migration is `sf import < bd.jsonl` |
+| JSONL import/export | Port | bd-compatible both ways, so migration is `sfx import < bd.jsonl` |
 | `batch` | Port | MCP `batch` tool and CLI; one transaction, one round trip |
 | `kv`, `config`, `metadata` | Port | `settings` table plus issue `metadata` JSON |
 | Memories (`remember`, `recall`, `forget`, `memories`) | Redesign | Scoped, tagged, authored records (§6) |
-| `prime`, `onboard`, `quickstart`, `setup <agent>`, `rules`, `preflight` | Redesign | MCP `instructions` plus a capped `prime` resource; `sf setup <agent>` (§5) |
+| `prime`, `onboard`, `quickstart`, `setup <agent>`, `rules`, `preflight` | Redesign | MCP `instructions` plus a capped `prime` resource; `sfx setup <agent>` (§5) |
 | Git hooks (`bd hooks`) | Replace | No hooks. An optional `prepare-commit-msg` snippet that adds a `Starfix:` trailer, installed only on request |
 | Merge slot | Redesign | General leased mutex/semaphore with FIFO handoff |
 | Gates (human, timer, gh, bead) | Redesign | Server gate runner; GitHub by webhook; cross-project works |
@@ -121,17 +121,17 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 | Federation, `bd sync`, `dolt push/pull` | Replace | One authority plus offline op log (§8) |
 | Audit, journal, provenance | Port | One `events` table, always on; provenance links kept |
 | Jira, Linear, ADO, Notion, GitLab sync | Port, later | One sync engine; GitHub first |
-| `doctor`, `recompute-blocked`, repair migrations | Replace | Nothing derived is stored, so nothing drifts; `sf check` verifies connection and schema |
+| `doctor`, `recompute-blocked`, repair migrations | Replace | Nothing derived is stored, so nothing drifts; `sfx check` verifies connection and schema |
 | OTEL metrics | Port, later | |
 
 ## 5. Agent interface (MCP)
 
 **Interoperability.** Claude Code, Codex, Gemini CLI, Cursor, VS Code Copilot, Junie, Amp and Claude Desktop all speak MCP over stdio. One server serves them all. Agents that only read instruction files (Aider, Windsurf, Kilo, Kiro, Cody, OpenCode, Factory) get a pointer line, plus the CLI in read-only mode.
 
-`sf setup <agent> [--check|--remove]` writes three things:
+`sfx setup <agent> [--check|--remove]` writes three things:
 - the agent's MCP config;
 - a marker-delimited pointer in AGENTS.md, CLAUDE.md, GEMINI.md or the agent's rules file;
-- where the agent supports hooks, a SessionStart hook that runs `sf prime --hook`, which also registers the session.
+- where the agent supports hooks, a SessionStart hook that runs `sfx prime --hook`, which also registers the session.
 
 **Tools.** A small verb set, about 2k tokens of schema in total. bd's beads-mcp costs 10 to 50k.
 
@@ -154,9 +154,9 @@ You asked to port every feature. Every bd feature is listed here as **Port** (sa
 
 **As built (stage 2, first slice, 7 Oct 2026).** Where the build differs from the above:
 - Tools so far: `prime`, `ready`, `blocked`, `list`, `show`, `create`, `update`, `close`, `reopen`, `dep` (one tool, `action` add or rm), `label`, `comment`, `comments`, `history`. `claim` and `handoff` wait for stage 3 claims; until then an agent takes work with `update` (status `in_progress`, assignee). Their schemas cost about 1.3k tokens; no output schemas are published, since they would double that.
-- Prime is a `prime` tool and `sf prime`, not yet a `starfix://prime` resource, with the static MCP `instructions`. It holds your in-progress issues (assigned to you), the top 5 ready and the version notices; claims, inbox and memories join it in their stages.
-- `sf setup <agent>` covers Claude Code, Codex and Gemini CLI and writes the MCP config only: it prints by default, `--write` edits the project's file, `--global` the home one, plus `--check` and `--remove`. The pointer line and the SessionStart hook are not written yet.
-- Session ids: Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex and Gemini CLI set none starfix knows of, so `sf mcp` picks one per process (kept across reconnects) unless `STARFIX_SESSION` is set. The welcome frame now echoes the principal, so the client knows who "you" are.
+- Prime is a `prime` tool and `sfx prime`, not yet a `starfix://prime` resource, with the static MCP `instructions`. It holds your in-progress issues (assigned to you), the top 5 ready and the version notices; claims, inbox and memories join it in their stages.
+- `sfx setup <agent>` covers Claude Code, Codex and Gemini CLI and writes the MCP config only: it prints by default, `--write` edits the project's file, `--global` the home one, plus `--check` and `--remove`. The pointer line and the SessionStart hook are not written yet.
+- Session ids: Claude Code sets `CLAUDE_CODE_SESSION_ID`; Codex and Gemini CLI set none starfix knows of, so `sfx mcp` picks one per process (kept across reconnects) unless `STARFIX_SESSION` is set. The welcome frame now echoes the principal, so the client knows who "you" are.
 - Every tool result is capped at about 2k tokens: lists re-ask the server with a smaller limit so their cursor stays exact; `show`, `comments` and `history` cut text or drop the oldest records and say so.
 
 ## 6. Memory
@@ -208,8 +208,8 @@ The client keeps a SQLite read cache of everything you can see, plus an outbox o
 | Close vs. edit | Close wins; the edit is kept as a comment |
 | Delete vs. edit | Delete wins; the edit is kept on the tombstone and is restorable |
 
-- `sf away 4h` extends your leases before you go offline, so your claims hold.
-- Conflicts show in `sf conflicts` and in the MCP `conflicts` tool. Each one lists three choices: mine, theirs, or merged text. Resolving one is a normal operation, so it is audited too.
+- `sfx away 4h` extends your leases before you go offline, so your claims hold.
+- Conflicts show in `sfx conflicts` and in the MCP `conflicts` tool. Each one lists three choices: mine, theirs, or merged text. Resolving one is a normal operation, so it is audited too.
 - A recommendation comes with each conflict. For example: "theirs is newer and from the claim holder; take theirs".
 
 ## 9. Bandwidth and verbosity
@@ -235,12 +235,12 @@ The client keeps a SQLite read cache of everything you can see, plus an outbox o
 
 Dolt stays the backend (decided 6 Oct 2026). starfix and starfixd ship as one signed release: cosign keyless signature on the checksums, plus a build provenance attestation.
 
-**`sf upgrade [--check] [--rollback]`** (each developer machine)
+**`sfx upgrade [--check] [--rollback]`** (each developer machine)
 - Reads the latest release, verifies the signature and checksum, and replaces the binary atomically. The previous binary is kept for `--rollback`.
 - `--check` prints one line and changes nothing.
 - Nothing upgrades itself without the command.
 
-**`starfixd upgrade [--check] [--to vX.Y.Z] [--rollback]`** (on the server, as admin, or remotely as `sf admin server upgrade`)
+**`starfixd upgrade [--check] [--to vX.Y.Z] [--rollback]`** (on the server, as admin, or remotely as `sfx admin server upgrade`)
 1. Verify the release, as above.
 2. Back up first: a SQL dump and a Dolt tag `starfix-<old version>`.
 3. Drain: refuse new writes, flush the commit batcher.
@@ -255,7 +255,7 @@ Dolt stays the backend (decided 6 Oct 2026). starfix and starfixd ship as one si
 |---|---|---|
 | Server behind the latest release | every client and the admin | CLI: one stderr line, at most once a day per machine. MCP: one line in prime, never in tool results. `starfixd check` fails with a `fix:` line |
 | Server behind a security release | everyone | as above, but on every CLI command and every session start until upgraded |
-| Client behind the server | that client | one line: `sf upgrade` |
+| Client behind the server | that client | one line: `sfx upgrade` |
 | Client outside the server's protocol range | that client | refused, with a typed exit code and a `fix:` line (fail closed) |
 
 The protocol supports one version back and one forward (principle 9), so the server and clients can be upgraded independently.
@@ -272,7 +272,7 @@ Agreed 6 Oct 2026; each item lands in the stage shown in §13.
 | 4 | **Acceptance checklist** | Acceptance criteria are items, not prose. The agent ticks them; `close` refuses until all are ticked or waived with a reason. |
 | 5 | **Errors that say what to do next** | Every refusal names the cause and the next action, for example `sf-a1b2 claimed by ed/codex 3m ago; next ready: sf-c3d4`. Typed error codes for programs. |
 | 6 | **Similar closed issues** | `show` and `create` list up to three similar closed issues: full-text first, vectors when §10 lands. |
-| 7 | **Live board** | `sf tui` (terminal) and an optional read-only web view served by `starfixd`, both driven by the event stream. |
+| 7 | **Live board** | `sfx tui` (terminal) and an optional read-only web view served by `starfixd`, both driven by the event stream. |
 | 8 | **`starfixd --dev`** | A throwaway local server with a temporary Dolt database and seeded sample data, for trying starfix, demos and agent tests. |
 | 9 | **Token budget in CI** | Scripted agent sessions measure tokens for each tool schema, each result shape and prime; CI fails when one exceeds its budget. |
 | 10 | **Time and token reporting** | Optional: the client records wall time per claim and, where the harness exposes it, tokens per issue. Shown in `show` and `digest`. |
@@ -284,10 +284,10 @@ Agreed 6 Oct 2026. Extends item 10.
 - **Account.** Every project has an `account`: a client's engagement code name or an internal department. It defaults to `internal`. An epic or issue can override it, and children inherit it. Code names only; the map to real clients lives outside starfix.
 - **What is recorded, per issue and per session:** model, input tokens, output tokens, cache-write tokens, cache-read tokens, wall time, harness. Cache tokens are separate because they are priced differently.
 - **Where the numbers come from:** the harness, never the model's own report. The client reads whatever the harness exposes (for example Claude Code's OpenTelemetry usage metrics or hook payloads, and Codex's token-usage log) and attributes each delta to the issue the session held at that moment. When a session holds several issues, the delta is split by time held, and the record says it was split. A harness that exposes nothing records wall time only, marked as such.
-- **Prices.** A `prices` table keyed by (model, effective date) with input, output, cache-write and cache-read rates. Cost is computed when a report runs, never stored, so a price change never rewrites history. Admins update prices with `sf admin prices set`.
+- **Prices.** A `prices` table keyed by (model, effective date) with input, output, cache-write and cache-read rates. Cost is computed when a report runs, never stored, so a price change never rewrites history. Admins update prices with `sfx admin prices set`.
 - **Subscriptions.** Reports always show the **list-price equivalent** (tokens at API rates). For a flat-rate plan, an admin records the plan's monthly fee and its seats; reports then also show the **amortized cost**: the month's fee split across all issues in proportion to their tokens.
-- **Human time.** `sf log 1.5h <id>` records a person's hours against the same account.
-- **Reports.** `sf cost --by account|issue|epic|person|model --since <date>` on the CLI, the MCP tool `cost` (below), and a cost line in `digest`. Agents see their current issue's running total in `show`, so they can notice when an issue gets expensive.
+- **Human time.** `sfx log 1.5h <id>` records a person's hours against the same account.
+- **Reports.** `sfx cost --by account|issue|epic|person|model --since <date>` on the CLI, the MCP tool `cost` (below), and a cost line in `digest`. Agents see their current issue's running total in `show`, so they can notice when an issue gets expensive.
 - **Limits.** Attribution is approximate when a session switches issues, and harnesses differ in what they expose. Invoicing stays outside starfix.
 
 ## 13. Plan
@@ -296,9 +296,9 @@ Agreed 6 Oct 2026. Extends item 10.
 |---|---|---|
 | 0 | One-day Dolt spike: 20–50 concurrent claimers with compare-and-swap; commits per request vs. batched | **Done:** Dolt OK with conditions (`write_id`, serialized claims, batched commits) |
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
-| 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `sf upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
+| 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `sfx upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
 | 3 | Claims with leases, epochs, reaper, agents registry, inbox, event push, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting, `account` and token capture (§12.1) | Multi-session soak test |
-| 4 | Memory with scopes and tags, migrated from bd `kv.memory.*`; prices, `sf cost` and `sf log` (§12.1) | |
+| 4 | Memory with scopes and tags, migrated from bd `kv.memory.*`; prices, `sfx cost` and `sfx log` (§12.1) | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
 | 6 | Locks, reservations, gates, molecules/formulas, swarm, cross-project | |
 | 7 | Scheduled digests (draft only), GitHub sync, compaction, duplicate check, vectors, other trackers | |
@@ -313,6 +313,6 @@ Maintainer, 6 Oct 2026:
 2. Memory defaults to `project` scope; the agent decides when a memory is a personal preference (`user`) and asks when borderline.
 3. Embeddings: open; recommendation is a local model on the server (see §10).
 4. License: Apache-2.0.
-5. Dolt stays the backend. `sf upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
+5. Dolt stays the backend. `sfx upgrade` and `starfixd upgrade` exist, and clients are warned when the server is out of date (§11).
 6. All ten developer-experience features in §12 are in scope, and `digest` is an agent tool.
 7. Track input and output tokens per issue, with cost estimates even on subscription plans (§12.1); accounts default to `internal`.

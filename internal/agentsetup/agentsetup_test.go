@@ -16,7 +16,7 @@ func TestApply(t *testing.T) {
   "mcpServers": {
     "starfix": {
       "type": "stdio",
-      "command": "sf",
+      "command": "sfx",
       "args": [
         "mcp"
       ]
@@ -35,7 +35,7 @@ func TestApply(t *testing.T) {
     },
     "starfix": {
       "type": "stdio",
-      "command": "sf",
+      "command": "sfx",
       "args": [
         "mcp"
       ]
@@ -64,7 +64,7 @@ func TestApply(t *testing.T) {
 		{name: "gemini new file", agent: "gemini", result: Added, in: "\n", want: `{
   "mcpServers": {
     "starfix": {
-      "command": "sf",
+      "command": "sfx",
       "args": [
         "mcp"
       ]
@@ -73,10 +73,10 @@ func TestApply(t *testing.T) {
 }
 `},
 		{name: "codex new file", agent: "codex", result: Added,
-			want: "[mcp_servers.starfix]\ncommand = \"sf\"\nargs = [\"mcp\"]\n"},
+			want: "[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n"},
 		{name: "codex appends after other tables", agent: "codex", result: Added,
 			in:   "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n",
-			want: "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n\n[mcp_servers.starfix]\ncommand = \"sf\"\nargs = [\"mcp\"]\n"},
+			want: "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"x\"\n\n[mcp_servers.starfix]\ncommand = \"sfx\"\nargs = [\"mcp\"]\n"},
 		{name: "codex updates in place, keeping comments and keys", agent: "codex", result: Updated, entry: custom,
 			in:   "# top\n[mcp_servers.\"starfix\"] # ours\nargs = [\n  \"serve\",\n]\nstartup_timeout_sec = 20\n\n[mcp_servers.starfix.env]\nA = \"b\"\n",
 			want: "# top\n[mcp_servers.\"starfix\"] # ours\ncommand = \"C:\\\\tools\\\\starfix.exe\"\nargs = [\"mcp\"]\nstartup_timeout_sec = 20\n\n[mcp_servers.starfix.env]\nA = \"b\"\n"},
@@ -110,7 +110,7 @@ func TestApply(t *testing.T) {
 // An already-registered file is left exactly as it is, even when its
 // formatting is not ours.
 func TestApplyLeavesRegisteredFileAlone(t *testing.T) {
-	in := `{"mcpServers":{"starfix":{"args":["mcp"],"command":"sf","type":"stdio"}}}`
+	in := `{"mcpServers":{"starfix":{"args":["mcp"],"command":"sfx","type":"stdio"}}}`
 	out, res, err := Agents["claude-code"].Apply([]byte(in), DefaultEntry)
 	if err != nil || res != Unchanged || string(out) != in {
 		t.Fatalf("%s %v %s", res, err, out)

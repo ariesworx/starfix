@@ -50,7 +50,7 @@ agent ─MCP(stdio)─> starfix (client: MCP server, CLI, SQLite cache + op log)
 - **Bandwidth:** the client sends small typed requests and gets deltas back. It never runs SQL or downloads whole tables.
 - **Offline:** the client keeps a SQLite read cache and an operation log, and replays the log on reconnect. The server merges each change against its base version, which Dolt history provides (`AS OF`).
 - **Identity:** the SSH key maps to a developer, so the actor comes from the authenticated key, not from what the client claims. Each session gets its own id under that developer.
-- **Admin:** `sf admin …` over the same channel, with server-side rights checked per developer.
+- **Admin:** `sfx admin …` over the same channel, with server-side rights checked per developer.
 
 ## Vectors (later)
 

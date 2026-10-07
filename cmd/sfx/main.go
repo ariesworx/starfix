@@ -1,4 +1,4 @@
-// Command sf is the starfix client: issue tracking from the command
+// Command sfx is the starfix client: issue tracking from the command
 // line, over SSH to starfixd.
 package main
 

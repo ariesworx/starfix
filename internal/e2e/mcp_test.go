@@ -17,7 +17,7 @@ import (
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
-// agent is an MCP client session against `sf mcp` run as this user,
+// agent is an MCP client session against `sfx mcp` run as this user,
 // over in-memory transport, with the real SSH client underneath.
 type agent struct {
 	t       *testing.T
@@ -124,7 +124,7 @@ func TestMCPAgentSession(t *testing.T) {
 	}
 
 	if out := alice.ok("prime"); !strings.Contains(out, "in progress:\n  "+b.ID+" P2 Write the docs\n") {
-		t.Fatalf("sf prime:\n%s", out)
+		t.Fatalf("sfx prime:\n%s", out)
 	}
 
 	show := decode[mcpserver.Issue](t, ag.ok("show", map[string]any{"id": a.ID}))
@@ -228,7 +228,7 @@ func TestMCPServerAssignedSessionAndRefusal(t *testing.T) {
 	}
 }
 
-// `sf mcp` itself, over pipes as a harness runs it.
+// `sfx mcp` itself, over pipes as a harness runs it.
 func TestMCPCommand(t *testing.T) {
 	w := newWorld(t, daemonOpts{})
 	alice := w.newUser("alice", "")
@@ -263,10 +263,10 @@ func TestMCPCommand(t *testing.T) {
 	select {
 	case code := <-done:
 		if code != cli.ExitOK {
-			t.Fatalf("sf mcp exited %d", code)
+			t.Fatalf("sfx mcp exited %d", code)
 		}
 	case <-ctx.Done():
-		t.Fatal("sf mcp did not exit when its input closed")
+		t.Fatal("sfx mcp did not exit when its input closed")
 	}
 	if out := alice.ok("list"); !strings.Contains(out, "over pipes") {
 		t.Fatalf("list:\n%s", out)

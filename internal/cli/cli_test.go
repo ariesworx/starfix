@@ -28,18 +28,18 @@ func TestRunWithoutServer(t *testing.T) {
 		stdout string
 		stderr string
 	}{
-		{name: "no command prints help", args: nil, code: ExitUsage, stdout: "usage: sf"},
+		{name: "no command prints help", args: nil, code: ExitUsage, stdout: "usage: sfx"},
 		{name: "help", args: []string{"help"}, code: ExitOK, stdout: "ready"},
-		{name: "help for a command", args: []string{"help", "dep"}, code: ExitOK, stdout: "usage: sf dep add|rm FROM TO"},
+		{name: "help for a command", args: []string{"help", "dep"}, code: ExitOK, stdout: "usage: sfx dep add|rm FROM TO"},
 		{name: "version", args: []string{"version"}, code: ExitOK, stdout: "starfix v0.3.0 (protocol 1)"},
 		{name: "version json", args: []string{"--json", "version"}, code: ExitOK, stdout: `{"protocol":"1","version":"v0.3.0"}`},
 		{name: "unknown global flag", args: []string{"--colour", "ready"}, code: ExitUsage, stderr: "unknown flag --colour"},
-		{name: "unknown command flag", args: []string{"ready", "--colour"}, code: ExitUsage, stderr: "fix: usage: sf ready [-n N]"},
+		{name: "unknown command flag", args: []string{"ready", "--colour"}, code: ExitUsage, stderr: "fix: usage: sfx ready [-n N]"},
 		{name: "bad priority", args: []string{"-C", empty, "create", "x", "-p", "9"}, code: ExitUsage, stderr: "priority must be 0-4"},
 		{name: "update with nothing", args: []string{"-C", empty, "update", "sf-aaaa"}, code: ExitUsage, stderr: "nothing to update"},
 		{name: "dep needs an action", args: []string{"dep", "link", "a", "b"}, code: ExitUsage, stderr: `unknown dep action "link"`},
 		{name: "no config", args: []string{"-C", empty, "ready"}, code: ExitFailure,
-			stderr: "sf: .starfix.yaml not found here or in any parent directory\nfix: run starfix inside a repository"},
+			stderr: "sfx: .starfix.yaml not found here or in any parent directory\nfix: run starfix inside a repository"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

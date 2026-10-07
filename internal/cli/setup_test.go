@@ -69,7 +69,7 @@ func TestSetupWriteIsIdempotent(t *testing.T) {
 				t.Fatalf("print: exit %d\n%s%s", code, out, errb)
 			}
 			if code, _, errb := runIn(t, home, "-C", sub, "setup", agent.name, "--check"); code != ExitFailure ||
-				!strings.Contains(errb, "fix: run `sf setup "+agent.name+" --write`") {
+				!strings.Contains(errb, "fix: run `sfx setup "+agent.name+" --write`") {
 				t.Fatalf("check before write: exit %d %s", code, errb)
 			}
 			if len(snapshot(t, root)) != 1 {

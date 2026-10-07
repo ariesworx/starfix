@@ -37,7 +37,7 @@ and supervises many agents on top of starfix.
 ## How it works
 
 ```text
- agent ──MCP──▶ sf (CLI + MCP, local cache)
+ agent ──MCP──▶ sfx (CLI + MCP, local cache)
  person ─CLI──▶        │
                        │ SSH, pinned host key; in-process, no system ssh
                        ▼
@@ -57,11 +57,11 @@ and supervises many agents on top of starfix.
 
 | Binary | Runs on | Purpose | Status |
 |---|---|---|---|
-| `sf` | Linux, macOS, Windows | CLI for people; MCP server for agents | Built |
+| `sfx` | Linux, macOS, Windows | CLI for people; MCP server for agents | Built |
 | `starfixd` | Linux (Windows via WSL2) | Server daemon and sshd bridge | Built |
 | `bearing`, `bearingd` | Linux, macOS (Windows via WSL2) | Agent orchestrator | Design ([spec](docs/design/bearing.md)) |
 
-The client command is `sf`, short for starfix; the project and the server keep
+The client command is `sfx`, short for starfix; the project and the server keep
 the full name.
 
 `starfixd serve` refuses to run off Linux, because only Linux lets it check
@@ -105,12 +105,12 @@ server:
 Then, on each developer machine:
 
 ```sh
-go install github.com/ariesworx/starfix/cmd/sf@latest
-sf create "Fix the login redirect" -p 1 -t bug
-sf ready
-sf update sf-a1b2c3d4 --status in_progress
-sf dep add sf-a1b2c3d4 sf-e5f6g7h8     # a1b2… depends on e5f6…
-sf close sf-a1b2c3d4 --reason "fixed in #12"
+go install github.com/ariesworx/starfix/cmd/sfx@latest
+sfx create "Fix the login redirect" -p 1 -t bug
+sfx ready
+sfx update sf-a1b2c3d4 --status in_progress
+sfx dep add sf-a1b2c3d4 sf-e5f6g7h8     # a1b2… depends on e5f6…
+sfx close sf-a1b2c3d4 --reason "fixed in #12"
 ```
 
 The host key is pinned, never trusted on first use. Keys come from ssh-agent
@@ -136,9 +136,9 @@ silently; the mapping is in `internal/bdimport`.
 
 ## Commands
 
-### `sf`
+### `sfx`
 
-`sf [-C DIR] [--json] COMMAND [ARGS]`. `sf help COMMAND` shows a
+`sfx [-C DIR] [--json] COMMAND [ARGS]`. `sfx help COMMAND` shows a
 command's usage; `--json` prints one JSON document, errors included.
 
 | Command | Does |
@@ -156,7 +156,7 @@ command's usage; `--json` prints one JSON document, errors included.
 | `history` | List an issue's changes |
 | `prime` | A session's orientation: your in-progress issues, top ready work, version notices |
 | `mcp` | The MCP server for agents, on stdin and stdout |
-| `setup AGENT` | Register `sf mcp` with `claude-code`, `codex` or `gemini` |
+| `setup AGENT` | Register `sfx mcp` with `claude-code`, `codex` or `gemini` |
 | `version` | Print the version |
 
 Exit codes: 0 ok; 1 failure, with a `fix:` line; 2 usage; 3 protocol version
@@ -182,16 +182,16 @@ Agents use starfix through MCP; they never need a shell. Register the
 server once per repository and commit the file it writes:
 
 ```sh
-sf setup claude-code           # print the snippet and where it goes
-sf setup claude-code --write   # write .mcp.json; safe to rerun
-sf setup codex --write         # .codex/config.toml
-sf setup gemini --write        # .gemini/settings.json
-sf setup codex --check         # fails, with a fix, if it is missing
+sfx setup claude-code           # print the snippet and where it goes
+sfx setup claude-code --write   # write .mcp.json; safe to rerun
+sfx setup codex --write         # .codex/config.toml
+sfx setup gemini --write        # .gemini/settings.json
+sfx setup codex --check         # fails, with a fix, if it is missing
 ```
 
 `--global` edits the config in your home directory instead; nothing
 outside the repository is touched without it. `--command PATH` sets how
-the agent runs `sf` when it is not on PATH.
+the agent runs `sfx` when it is not on PATH.
 
 The tools are `prime`, `ready`, `blocked`, `list`, `show`, `create`,
 `update`, `close`, `reopen`, `dep`, `label`, `comment`, `comments` and
@@ -206,7 +206,7 @@ the agent's environment:
 | Agent | Session id |
 |---|---|
 | Claude Code | `CLAUDE_CODE_SESSION_ID`, which it sets |
-| Codex, Gemini CLI | none set; `sf mcp` picks one per process (`m-…`) |
+| Codex, Gemini CLI | none set; `sfx mcp` picks one per process (`m-…`) |
 | any | `STARFIX_SESSION`, if set, wins (for example in the registration's `env`) |
 
 One SSH connection serves an MCP session. It opens on the first tool call
@@ -221,7 +221,7 @@ connection, and other writes report that they may have applied.
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | In progress (MCP, `prime`, `setup` built) |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | |
-| 4 | Team and personal memory with tags; prices and `sf cost` | |
+| 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |
 | 7 | Scheduled digests, GitHub sync, compaction, vectors | |
@@ -252,7 +252,7 @@ GOOS=windows go build ./cmd/...   # the client must build on every developer OS
 
 | Path | Holds |
 |---|---|
-| `cmd/sf`, `cmd/starfixd` | Entry points; `starfixd` also holds the admin import and export |
+| `cmd/sfx`, `cmd/starfixd` | Entry points; `starfixd` also holds the admin import and export |
 | `internal/store` | Typed store over Dolt: migrations, issues, deps, labels, comments, events |
 | `internal/proto` | Wire frames, handshake, typed requests and errors |
 | `internal/server` | Daemon, socket, bridge, settings |

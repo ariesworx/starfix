@@ -62,7 +62,7 @@ func cmdSetup(_ context.Context, r *runner, args []string) error {
 	if *global {
 		rel = path
 	}
-	again := "sf setup " + agent.Name
+	again := "sfx setup " + agent.Name
 	if *global {
 		again += " --global"
 	}
