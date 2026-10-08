@@ -163,12 +163,18 @@ func mustExist(ctx context.Context, q querier, id IssueID) error {
 	return nil
 }
 
-// GetIssue returns one issue with its labels, or ErrNotFound.
+// GetIssue returns one issue with its labels, from one snapshot, or
+// ErrNotFound.
 func (s *Store) GetIssue(ctx context.Context, id IssueID) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
-	return loadIssue(ctx, s.r, id)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return Issue{}, fmt.Errorf("get issue %s: %w", id, err)
+	}
+	defer end()
+	return loadIssue(ctx, tx, id)
 }
 
 // normalize refuses, with ErrInvalid, a new issue whose fields are not

@@ -171,14 +171,20 @@ func planIssue(before Issue, in Issue) (ImportOutcome, []string) {
 }
 
 // PlanImportIssue reports what ImportIssue would do with in, without
-// writing. It does not check that the parent exists or would not make a
-// cycle; the importer checks those against its whole input.
+// writing, from one snapshot. It does not check that the parent exists or
+// would not make a cycle; the importer checks those against its whole
+// input.
 func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	before, err := loadIssue(ctx, s.r, in.ID)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("plan import of %s: %w", in.ID, err)
+	}
+	defer end()
+	before, err := loadIssue(ctx, tx, in.ID)
 	if errors.Is(err, ErrNotFound) {
 		return ImportResult{Outcome: ImportCreated, LabelsAdded: len(in.Labels)}, nil
 	}

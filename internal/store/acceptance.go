@@ -197,16 +197,22 @@ func itemKey(text string) string {
 }
 
 // AcceptanceItems returns an issue's acceptance items and their state, in
-// order; nil when it has no criteria. A missing issue is ErrNotFound.
+// order, from one snapshot; nil when it has no criteria. A missing issue
+// is ErrNotFound.
 func (s *Store) AcceptanceItems(ctx context.Context, id IssueID) ([]AcceptanceItem, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	is, err := loadIssue(ctx, s.r, id)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acceptance items of %s: %w", id, err)
+	}
+	defer end()
+	is, err := loadIssue(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	return acceptanceItems(ctx, s.r, is)
+	return acceptanceItems(ctx, tx, is)
 }
 
 // acceptanceItems parses is's criteria and applies their stored state.
