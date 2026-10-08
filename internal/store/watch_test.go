@@ -90,7 +90,9 @@ func TestActiveClaims(t *testing.T) {
 	clk.add(time.Minute)
 	mustStart(t, s, alice, one.ID)
 	clk.add(time.Minute)
+	three := mustCreate(t, s, NewIssue{Title: "three"})
 	mustStart(t, s, bob, two.ID)
+	mustStart(t, s, bob, three.ID) // taken at the same time: issue id breaks the tie
 
 	type held struct {
 		issue     IssueID
@@ -110,11 +112,15 @@ func TestActiveClaims(t *testing.T) {
 		return out, more
 	}
 	start := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	all := []held{{one.ID, alice, start.Add(time.Minute)}, {two.ID, bob, start.Add(2 * time.Minute)}}
+	tied := []held{{two.ID, bob, start.Add(2 * time.Minute)}, {three.ID, bob, start.Add(2 * time.Minute)}}
+	if three.ID < two.ID {
+		tied[0], tied[1] = tied[1], tied[0]
+	}
+	all := append([]held{{one.ID, alice, start.Add(time.Minute)}}, tied...)
 	if got, more := get(0); !slices.Equal(got, all) || more != 0 {
 		t.Errorf("ActiveClaims(0) = %+v, more %d; want %+v, more 0", got, more, all)
 	}
-	if got, more := get(1); !slices.Equal(got, all[:1]) || more != 1 {
-		t.Errorf("ActiveClaims(1) = %+v, more %d; want %+v, more 1", got, more, all[:1])
+	if got, more := get(2); !slices.Equal(got, all[:2]) || more != 1 {
+		t.Errorf("ActiveClaims(2) = %+v, more %d; want %+v, more 1", got, more, all[:2])
 	}
 }
