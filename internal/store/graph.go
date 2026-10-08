@@ -47,10 +47,7 @@ func insertDep(ctx context.Context, w *wtx, from, to IssueID, typ DepType) error
 			return err
 		}
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	if _, err := w.exec(ctx, `INSERT INTO deps (from_id, to_id, type, created_by, created_at, rev, write_id)
   VALUES (?, ?, ?, ?, ?, 1, ?)`, string(from), string(to), string(typ), w.actor.Principal, w.now, wid); err != nil {
 		return fmt.Errorf("insert dep: %w", err)

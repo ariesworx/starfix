@@ -313,10 +313,7 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 			return Issue{}, fmt.Errorf("parent: %w", err)
 		}
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return Issue{}, err
-	}
+	wid := randomInt63()
 	if _, err := w.exec(ctx, `INSERT INTO issues (id, parent_id, title, body, design, acceptance, notes,
   status, priority, type, assignee, owner, due_at, defer_until, ephemeral, expires_at, pinned, template,
   metadata, created_by, created_at, updated_at, rev, write_id)
@@ -452,10 +449,7 @@ const casUpdateSQL = `UPDATE issues SET {sets}, updated_at = ?, rev = rev + 1, w
 // casUpdate writes sets to the issue at before.Rev, stamping rev and
 // write_id, and returns the new state.
 func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []any) (Issue, error) {
-	wid, err := randomInt63()
-	if err != nil {
-		return Issue{}, err
-	}
+	wid := randomInt63()
 	q := strings.Replace(casUpdateSQL, "{sets}", strings.Join(sets, ", "), 1)
 	all := append(append([]any{}, args...), w.now, wid, string(before.ID), int64(before.Rev))
 	n, err := w.exec(ctx, q, all...)

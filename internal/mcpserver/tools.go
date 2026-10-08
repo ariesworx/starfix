@@ -74,30 +74,30 @@ type CreateIn struct {
 // prepare gives the call its idempotency key before the first attempt, so
 // a retry on a new connection returns the first attempt's result instead
 // of writing twice. The comment, handoff and finish inputs do the same.
-func (in *CreateIn) prepare() (err error) {
-	in.idem, err = proto.NewIdem("mcp")
-	return err
+func (in *CreateIn) prepare() error {
+	in.idem = proto.NewIdem("mcp")
+	return nil
 }
 
-func (in *CommentIn) prepare() (err error) {
-	in.idem, err = proto.NewIdem("mcp")
-	return err
+func (in *CommentIn) prepare() error {
+	in.idem = proto.NewIdem("mcp")
+	return nil
 }
 
-func (in *HandoffIn) prepare() (err error) {
-	in.idem, err = proto.NewIdem("mcp")
-	return err
+func (in *HandoffIn) prepare() error {
+	in.idem = proto.NewIdem("mcp")
+	return nil
 }
 
 // prepare also checks waived's keys, which the schema leaves as strings.
-func (in *FinishIn) prepare() (err error) {
+func (in *FinishIn) prepare() error {
 	for k := range in.Waived {
 		if n, err := strconv.Atoi(k); err != nil || n < 1 || strconv.Itoa(n) != k {
 			return proto.Errf(proto.CodeInvalid, "", fmt.Sprintf("waived key %q is not an acceptance item number", k))
 		}
 	}
-	in.idem, err = proto.NewIdem("mcp")
-	return err
+	in.idem = proto.NewIdem("mcp")
+	return nil
 }
 
 // UpdateIn changes the fields given.

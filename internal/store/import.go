@@ -233,10 +233,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 			}
 			return checkEdge(ctx, w.tx, in.ID, in.ParentID)
 		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		before, err := loadIssue(ctx, w.tx, in.ID)
 		var add []string
 		switch {
@@ -411,10 +408,7 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
 				return err
 			}
 		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		if _, err := w.exec(ctx, `INSERT INTO deps (from_id, to_id, type, metadata, created_by, created_at, rev, write_id)
   VALUES (?, ?, ?, ?, ?, ?, 1, ?)`, string(d.From), string(d.To), string(d.Type), meta, d.CreatedBy, d.CreatedAt, wid); err != nil {
 			return fmt.Errorf("insert dep: %w", err)

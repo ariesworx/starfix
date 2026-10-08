@@ -488,9 +488,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	}
 	sess.actor.Session = f.Session
 	if sess.actor.Session == "" {
-		if sess.actor.Session, err = newSessionID(); err != nil {
-			return refuse(proto.Errf(proto.CodeUnavailable, "retry", "server could not create a session id"))
-		}
+		sess.actor.Session = newSessionID()
 	}
 	sess.actor.Machine = f.Machine
 	if sess.actor.Machine == "" {
@@ -517,10 +515,8 @@ var sessionEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").Wit
 
 // newSessionID returns a session id for a client that sent none: "s-" and
 // 16 lowercase base32 characters, 80 random bits.
-func newSessionID() (string, error) {
+func newSessionID() string {
 	var b [10]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("session id: %w", err)
-	}
-	return "s-" + sessionEncoding.EncodeToString(b[:]), nil
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
+	return "s-" + sessionEncoding.EncodeToString(b[:])
 }

@@ -416,13 +416,10 @@ func applyAcceptance(ctx context.Context, w *wtx, is Issue, a Acceptance) ([]Acc
 
 // setItemState writes one item's state row, as set by w's actor now.
 func setItemState(ctx context.Context, w *wtx, id IssueID, it AcceptanceItem, state, reason string) error {
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	key := itemKey(it.Text)
 	var n int
-	err = w.tx.QueryRowContext(ctx, `SELECT n FROM acceptance_state WHERE issue_id = ? AND item_key = ?`, string(id), key).Scan(&n)
+	err := w.tx.QueryRowContext(ctx, `SELECT n FROM acceptance_state WHERE issue_id = ? AND item_key = ?`, string(id), key).Scan(&n)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = w.exec(ctx, `INSERT INTO acceptance_state (issue_id, item_key, n, state, reason, by_principal, at, write_id)
