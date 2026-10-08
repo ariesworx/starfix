@@ -1,9 +1,10 @@
 // Package gitx is starfix's git awareness, on the client only: the branch
 // name an issue suggests ([Branch]), the issue a branch or commit message
-// names ([IDFromBranch], [IDFromMessage]), and creating that branch or a
-// worktree on it ([Switch], [AddWorktree]). The design is
-// docs/design/starfix.md §12 item 2, and the branch scheme is in §5, "As
-// built (stage 2, first slice)".
+// names ([IDFromBranch], [IDFromMessage], [BranchFor]), creating that
+// branch or a worktree on it ([Switch], [AddWorktree]), and the paths an
+// issue's work touched ([ReadChanges]). The design is
+// docs/design/starfix.md §12 items 2 and 3, and the branch scheme is in
+// §5, "As built (stage 2, first slice)".
 //
 // It installs no hooks. Switch and AddWorktree run the git on PATH with
 // explicit arguments, never through a shell, and kill it if their context
@@ -144,6 +145,14 @@ func (e *gitError) Unwrap() error { return e.err }
 // git runs git in dir and returns its trimmed standard output. A failure
 // carries git's own message, and unwraps to the cause.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitRaw(ctx, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// gitRaw is git without the trimming, for NUL-separated output whose
+// first field may start with a space. The error names the first argument
+// that is not an option, which is the git command.
+func gitRaw(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed binary, explicit argv, no shell
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -152,9 +161,23 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", &gitError{msg: fmt.Sprintf("git %s: %s", args[0], msg), err: err}
+		return "", &gitError{msg: fmt.Sprintf("git %s: %s", subcommand(args), msg), err: err}
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.String(), nil
+}
+
+// subcommand is the git command in args: the first argument that is not
+// an option or the value of -c.
+func subcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-c":
+			i++
+		case !strings.HasPrefix(args[i], "-"):
+			return args[i]
+		}
+	}
+	return "git"
 }
 
 // hasBranch reports whether the local branch exists. git exits 1 when it
