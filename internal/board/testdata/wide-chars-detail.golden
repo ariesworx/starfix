@@ -1,0 +1,10 @@
+starfix demo                 live
+sf-r1  修复解析器中的错误
+open, P0, bug
+
+解析器在遇到全角字符时会把一行拆
+成两行，导致终端画面错位。😀
+Café.
+
+
+esc back  j/k scroll  r refresh …

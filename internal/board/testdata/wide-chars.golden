@@ -1,0 +1,14 @@
+starfix demo                                                           live
+Ready 2                               Held 1
+> sf-r1 P1 修复解析器中的错误并补充…    sf-h1 P0 alice/セッショ … 42m Café…
+  sf-r2 P2 [overlaps sf-h1] Ship th…
+
+Blocked 1
+  sf-b1 P2 [by sf-r1 +1] 日本語のタ…
+Events
+  12:00:01 bob/cli claim.take sf-h1
+  12:00:02 bob/cli issue.close sf-x9
+
+
+
+j/k move  enter open  r refresh  ? help  q quit

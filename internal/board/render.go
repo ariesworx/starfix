@@ -11,7 +11,7 @@ import (
 )
 
 // Layout: below wideMin columns the board is one column; a held issue's
-// session is cut to sessionMax runes.
+// session is cut to sessionMax cells.
 const (
 	wideMin    = 60
 	gap        = 2
@@ -313,16 +313,15 @@ func plus(n int) string {
 	return fmt.Sprintf(" +%d", n)
 }
 
-// cut shortens t to at most n runes, ending in "…" when cut.
+// cut shortens t to at most n cells, ending in "…" when cut.
 func cut(t string, n int) string {
-	if utf8.RuneCountInString(t) <= n {
+	if cells(t) <= n {
 		return t
 	}
 	if n <= 0 {
 		return ""
 	}
-	r := []rune(t)
-	return string(r[:n-1]) + "…"
+	return fitCells(t, n-1) + "…"
 }
 
 func (m *Model) detailLines(width int, now time.Time) []line {
@@ -397,8 +396,9 @@ func (m *Model) detailLines(width int, now time.Time) []line {
 	return out
 }
 
-// wrap breaks t into lines of at most width runes, at spaces where it
-// can.
+// wrap breaks t into lines of at most width cells, at spaces where it
+// can, and anywhere in a word too long for a line, as text without
+// spaces, such as Chinese or Japanese, always is.
 func wrap(t string, width int) []string {
 	if width < 1 {
 		return nil
@@ -406,17 +406,18 @@ func wrap(t string, width int) []string {
 	var out []string
 	cur := ""
 	for _, word := range strings.Fields(t) {
-		for utf8.RuneCountInString(word) > width {
+		for cells(word) > width {
 			if cur != "" {
 				out, cur = append(out, cur), ""
 			}
-			r := []rune(word)
-			out, word = append(out, string(r[:width])), string(r[width:])
+			var head string
+			head, word = splitCells(word, width)
+			out = append(out, head)
 		}
 		switch {
 		case cur == "":
 			cur = word
-		case utf8.RuneCountInString(cur)+1+utf8.RuneCountInString(word) <= width:
+		case cells(cur)+1+cells(word) <= width:
 			cur += " " + word
 		default:
 			out, cur = append(out, cur), word
@@ -426,6 +427,25 @@ func wrap(t string, width int) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// splitCells splits s after as many runes as fit in width cells, the
+// marks after the last included. A first rune wider than width becomes
+// spaces, so every split makes progress and no line is too wide.
+func splitCells(s string, width int) (head, rest string) {
+	used := 0
+	for i, r := range s {
+		w := runeWidth(r)
+		if used+w > width {
+			if i == 0 {
+				_, size := utf8.DecodeRuneInString(s)
+				return strings.Repeat(" ", width), s[size:]
+			}
+			return s[:i], s[i:]
+		}
+		used += w
+	}
+	return s, ""
 }
 
 func helpLines() []line {
@@ -477,10 +497,10 @@ func (l line) render(width int, color bool) string {
 			continue
 		}
 		t := sp.text
-		if n := utf8.RuneCountInString(t); n > left {
-			t, cutAt = string([]rune(t)[:max(0, left)]), true
+		if cells(t) > left {
+			t, cutAt = fitCells(t, max(0, left)), true // a wide rune at the edge becomes a space
 		}
-		left -= utf8.RuneCountInString(t)
+		left -= cells(t)
 		writeStyled(&b, t, sp.st, l.sel, color)
 		if cutAt {
 			break
@@ -516,13 +536,13 @@ func spansWidth(spans []span) int {
 		if sp.st == rawStyle {
 			n += visibleWidth(sp.text)
 		} else {
-			n += utf8.RuneCountInString(sp.text)
+			n += cells(sp.text)
 		}
 	}
 	return n
 }
 
-// visibleWidth counts the runes of t outside the board's own SGR codes.
+// visibleWidth counts the cells of t outside the board's own SGR codes.
 func visibleWidth(t string) int {
 	n := 0
 	for i := 0; i < len(t); {
@@ -532,9 +552,9 @@ func visibleWidth(t string) int {
 				continue
 			}
 		}
-		_, size := utf8.DecodeRuneInString(t[i:])
+		r, size := utf8.DecodeRuneInString(t[i:])
 		i += size
-		n++
+		n += runeWidth(r)
 	}
 	return n
 }

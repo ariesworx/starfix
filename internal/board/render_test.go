@@ -70,6 +70,24 @@ func TestFrame(t *testing.T) {
 		}})
 		return m
 	}
+	wide := func() *Model {
+		m := live()
+		sn := snapshot()
+		sn.Ready[0].Title = "修复解析器中的错误并补充测试用例以覆盖边界情况"
+		sn.Ready[1].Title = "Ship the 🚀 launch 😀 checklist 🎉 today"
+		sn.Held[0].Title = "Cafe\u0301 me\u0301nu re\u0301sume\u0301 nai\u0308ve"
+		sn.Held[0].Claim.Session = "セッション一二三"
+		sn.Blocked[0].Title = "日本語のタイトル"
+		m.Apply(sn)
+		return m
+	}
+	wideDetail := func() *Model {
+		m := wide()
+		m.Key(KeyEnter)
+		m.Apply(&Detail{ID: "sf-r1", Show: &proto.ShowResult{Issue: proto.Issue{ID: "sf-r1", Title: "修复解析器中的错误",
+			Status: "open", Type: "bug", Body: "解析器在遇到全角字符时会把一行拆成两行，导致终端画面错位。😀 Cafe\u0301."}}})
+		return m
+	}
 	tests := []struct {
 		name          string
 		model         func() *Model
@@ -90,6 +108,10 @@ func TestFrame(t *testing.T) {
 		{"detail", detail, 80, 22, false},
 		{"detail-loading", func() *Model { m := live(); m.Key(KeyEnter); return m }, 80, 6, false},
 		{"help", func() *Model { m := live(); m.Key(KeyHelp); return m }, 80, 18, false},
+		{"wide-chars", wide, 75, 14, false},
+		{"wide-chars-narrow", wide, 31, 18, false},
+		{"wide-chars-color", wide, 75, 6, true},
+		{"wide-chars-detail", wideDetail, 33, 10, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,6 +134,20 @@ func TestFrameFits(t *testing.T) {
 	h := live()
 	h.Key(KeyHelp)
 	models["help"] = h
+	cjk := live()
+	sn := snapshot()
+	for i := range sn.Ready {
+		sn.Ready[i].Title = strings.Repeat("中文😀e\u0301", 20)
+	}
+	sn.Held[0].Claim.Session = "セッション"
+	sn.Held[0].Title = strings.Repeat("日本", 30)
+	cjk.Apply(sn)
+	models["wide characters"] = cjk
+	cd := live()
+	cd.Key(KeyEnter)
+	cd.Apply(&Detail{ID: "sf-r1", Show: &proto.ShowResult{Issue: proto.Issue{ID: "sf-r1", Title: strings.Repeat("标题", 30),
+		Body: strings.Repeat("正文😀 ", 100)}}})
+	models["wide detail"] = cd
 	for name, m := range models {
 		for _, w := range []int{1, 2, 10, 30, 59, 60, 61, 120, 300} {
 			for _, ht := range []int{1, 2, 3, 5, 12, 40} {
@@ -134,21 +170,21 @@ func TestFrameFits(t *testing.T) {
 	}
 }
 
-// visible is the width of l on a terminal: its runes, less color codes.
+// visible is the width of l on a terminal: its cells, less color codes.
 func visible(l string) int {
 	n := 0
 	for i := 0; i < len(l); {
 		if strings.HasPrefix(l[i:], "\x1b[") {
 			j := strings.IndexByte(l[i:], 'm')
 			if j < 0 {
-				return n + utf8.RuneCountInString(l[i:])
+				return n + cells(l[i:])
 			}
 			i += j + 1
 			continue
 		}
-		_, size := utf8.DecodeRuneInString(l[i:])
+		r, size := utf8.DecodeRuneInString(l[i:])
 		i += size
-		n++
+		n += runeWidth(r)
 	}
 	return n
 }
