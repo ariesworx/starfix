@@ -249,3 +249,65 @@ func TestIssueUsageAccount(t *testing.T) {
 		t.Errorf("IssueUsage(task).Account = %q from %q, want acme from %s", u.Account, u.AccountFrom, epic.ID)
 	}
 }
+
+func TestDigestUsage(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now()
+	at := func(d time.Duration) time.Time { return t0.Add(d) }
+	w := mustCreate(t, s, NewIssue{Title: "spans the window start"})
+	x := mustCreate(t, s, NewIssue{Title: "labeled", Labels: []string{"web"}})
+	y := mustCreate(t, s, NewIssue{Title: "still held"})
+	step := func(to time.Duration, a Actor, id IssueID, start bool) {
+		t.Helper()
+		clk.add(at(to).Sub(clk.now()))
+		var err error
+		if start {
+			_, _, err = s.StartIssue(ctx, a, id, time.Hour, false)
+		} else {
+			_, _, err = s.FinishIssue(ctx, a, id, 0, Finish{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	step(0, alice, w.ID, true)
+	step(2*time.Hour, alice, w.ID, false)
+	step(2*time.Hour, alice, x.ID, true)
+	step(2*time.Hour+10*time.Minute, alice, x.ID, false)
+	step(2*time.Hour+30*time.Minute, bob, y.ID, true)
+	clk.add(at(3 * time.Hour).Sub(clk.now()))
+	mustAddUsage(t, s, alice,
+		req("w-old", at(30*time.Minute), 1000, 0), // before the window
+		req("w-new", at(90*time.Minute), 10, 0),
+		req("x1", at(2*time.Hour+5*time.Minute), 100, 0),
+		req("loose", at(2*time.Hour+20*time.Minute), 7, 0)) // nothing held
+	mustAddUsage(t, s, bob, req("y1", at(2*time.Hour+40*time.Minute), 50, 0))
+
+	since := at(time.Hour)
+	tests := []struct {
+		name         string
+		f            DigestFilter
+		held         time.Duration
+		models       string
+		unattributed string
+	}{
+		{"everyone", DigestFilter{Since: since}, time.Hour + 40*time.Minute, "claude-opus-4-1 167/0/?/?/?", "claude-opus-4-1 7/0/?/?/?"},
+		{"by alice", DigestFilter{Since: since, By: "alice"}, time.Hour + 10*time.Minute, "claude-opus-4-1 117/0/?/?/?", "claude-opus-4-1 7/0/?/?/?"},
+		{"label web", DigestFilter{Since: since, Label: "web"}, 10 * time.Minute, "claude-opus-4-1 100/0/?/?/?", ""},
+		{"window with no usage", DigestFilter{Since: at(2*time.Hour + 50*time.Minute), By: "alice"}, 0, "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := s.Digest(ctx, tc.f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := d.Usage
+			if u.Held != tc.held || modelsText(u.Models) != tc.models || modelsText(u.Unattributed) != tc.unattributed {
+				t.Errorf("Digest(%+v).Usage: held %s models %q unattributed %q; want %s, %q, %q",
+					tc.f, u.Held, modelsText(u.Models), modelsText(u.Unattributed), tc.held, tc.models, tc.unattributed)
+			}
+		})
+	}
+}

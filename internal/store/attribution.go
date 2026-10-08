@@ -159,11 +159,25 @@ const splitEpsilon = 1e-9
 var claimEventOps = []Op{OpClaimTake, OpClaimExpire, OpIssueClose, OpIssueUpdate, OpIssueImport}
 
 // loadHolds reconstructs the holds on issues from their claim events, as
-// of now, oldest first per issue.
+// of now, sorted by issue and then start.
 func loadHolds(ctx context.Context, q querier, issues []IssueID, now time.Time) ([]hold, error) {
-	if len(issues) == 0 {
-		return nil, nil
+	var out []hold
+	// Holds are per issue, so a long list is read in chunks.
+	for chunk := range slices.Chunk(issues, 1000) {
+		hs, err := loadHoldsOf(ctx, q, chunk, now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, hs...)
 	}
+	slices.SortFunc(out, func(a, b hold) int {
+		return cmp.Or(strings.Compare(string(a.issue), string(b.issue)), a.start.Compare(b.start))
+	})
+	return out, nil
+}
+
+// loadHoldsOf is loadHolds for at most a chunk of issues.
+func loadHoldsOf(ctx context.Context, q querier, issues []IssueID, now time.Time) ([]hold, error) {
 	ids := make([]any, len(issues))
 	for i, id := range issues {
 		ids[i] = string(id)
@@ -239,9 +253,6 @@ func loadHolds(ctx context.Context, q querier, issues []IssueID, now time.Time) 
 		h.end = maxTime(h.start, at)
 		out = append(out, *h)
 	}
-	slices.SortFunc(out, func(a, b hold) int {
-		return cmp.Or(strings.Compare(string(a.issue), string(b.issue)), a.start.Compare(b.start))
-	})
 	return out, nil
 }
 
@@ -430,4 +441,170 @@ func closeRows(rows *sql.Rows) error {
 		err = cerr
 	}
 	return err
+}
+
+// DigestUsage totals a digest window's time and tokens. Held is the time
+// issues were held within the window; Models are the tokens of the
+// records whose time is in it. Unattributed is the part of Models no
+// issue was held for. With the digest's By, only that principal's holds
+// and records count; with its Label, only holds of and tokens attributed
+// to issues with the label, so nothing is unattributed.
+type DigestUsage struct {
+	UsageSummary
+	Unattributed []ModelUsage
+}
+
+// usage fills in d.Usage.
+func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
+	where, args := `at >= ? AND at <= ?`, []any{q.f.Since, q.now}
+	if q.f.By != "" {
+		where, args = where+` AND principal = ?`, append(args, q.f.By)
+	}
+	rows, capped, err := readUsage(ctx, q.tx, where, usageScanRows, args...)
+	if err != nil {
+		return err
+	}
+	u := &d.Usage
+	u.Capped = capped
+	q.capped = q.capped || capped
+
+	// The issues held in the window: those with a claim event in it, and
+	// those held now.
+	issues, err := q.heldIssues(ctx)
+	if err != nil {
+		return err
+	}
+	inWindow, err := loadHolds(ctx, q.tx, issues, q.now)
+	if err != nil {
+		return err
+	}
+	var keys []sessionKey
+	seen := map[sessionKey]bool{}
+	for _, r := range rows {
+		if !seen[r.key] {
+			seen[r.key] = true
+			keys = append(keys, r.key)
+		}
+	}
+	bySession, err := sessionHolds(ctx, q.tx, keys, q.now)
+	if err != nil {
+		return err
+	}
+	counts := func(IssueID) bool { return true }
+	if q.f.Label != "" {
+		ids := slices.Clone(issues)
+		for _, hs := range bySession {
+			for _, h := range hs {
+				ids = append(ids, h.issue)
+			}
+		}
+		labeled, err := q.labeled(ctx, ids)
+		if err != nil {
+			return err
+		}
+		counts = func(id IssueID) bool { return labeled[id] }
+	}
+
+	for _, h := range inWindow {
+		if q.f.By != "" && h.key.principal != q.f.By || !counts(h.issue) {
+			continue
+		}
+		if from, to := maxTime(h.start, q.f.Since), minTime(h.end, q.now); from.Before(to) {
+			u.Held += to.Sub(from)
+		}
+	}
+	var total, loose usageSum
+	for _, r := range rows {
+		attributed := 0.0
+		for id, sh := range shares(r, bySession[r.key]) {
+			if counts(id) {
+				attributed += sh
+			}
+		}
+		switch {
+		case q.f.Label != "":
+			if attributed > 0 {
+				total.add(r, attributed)
+				u.Split = u.Split || attributed < 1-splitEpsilon
+			}
+		default:
+			total.add(r, 1)
+			if rest := 1 - attributed; rest > splitEpsilon {
+				loose.add(r, rest)
+			}
+		}
+	}
+	u.Models, u.Unattributed = total.models(), loose.models()
+	return nil
+}
+
+// heldIssues lists the issues with a claim event in the digest window,
+// or held now, at most digestRows of them.
+func (q *digestQuery) heldIssues(ctx context.Context) ([]IssueID, error) {
+	ops := make([]any, len(claimEventOps))
+	for i, op := range claimEventOps {
+		ops[i] = string(op)
+	}
+	var out []IssueID
+	seen := map[IssueID]bool{}
+	for _, sel := range []struct {
+		query string
+		args  []any
+	}{
+		{`SELECT DISTINCT target FROM events WHERE at >= ? AND op IN (` + placeholders(len(ops)) + `)`, append([]any{q.f.Since}, ops...)},
+		{`SELECT issue_id FROM claims WHERE principal IS NOT NULL`, nil},
+	} {
+		rows, err := q.tx.QueryContext(ctx, sel.query, sel.args...)
+		if err != nil {
+			return nil, fmt.Errorf("held issues: %w", err)
+		}
+		for rows.Next() {
+			var id IssueID
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("held issues: %w", err)
+			}
+			if seen[id] {
+				continue
+			}
+			if len(out) == digestRows {
+				q.capped = true
+				break
+			}
+			seen[id] = true
+			out = append(out, id)
+		}
+		if err := closeRows(rows); err != nil {
+			return nil, fmt.Errorf("held issues: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// labeled returns which of ids have the digest's label.
+func (q *digestQuery) labeled(ctx context.Context, ids []IssueID) (map[IssueID]bool, error) {
+	out := map[IssueID]bool{}
+	for chunk := range slices.Chunk(ids, 1000) {
+		args := []any{q.f.Label}
+		for _, id := range chunk {
+			args = append(args, string(id))
+		}
+		query := `SELECT issue_id FROM labels WHERE label = ? AND issue_id IN (` + placeholders(len(chunk)) + `)` //nolint:gosec // placeholders only; values are arguments
+		rows, err := q.tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("labels: %w", err)
+		}
+		for rows.Next() {
+			var id IssueID
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("labels: %w", err)
+			}
+			out[id] = true
+		}
+		if err := closeRows(rows); err != nil {
+			return nil, fmt.Errorf("labels: %w", err)
+		}
+	}
+	return out, nil
 }

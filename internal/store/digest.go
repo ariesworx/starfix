@@ -98,6 +98,9 @@ type Digest struct {
 	// Discovered lists issues linked discovered-from in the window; From
 	// is the issue each came from.
 	Discovered DigestSection
+	// Usage totals the time held and the tokens reported in the window
+	// (design §12.1), filtered like the sections.
+	Usage DigestUsage
 	// Capped reports that a section had more rows than a digest reads,
 	// so its total is a lower bound.
 	Capped bool
@@ -196,6 +199,9 @@ func (q *digestQuery) run(ctx context.Context, d *Digest) error {
 		return err
 	}
 	if err := q.blocked(ctx, d); err != nil {
+		return err
+	}
+	if err := q.usage(ctx, d); err != nil {
 		return err
 	}
 	d.Capped = q.capped
