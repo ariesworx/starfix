@@ -498,6 +498,111 @@ func TestServeAcceptErrors(t *testing.T) {
 	}
 }
 
+// lateListener models a connection accepted just as Serve stops. Its
+// first Accept returns first. Its second waits until Serve has closed the
+// listener and then first, the connection it holds, and returns late; any
+// later Accept fails with net.ErrClosed. Only Serve calls Accept.
+type lateListener struct {
+	first, late net.Conn
+	firstClosed <-chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
+	accepts     int
+}
+
+func (l *lateListener) Accept() (net.Conn, error) {
+	l.accepts++
+	switch l.accepts {
+	case 1:
+		return l.first, nil
+	case 2:
+		<-l.closed
+		<-l.firstClosed
+		return l.late, nil
+	}
+	return nil, net.ErrClosed
+}
+
+func (l *lateListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *lateListener) Addr() net.Addr { return &net.UnixAddr{Name: "late.sock", Net: "unix"} }
+
+// signalConn is a net.Conn that closes closed when it is first closed.
+type signalConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *signalConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// welcome runs a's side of the handshake on c, and returns the refusal or
+// the failure that kept a from being welcomed.
+func welcome(c net.Conn, a store.Actor) error {
+	enc, dec := proto.NewEncoder(c), proto.NewDecoder(c)
+	if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: a.Principal}); err != nil {
+		return err
+	}
+	if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: a.Session,
+		Machine: a.Machine}); err != nil {
+		return err
+	}
+	f, err := dec.Decode()
+	if err != nil {
+		return err
+	}
+	if f.Err != nil {
+		return f.Err
+	}
+	return nil
+}
+
+// A connection accepted as Serve stops, after it closed the connections
+// it held, is closed too: Serve returns at once, rather than wait for
+// that client to leave or its connection to idle out.
+func TestServeClosesConnectionAcceptedAsItStops(t *testing.T) {
+	s := newServer(t)
+	firstSrv, firstCli := net.Pipe()
+	lateSrv, lateCli := net.Pipe()
+	first := &signalConn{Conn: firstSrv, closed: make(chan struct{})}
+	l := &lateListener{first: first, late: lateSrv, firstClosed: first.closed, closed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() { served <- s.Serve(ctx, l) })
+	// Closing the clients ends their handlers, so that a Serve waiting for
+	// them returns before the test does.
+	t.Cleanup(func() {
+		cancel()
+		_ = firstCli.Close()
+		_ = lateCli.Close()
+		wg.Wait()
+	})
+	for _, c := range []net.Conn{firstCli, lateCli} {
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	if err := welcome(firstCli, alice); err != nil {
+		t.Fatalf("first client's handshake: %v", err)
+	}
+	// The late client is welcomed only if Serve serves its connection.
+	wg.Go(func() { _ = welcome(lateCli, bob) })
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("Serve = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after ctx ended: it serves the connection accepted as it stopped")
+	}
+}
+
 func TestBridgeFrameOnlyFirst(t *testing.T) {
 	s := newServer(t)
 	srv, cli := net.Pipe()

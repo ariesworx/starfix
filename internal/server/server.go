@@ -172,6 +172,13 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		}
 		pause = 0
 		s.mu.Lock()
+		if ctx.Err() != nil {
+			// Accepted as Serve stops: the loop that closes the connections
+			// may have run already, and would never close this one.
+			s.mu.Unlock()
+			_ = c.Close()
+			return nil
+		}
 		full := len(s.conns) >= 2*s.cfg.Limits.Conns
 		if !full {
 			s.conns[c] = struct{}{}
