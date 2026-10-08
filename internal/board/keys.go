@@ -26,41 +26,55 @@ const (
 func Keys(b []byte) []Key {
 	var out []Key
 	for i := 0; i < len(b); i++ {
-		c := b[i]
-		if c != 0x1b {
-			if k, ok := byteKeys[c]; ok {
+		if b[i] != 0x1b {
+			if k, ok := byteKeys[b[i]]; ok {
 				out = append(out, k)
 			}
 			continue
 		}
-		if i+1 == len(b) {
-			out = append(out, KeyBack)
-			continue
+		k, ok, end := escape(b, i)
+		if ok {
+			out = append(out, k)
 		}
-		switch b[i+1] {
-		case 'O': // SS3: application-mode cursor keys
-			if i+2 < len(b) {
-				if k, ok := cursor[b[i+2]]; ok {
-					out = append(out, k)
-				}
-			}
-			i += 2
-		case '[': // CSI: parameters, then a final byte in 0x40-0x7e
-			j := i + 2
-			for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
-				j++
-			}
-			if j < len(b) {
-				if k, ok := csi(b[i+2:j], b[j]); ok {
-					out = append(out, k)
-				}
-			}
-			i = j
-		default: // Esc, then another key: Alt held, which the board ignores
-			i++
-		}
+		i = end
 	}
 	return out
+}
+
+// escape decodes the input that starts with the Esc at b[i], returning
+// its key, if the board knows it, and the index of its last byte.
+func escape(b []byte, i int) (k Key, ok bool, end int) {
+	if i+1 == len(b) {
+		return KeyBack, true, i
+	}
+	switch b[i+1] {
+	case 'O': // SS3: application-mode cursor keys
+		if i+2 == len(b) {
+			return 0, false, i + 1
+		}
+		k, ok := cursor[b[i+2]]
+		return k, ok, i + 2
+	case '[': // CSI: parameters, then a final byte in 0x40-0x7e
+		j := i + 2
+		for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
+			j++
+		}
+		if j == len(b) {
+			return 0, false, j - 1
+		}
+		k, ok := csi(b[i+2:j], b[j])
+		return k, ok, j
+	case 0x1b:
+		// Alt and a sequence, ignored like Alt and any key; otherwise
+		// Esc twice in one read, or Alt and Esc, which are the same
+		// bytes: one Esc either way.
+		if i+2 < len(b) && (b[i+2] == '[' || b[i+2] == 'O') {
+			_, _, end := escape(b, i+1)
+			return 0, false, end
+		}
+		return KeyBack, true, i + 1
+	}
+	return 0, false, i + 1 // Esc, then another key: Alt held, which the board ignores
 }
 
 // byteKeys maps single bytes to keys.
