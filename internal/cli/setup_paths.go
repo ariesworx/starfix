@@ -64,7 +64,7 @@ const byHand = "or make the edit by hand: run the same setup without --write to 
 // any link on the way.
 func (b fileBase) resolve(path string) (string, error) {
 	rel, err := filepath.Rel(b.dir, path)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("setup: %s is not under %s", path, b.dir)
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
