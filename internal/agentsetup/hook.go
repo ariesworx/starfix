@@ -7,13 +7,18 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The SessionStart hook runs `sfx prime --hook=AGENT` (bare --hook for
 // Claude Code) when a session starts, so the agent begins oriented.
 // Claude Code also gets usage hooks: `sfx usage --hook` on Stop,
 // SubagentStop and SessionEnd sends the turn's token counts from its
-// transcript. They run async, so a slow server never holds up the agent.
+// transcript. Stop and SubagentStop run async, so a slow server never
+// holds up the agent; SessionEnd, which sends the session's last
+// response, runs synchronously, since Claude Code waits for it as it
+// exits, up to the hook's timeout (at most 60 s), and an async hook may
+// not outlive the exit.
 // Claude Code's form, which Codex and Junie share, nests the hook in a
 // group:
 //
@@ -71,18 +76,27 @@ var (
 	vscodeHook = hookStyle{event: "SessionStart", verb: "prime", flat: true, matchers: []string{""}, timeout: 15, own: true}
 )
 
-// claudeUsage is Claude Code's usage hook on event. Claude Code runs an
-// async hook in the background, so the turn does not wait on the server;
-// the timeout, in seconds, bounds a hung run, and `sfx usage` gives up
-// before it. A group without a matcher runs for every subagent type and
-// session end reason.
-func claudeUsage(event string) hookStyle {
-	return hookStyle{event: event, verb: "usage", matchers: []string{""}, async: true, timeout: 30}
+// UsageTimeout is the timeout setup gives Claude Code's async usage hooks
+// (Stop and SubagentStop), and SessionEndTimeout its synchronous
+// SessionEnd hook, which Claude Code waits for as it exits. `sfx usage
+// --hook` gives up before each.
+const (
+	UsageTimeout      = 30 * time.Second
+	SessionEndTimeout = 10 * time.Second
+)
+
+// claudeUsage is Claude Code's usage hook on event: async, in the
+// background, so the turn does not wait on the server, or synchronous
+// with a shorter timeout. Timeouts are in seconds. A group without a
+// matcher runs for every subagent type and session end reason.
+func claudeUsage(event string, async bool, timeout time.Duration) hookStyle {
+	return hookStyle{event: event, verb: "usage", matchers: []string{""}, async: async, timeout: int(timeout / time.Second)}
 }
 
 // claudeHooks are Claude Code's: prime at session start, and usage at
 // the end of each turn, each subagent and the session.
-var claudeHooks = []hookStyle{claudeHook, claudeUsage("Stop"), claudeUsage("SubagentStop"), claudeUsage("SessionEnd")}
+var claudeHooks = []hookStyle{claudeHook, claudeUsage("Stop", true, UsageTimeout),
+	claudeUsage("SubagentStop", true, UsageTimeout), claudeUsage("SessionEnd", false, SessionEndTimeout)}
 
 var (
 	// shellSafe matches a word the shell reads as itself, which
@@ -196,10 +210,38 @@ func (s hookStyle) ours(h object, e Entry, harness string) bool {
 	return m != nil && m[2] == s.verb && (program(m[1]) == "sfx" || program(m[1]) == program(e.Command))
 }
 
-// exact reports whether h runs exactly the command setup writes.
+// exact reports whether h runs exactly the command setup writes, async
+// or not as setup writes it. Its timeout is the person's to change.
 func (s hookStyle) exact(h object, e Entry, harness string) bool {
 	cmd, ok := hookParts(h)
-	return ok && cmd == s.command(e, harness)
+	return ok && cmd == s.command(e, harness) && async(h) == s.async
+}
+
+// async reports whether h is set to run in the background.
+func async(h object) bool {
+	raw, ok := h.get("async")
+	var b bool
+	return ok && json.Unmarshal(raw, &b) == nil && b
+}
+
+// fix is h, one of this style's hooks, with the command setup writes. A
+// hook async where the style is not, or the reverse, also gets the
+// style's async setting and timeout, which go together; its other keys
+// are kept.
+func (s hookStyle) fix(h object, e Entry, harness string) object {
+	h = h.set("command", mustJSON(s.command(e, harness)))
+	if async(h) == s.async {
+		return h
+	}
+	if s.async {
+		h = h.set("async", mustJSON(true))
+	} else {
+		h = h.del("async")
+	}
+	if s.timeout > 0 {
+		h = h.set("timeout", mustJSON(s.timeout))
+	}
+	return h
 }
 
 // parseArray reads a JSON array, keeping each element as written; empty
@@ -357,7 +399,7 @@ func (s hookStyle) group(matcher string, e Entry, harness string) json.RawMessag
 }
 
 // apply puts the hook in place: it updates an existing starfix hook's
-// command, keeping its other keys, and adds a hook, or a group holding
+// command and async setting (fix), keeping its other keys, and adds a hook, or a group holding
 // one, for each matcher that has none. A duplicate is dropped.
 func (s hookStyle) apply(content []byte, e Entry, harness string) ([]byte, Result, error) {
 	if s.registered(content, e, harness) {
@@ -380,7 +422,7 @@ func (s hookStyle) apply(content []byte, e Entry, harness string) ([]byte, Resul
 			found = true
 			if i := s.slot(matcher); i >= 0 && !filled[i] {
 				filled[i] = true
-				out = append(out, h.set("command", mustJSON(s.command(e, harness))).marshal())
+				out = append(out, s.fix(h, e, harness).marshal())
 			}
 		}
 		return out, nil

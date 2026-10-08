@@ -278,7 +278,7 @@ func TestOurHookExact(t *testing.T) {
 	}
 	for _, tc := range usage {
 		h := object{{"type", mustJSON("command")}, {"command", mustJSON(tc.cmd)}}
-		if got := claudeUsage("Stop").ours(h, DefaultEntry, "claude-code"); got != tc.want {
+		if got := claudeUsage("Stop", true, UsageTimeout).ours(h, DefaultEntry, "claude-code"); got != tc.want {
 			t.Errorf("usage hook ours(%q) = %v, want %v", tc.cmd, got, tc.want)
 		}
 		if got := claudeHook.ours(h, DefaultEntry, "claude-code"); got != tc.prime {
