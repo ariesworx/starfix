@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +112,60 @@ func TestStartPortTaken(t *testing.T) {
 	if err := db.PingContext(t.Context()); err != nil {
 		t.Fatalf("ping the second server's database: %v", err)
 	}
+}
+
+// TestStopLeavesNothingRunning checks that nothing dolt started still runs
+// once Stop returns, so the caller can remove the directory. As it exits,
+// dolt starts a detached "dolt send-metrics" unless DOLT_DISABLE_EVENT_FLUSH
+// is set, and that process wrote under the server's directory while
+// TempDir's cleanup was removing it.
+func TestStopLeavesNothingRunning(t *testing.T) {
+	if _, err := os.Stat("/proc/self/environ"); err != nil {
+		t.Skip("listing processes needs /proc")
+	}
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	s, err := Start(ctx, dir)
+	if errors.Is(err, ErrNoDolt) {
+		t.Skip("dolt is not on PATH: install dolt to run the dolttest tests")
+	}
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	left, err := running(filepath.Join(dir, "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) > 0 {
+		t.Errorf("after Stop, still running with the server's DOLT_ROOT_PATH: %q", left)
+	}
+}
+
+// running returns the pid and command line of each process whose
+// environment sets DOLT_ROOT_PATH to root. It reads /proc, so Linux only.
+func running(root string) ([]string, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	want := "\x00DOLT_ROOT_PATH=" + root + "\x00"
+	var found []string
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue // not a process
+		}
+		env, err := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
+		if err != nil || !strings.Contains("\x00"+string(env)+"\x00", want) {
+			continue // exited, another user's, or not this server's
+		}
+		cmd, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		found = append(found, e.Name()+" "+strings.TrimSpace(strings.ReplaceAll(string(cmd), "\x00", " ")))
+	}
+	return found, nil
 }
 
 // TestLockedDown checks that the test server is configured as

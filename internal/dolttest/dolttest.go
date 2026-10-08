@@ -111,7 +111,11 @@ func Start(ctx context.Context, dir string) (*Server, error) {
 			return nil, fmt.Errorf("dolttest: %w", err)
 		}
 	}
-	env := append(os.Environ(), "DOLT_ROOT_PATH="+root)
+	// DOLT_DISABLE_EVENT_FLUSH keeps dolt from starting a detached "dolt
+	// send-metrics" as each command exits, to send its usage events to
+	// DoltHub. That process outlived Stop and wrote under root while the
+	// caller was removing dir.
+	env := append(os.Environ(), "DOLT_ROOT_PATH="+root, "DOLT_DISABLE_EVENT_FLUSH=1")
 	for _, kv := range [][2]string{{"user.name", "starfix-test"}, {"user.email", "test@example.com"}} {
 		c := exec.CommandContext(ctx, bin, "config", "--global", "--add", kv[0], kv[1]) //nolint:gosec // fixed args, dolt from PATH
 		c.Env = env
@@ -247,7 +251,9 @@ func (s *Server) NewDatabase(ctx context.Context) (string, error) {
 }
 
 // Stop interrupts the server and waits for it to exit, killing it after
-// 10 seconds. Call it once: a second call waits 10 seconds and fails.
+// 10 seconds. Once it returns, nothing the server started still runs, so
+// the caller can remove its directory. Call it once: a second call waits
+// 10 seconds and fails.
 func (s *Server) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
