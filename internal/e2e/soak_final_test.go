@@ -16,6 +16,7 @@ import (
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/store"
 )
 
 // verify runs the checks that need the whole run, once it is at rest: the
@@ -34,8 +35,7 @@ func (s *soak) verify() {
 	defer cancel()
 	s.checkNotices(ctx)
 	s.checkPushes(ctx)
-	eve, err := mcpserver.DialRepo(ctx, s.eve.repo, client.Options{Version: "v0.2.0", Session: "eve-check",
-		Machine: "checker", Getenv: func(string) string { return "" }})
+	eve, err := mcpserver.DialRepo(ctx, s.eve.repo, s.eveOptions("eve-check"))
 	if err != nil {
 		r.mu.Unlock()
 		s.t.Errorf("dial as eve: %v", err)
@@ -327,6 +327,39 @@ func (s *soak) checkPushes(ctx context.Context) {
 				s.mon.fail(it.Issue, "%s was pushed inbox item %d, addressed to %s/%s", ss.key, id, r.to, r.Session)
 			case !it.At.Equal(r.At) || it.Kind != r.Kind || it.Issue != r.Issue || it.Body != r.Body || it.From != r.From || it.Session != r.Session:
 				s.mon.fail(it.Issue, "%s was pushed item %d as %+v; the inbox holds %+v", ss.key, id, it, r.InboxItem)
+			}
+		}
+	}
+	s.checkPushedEvents(ctx)
+}
+
+// checkPushedEvents: every issue event pushed to a watch is in the event
+// log as it was pushed, and is an issue's.
+func (s *soak) checkPushedEvents(ctx context.Context) {
+	evs, err := readEvents(ctx, s.db, 0)
+	if err != nil {
+		s.t.Errorf("read events: %v", err)
+		return
+	}
+	bySeq := make(map[int64]sevent, len(evs))
+	for _, e := range evs {
+		bySeq[e.seq] = e
+	}
+	for _, a := range s.all() {
+		ss := a.base()
+		for _, got := range ss.inbox.events() {
+			for seq, p := range got {
+				s.stats.eventsPushed.Add(1)
+				e, ok := bySeq[seq]
+				switch {
+				case !ok:
+					s.mon.fail(p.Issue, "%s was pushed event %d, which is not in the event log", ss.key, seq)
+				case store.IssueID(e.target).Validate() != nil:
+					s.mon.fail(p.Issue, "%s was pushed event %d (%s on %s), which is no issue's", ss.key, seq, e.op, e.target)
+				case !p.At.Equal(e.at) || p.Op != e.op || p.Issue != e.target || p.Principal != e.actor.principal || p.Session != e.actor.session:
+					s.mon.fail(p.Issue, "%s was pushed event %d as %s %s by %s/%s at %s; the log holds %s %s by %s at %s", ss.key, seq,
+						p.Op, p.Issue, p.Principal, p.Session, stamp(p.At), e.op, e.target, e.actor, stamp(e.at))
+				}
 			}
 		}
 	}
@@ -770,6 +803,11 @@ func (s *soak) checkAttribution(ctx context.Context, eve *mcpserver.RepoConn, ro
 // checkLeaks: once every session has closed, the daemon serves no
 // connection, pushes to no watch, and the SSH server and clients hold
 // none; the goroutines are back near where they started.
+// eveOptions are the options of a connection of eve, who only reads.
+func (s *soak) eveOptions(session string) client.Options {
+	return client.Options{Version: "v0.2.0", Session: session, Machine: "checker", Getenv: func(string) string { return "" }}
+}
+
 func (s *soak) checkLeaks() {
 	patterns := []string{"server.(*Server).handle(", "server.(*Server).watch.func", "server.Bridge(",
 		"client.(*Conn).read(", "e2e.(*world).serveSSH("}

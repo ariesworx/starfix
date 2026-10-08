@@ -62,13 +62,16 @@ const callTimeout = 60 * time.Second
 
 // window is one watch: pushes are owed to it from start, the store-clock
 // time its watch was acknowledged, until its connection breaks or the
-// server sends a resync.
+// server sends a resync. A watch that asked for events is also owed every
+// issue event committed after start.
 type window struct {
 	key    sessKey
 	conn   int
 	start  time.Time
 	resync bool
 	broken bool
+	events bool
+	got    map[int64]proto.Event // issue events pushed to it, by seq
 }
 
 // inboxLog is what one session was pushed, across all its connections.
@@ -111,17 +114,31 @@ func (ln *line) push(p proto.Push) {
 		if p.Item.Session != "" && p.Item.Session != ln.key.session {
 			ln.mon.fail(p.Item.Issue, "%s was pushed item %d addressed to session %s", ln.key, p.Item.ID, p.Item.Session)
 		}
+	case p.Event != nil:
+		w := ln.cur
+		switch {
+		case w == nil || w.start.IsZero() || !w.events:
+			ln.mon.fail(p.Event.Issue, "%s was pushed event %d on connection %d, which did not watch for events", ln.key, p.Event.Seq, ln.conn)
+		case w.resync:
+			ln.mon.fail(p.Event.Issue, "%s was pushed event %d on connection %d after a resync", ln.key, p.Event.Seq, ln.conn)
+		default:
+			if _, dup := w.got[p.Event.Seq]; dup {
+				ln.mon.fail(p.Event.Issue, "%s was pushed event %d twice on connection %d", ln.key, p.Event.Seq, ln.conn)
+			}
+			w.got[p.Event.Seq] = *p.Event
+		}
 	}
 }
 
-// watched opens a window at start, the time the watch was acknowledged.
-func (ln *line) watched(start time.Time) {
+// watched opens a window at start, the time the watch was acknowledged;
+// events says the watch asked for issue events.
+func (ln *line) watched(start time.Time, events bool) {
 	ln.log.mu.Lock()
 	defer ln.log.mu.Unlock()
 	if ln.cur != nil && !ln.cur.start.IsZero() && !ln.cur.resync {
 		return // watching again while watched changes nothing
 	}
-	ln.cur = &window{key: ln.key, conn: ln.conn, start: start}
+	ln.cur = &window{key: ln.key, conn: ln.conn, start: start, events: events, got: map[int64]proto.Event{}}
 	ln.log.windows = append(ln.log.windows, ln.cur)
 }
 
@@ -158,6 +175,39 @@ func (l *inboxLog) delivered(w *window, ids []int64) (missing []int64, resync bo
 	return missing, w.resync
 }
 
+// eventsDelivered reports which of seqs were not pushed to w, and whether
+// w has seen a resync since.
+func (l *inboxLog) eventsDelivered(w *window, seqs []int64) (missing []int64, resync bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, seq := range seqs {
+		if _, ok := w.got[seq]; !ok {
+			missing = append(missing, seq)
+		}
+	}
+	return missing, w.resync
+}
+
+// events returns a copy of the issue events pushed to each of the
+// session's windows.
+func (l *inboxLog) events() []map[int64]proto.Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[int64]proto.Event
+	for _, w := range l.windows {
+		out = append(out, maps.Clone(w.got))
+	}
+	return out
+}
+
+// resynced reports whether the line's watch was resynced, so that the
+// session should watch again.
+func (ln *line) resynced() bool {
+	ln.log.mu.Lock()
+	defer ln.log.mu.Unlock()
+	return ln.cur != nil && ln.cur.resync
+}
+
 // pushed returns a copy of everything pushed to the session.
 func (l *inboxLog) pushed() map[int64]proto.InboxItem {
 	l.mu.Lock()
@@ -182,6 +232,9 @@ type session struct {
 	// real time, it renews.
 	lease      time.Duration
 	renewEvery time.Duration
+	// events: the session's watches ask for issue events, as a live
+	// board's do.
+	events bool
 }
 
 // next returns a new marker, unique in the run, and an idempotency key for
@@ -310,8 +363,8 @@ func (ls *libSession) connect(ctx context.Context) bool {
 			continue
 		}
 		var wr proto.WatchResult
-		if out, _ := ls.s.do(ls.session, c, proto.OpWatch, proto.WatchArgs{}, &wr); out == acked {
-			ln.watched(ls.s.clock.now())
+		if out, _ := ls.s.do(ls.session, c, proto.OpWatch, proto.WatchArgs{Events: ls.events}, &wr); out == acked {
+			ln.watched(ls.s.clock.now(), ls.events)
 		}
 		if c.Err() != nil {
 			_ = c.Close()
@@ -365,6 +418,9 @@ func (ls *libSession) run(ctx context.Context) bool {
 	for ctx.Err() == nil {
 		if time.Since(ls.renewed) >= ls.renewEvery {
 			ls.renew(ctx)
+		}
+		if ls.ln != nil && ls.ln.resynced() {
+			ls.rewatch(ctx)
 		}
 		ls.step(ctx)
 		switch {
@@ -513,6 +569,16 @@ func (ls *libSession) start(ctx context.Context, id string, take bool) {
 		ls.held[r.Issue.ID] = heldIssue{epoch: r.Claim.Epoch, items: len(r.Items)}
 		ls.revs[r.Issue.ID] = r.Issue.Rev
 		ls.s.holding.took(r.Issue.ID, ls.key)
+	}
+}
+
+// rewatch watches again after a resync, as a client following its inbox
+// or a board does.
+func (ls *libSession) rewatch(ctx context.Context) {
+	ls.s.stats.rewatches.Add(1)
+	var wr proto.WatchResult
+	if out, _ := ls.call(ctx, proto.OpWatch, proto.WatchArgs{Events: ls.events}, &wr, false); out == acked && ls.ln != nil {
+		ls.ln.watched(ls.s.clock.now(), ls.events)
 	}
 }
 
@@ -847,8 +913,8 @@ func (c *tracedConn) Call(_ context.Context, op string, args, res any) error {
 	out, perr := c.ss.s.do(c.ss, c.RepoConn, op, args, res)
 	switch out {
 	case acked:
-		if op == proto.OpWatch {
-			c.ln.watched(c.ss.s.clock.now())
+		if a, ok := args.(proto.WatchArgs); ok {
+			c.ln.watched(c.ss.s.clock.now(), a.Events)
 		}
 		return nil
 	case refused:

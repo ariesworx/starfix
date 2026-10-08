@@ -149,11 +149,13 @@ type soak struct {
 	live  []worker   // the sessions still at work when the run ended
 	every []worker   // every session the run started
 	stats struct {
-		drops, dropAlls, restarts, stalls atomic.Int64
-		heapPeak                          atomic.Uint64
-		goroutinePeak                     atomic.Int64
-		snapshots                         atomic.Int64
-		windowsChecked                    atomic.Int64
+		drops, dropAlls, restarts, stalls, rewatches     atomic.Int64
+		heapPeak                                         atomic.Uint64
+		goroutinePeak                                    atomic.Int64
+		snapshots                                        atomic.Int64
+		windowsChecked, windowsResynced                  atomic.Int64
+		eventWindowsChecked, eventsChecked, eventsPushed atomic.Int64
+		claimsChecked                                    atomic.Int64
 	}
 	baseline int // goroutines before any session started
 	started  time.Time
@@ -214,10 +216,11 @@ func (s *soak) run() {
 	for _, a := range s.agents() {
 		a.settle(settle)
 	}
+	s.checkClaimsOp(settle)
 	s.awaitReaped()
 	for _, a := range s.agents() {
 		if ln, c := a.liveLine(); ln != nil {
-			s.awaitWindow(a.base(), ln, c, 0)
+			s.awaitWindow(a.base(), ln, c, bound{})
 		}
 	}
 	if err := s.snapshot(); err != nil {
@@ -251,6 +254,7 @@ func (s *soak) slot(ctx context.Context, p string, slot int, seed uint64) {
 		} else {
 			base.key = sessKey{p, "lib-" + tag}
 			base.renewEvery = s.clock.real(base.lease) / 4
+			base.events = slot == 1
 			a = &libSession{session: base, held: map[string]heldIssue{}, revs: map[string]int64{}}
 		}
 		s.mu.Lock()
@@ -448,8 +452,9 @@ func (s *soak) report() {
 	fmt.Fprintf(&b, "  chaos: %d dropped answers, %d connection drops, %d daemon restarts; %d sessions vanished, %d stalled; %d dial failures; retries %v\n",
 		s.stats.drops.Load(), s.stats.dropAlls.Load(), s.stats.restarts.Load(), m.vanishes, s.stats.stalls.Load(), m.dialFails, m.retries)
 	m.mu.Unlock()
-	fmt.Fprintf(&b, "  watches checked %d; snapshots compared %d; peak heap %d MiB, peak goroutines %d; daemon warnings %d\n",
-		s.stats.windowsChecked.Load(), s.stats.snapshots.Load(), s.stats.heapPeak.Load()>>20, s.stats.goroutinePeak.Load(), s.logs.count())
+	fmt.Fprintf(&b, "  watches checked %d (%d for events, %d events owed; %d events pushed in all), %d ended by a resync, %d watched again; claims checked %d; snapshots compared %d; peak heap %d MiB, peak goroutines %d; daemon warnings %d\n",
+		s.stats.windowsChecked.Load(), s.stats.eventWindowsChecked.Load(), s.stats.eventsChecked.Load(), s.stats.eventsPushed.Load(), s.stats.windowsResynced.Load(),
+		s.stats.rewatches.Load(), s.stats.claimsChecked.Load(), s.stats.snapshots.Load(), s.stats.heapPeak.Load()>>20, s.stats.goroutinePeak.Load(), s.logs.count())
 	for _, l := range s.logs.top(12) {
 		fmt.Fprintf(&b, "    %s\n", l)
 	}

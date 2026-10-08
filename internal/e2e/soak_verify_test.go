@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ariesworx/starfix/internal/mcpserver"
+	"github.com/ariesworx/starfix/internal/proto"
+	"github.com/ariesworx/starfix/internal/store"
 )
 
 // querier is a *sql.Tx or *sql.DB.
@@ -285,11 +287,12 @@ func (s *soak) awaitReaped() {
 }
 
 // checkWindow, before a session closes its connection on purpose, waits
-// for every item committed so far that its watch is owed.
+// for every inbox item and issue event committed so far that its watch is
+// owed.
 func (s *soak) checkWindow(ss *session, ln *line, c *mcpserver.RepoConn) {
-	var top int64
-	err := scan(context.Background(), s.db, `SELECT id FROM inbox ORDER BY id DESC LIMIT 1`, nil,
-		func(rows *sql.Rows) error { return rows.Scan(&top) })
+	var top bound
+	err := scan(context.Background(), s.db, `SELECT (SELECT COALESCE(MAX(id), 0) FROM inbox), (SELECT COALESCE(MAX(seq), 0) FROM events)`, nil,
+		func(rows *sql.Rows) error { return rows.Scan(&top.item, &top.seq) })
 	if err != nil {
 		s.t.Errorf("read inbox: %v", err)
 		return
@@ -297,23 +300,29 @@ func (s *soak) checkWindow(ss *session, ln *line, c *mcpserver.RepoConn) {
 	s.awaitWindow(ss, ln, c, top)
 }
 
+// bound is how far a check of a window reaches: inbox items up to id
+// item, events up to seq; zero reaches everything.
+type bound struct{ item, seq int64 }
+
 // awaitWindow waits until every inbox item for ss committed after ln's
-// window began, up to id upTo (0: all), has been pushed to it: unless the
-// window was resynced, or its connection broke, which ends what it is
-// owed.
-func (s *soak) awaitWindow(ss *session, ln *line, c *mcpserver.RepoConn, upTo int64) {
+// window began, and every issue event if the watch asked for events, up
+// to upTo, has been pushed to it: unless the window was resynced, or its
+// connection broke, which ends what it is owed. Pushed events are owed in
+// any order, so they are compared as a set.
+func (s *soak) awaitWindow(ss *session, ln *line, c *mcpserver.RepoConn, upTo bound) {
 	w := ln.live()
 	if w == nil {
 		return
 	}
+	ctx := context.Background()
 	query := `SELECT id FROM inbox WHERE to_principal = ? AND (to_session IS NULL OR to_session = ?) AND at > ?`
 	args := []any{ss.key.principal, ss.key.session, w.start}
-	if upTo > 0 {
+	if upTo.item > 0 {
 		query += ` AND id <= ?`
-		args = append(args, upTo)
+		args = append(args, upTo.item)
 	}
 	var owed []int64
-	err := scan(context.Background(), s.db, query, args, func(rows *sql.Rows) error {
+	err := scan(ctx, s.db, query, args, func(rows *sql.Rows) error {
 		var id int64
 		owed = append(owed, id)
 		return rows.Scan(&owed[len(owed)-1])
@@ -322,20 +331,151 @@ func (s *soak) awaitWindow(ss *session, ln *line, c *mcpserver.RepoConn, upTo in
 		s.t.Errorf("read inbox: %v", err)
 		return
 	}
+	var owedEvents []int64
+	if w.events {
+		query, args := `SELECT seq, target FROM events WHERE at > ?`, []any{w.start}
+		if upTo.seq > 0 {
+			query += ` AND seq <= ?`
+			args = append(args, upTo.seq)
+		}
+		err := scan(ctx, s.db, query, args, func(rows *sql.Rows) error {
+			var seq int64
+			var target string
+			if err := rows.Scan(&seq, &target); err != nil {
+				return err
+			}
+			if store.IssueID(target).Validate() == nil { // only issue events are pushed
+				owedEvents = append(owedEvents, seq)
+			}
+			return nil
+		})
+		if err != nil {
+			s.t.Errorf("read events: %v", err)
+			return
+		}
+	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		missing, resync := ss.inbox.delivered(w, owed)
+		missingEvents, _ := ss.inbox.eventsDelivered(w, owedEvents)
 		switch {
-		case len(missing) == 0 || resync:
+		case resync:
+			s.stats.windowsResynced.Add(1)
+			return
+		case len(missing) == 0 && len(missingEvents) == 0:
 			s.stats.windowsChecked.Add(1)
+			if w.events {
+				s.stats.eventWindowsChecked.Add(1)
+				s.stats.eventsChecked.Add(int64(len(owedEvents)))
+			}
 			return
 		case c.Err() != nil || ln.live() != w:
 			return // the connection broke: what was owed ends with it
 		case time.Now().After(deadline):
-			s.mon.fail("", "%s: inbox items %v were committed for its live watch (from %s) and never pushed",
-				ss.key, missing, stamp(w.start))
+			if len(missing) > 0 {
+				s.mon.fail("", "%s: inbox items %v were committed for its live watch (from %s) and never pushed",
+					ss.key, missing, stamp(w.start))
+			}
+			if len(missingEvents) > 0 {
+				s.mon.fail("", "%s: events %v were committed on issues after its watch for events began (%s) and never pushed",
+					ss.key, missingEvents[:min(len(missingEvents), 20)], stamp(w.start))
+			}
 			return
 		}
-		pause(context.Background(), 10*time.Millisecond)
+		pause(ctx, 10*time.Millisecond)
 	}
+}
+
+// claimRow is a held claims row, times in microseconds so rows compare
+// with ==.
+type claimRow struct {
+	issue, principal, session, machine string
+	epoch, claimedAt, expiresAt        int64
+}
+
+func readClaimRows(ctx context.Context, q querier) (map[string]claimRow, error) {
+	out := map[string]claimRow{}
+	err := scan(ctx, q, `SELECT issue_id, principal, session, machine, epoch, claimed_at, expires_at FROM claims WHERE principal IS NOT NULL`, nil,
+		func(rows *sql.Rows) error {
+			var c claimRow
+			var at, exp time.Time
+			if err := rows.Scan(&c.issue, &c.principal, &c.session, &c.machine, &c.epoch, &at, &exp); err != nil {
+				return err
+			}
+			c.claimedAt, c.expiresAt = at.UnixMicro(), exp.UnixMicro()
+			out[c.issue] = c
+			return nil
+		})
+	return out, err
+}
+
+// checkClaimsOp checks what the claims op lists against the claims table,
+// once the sessions have stopped renewing, so that only the reaper still
+// changes claims. The table is read before and after the op; when the two
+// reads agree, they are what the op read too.
+func (s *soak) checkClaimsOp(ctx context.Context) {
+	c, err := mcpserver.DialRepo(ctx, s.eve.repo, s.eveOptions("eve-claims"))
+	if err != nil {
+		s.t.Errorf("dial as eve: %v", err)
+		return
+	}
+	defer func() { _ = c.Close() }()
+	// The op reads the clock for Now and again for its query, so a lease
+	// that runs out between the two may be listed or not.
+	slack := time.Duration(float64(500*time.Millisecond) * s.cfg.speed).Microseconds()
+	for range 50 {
+		before, err := readClaimRows(ctx, s.db)
+		if err != nil {
+			s.t.Errorf("read claims: %v", err)
+			return
+		}
+		var r proto.ClaimsResult
+		if err := c.Call(ctx, proto.OpClaims, proto.LimitArgs{Limit: 500}, &r); err != nil {
+			s.t.Errorf("claims: %v", err)
+			return
+		}
+		after, err := readClaimRows(ctx, s.db)
+		if err != nil {
+			s.t.Errorf("read claims: %v", err)
+			return
+		}
+		if !maps.Equal(before, after) {
+			continue
+		}
+		now := r.Now.UnixMicro()
+		listed := map[string]bool{}
+		for i, got := range r.Claims {
+			listed[got.ID] = true
+			row, ok := after[got.ID]
+			want := proto.Claim{ID: row.issue, By: row.principal, Session: row.session, Machine: row.machine, Epoch: row.epoch,
+				ClaimedAt: time.UnixMicro(row.claimedAt).UTC(), ExpiresAt: time.UnixMicro(row.expiresAt).UTC()}
+			switch {
+			case !ok:
+				s.mon.fail(got.ID, "claims lists %s held by %s/%s (epoch %d), which the claims table does not", got.ID, got.By, got.Session, got.Epoch)
+			case got != want:
+				s.mon.fail(got.ID, "claims lists %+v; the claims table holds %+v", got, want)
+			case row.expiresAt <= now:
+				s.mon.fail(got.ID, "claims lists %s, whose lease ran out at %s, before its now %s", got.ID, stamp(got.ExpiresAt), stamp(r.Now))
+			}
+			if i > 0 {
+				prev := r.Claims[i-1]
+				if c := prev.ClaimedAt.Compare(got.ClaimedAt); c > 0 || c == 0 && prev.ID > got.ID {
+					s.mon.fail(got.ID, "claims lists %s (taken %s) after %s (taken %s): not longest held first",
+						got.ID, stamp(got.ClaimedAt), prev.ID, stamp(prev.ClaimedAt))
+				}
+			}
+		}
+		for id, row := range after {
+			if !listed[id] && row.expiresAt > now+slack {
+				s.mon.fail(id, "claims leaves out %s, held by %s/%s until %s, live at its now %s", id, row.principal, row.session,
+					stamp(time.UnixMicro(row.expiresAt)), stamp(r.Now))
+			}
+		}
+		if r.More != 0 {
+			s.mon.fail("", "claims says %d more past a limit of 500, with %d held", r.More, len(after))
+		}
+		s.stats.claimsChecked.Add(int64(len(r.Claims)))
+		return
+	}
+	s.t.Logf("soak: the claims table kept changing; claims was not checked")
 }
