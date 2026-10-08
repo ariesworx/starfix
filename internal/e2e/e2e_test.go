@@ -215,6 +215,7 @@ func (w *world) restartDaemon() error {
 	w.daemonMu.Lock()
 	defer w.daemonMu.Unlock()
 	w.stopDaemon()
+	w.stopDaemon = func() {} // until a new daemon starts, nothing runs to stop
 	return w.startDaemon()
 }
 
@@ -666,6 +667,31 @@ func TestOlderClientWarns(t *testing.T) {
 	}
 	if r := alice.run("v0.2.0", "ready"); r.stderr != "" {
 		t.Fatalf("same version warned: %q", r.stderr)
+	}
+}
+
+// A restart whose new daemon fails to start leaves nothing to stop: the
+// world's cleanup must not wait on the daemon the restart already
+// stopped.
+func TestRestartDaemonFails(t *testing.T) {
+	w := newWorld(t, daemonOpts{})
+	// The listener refuses a socket directory others can read.
+	if err := os.Chmod(filepath.Dir(w.socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.restartDaemon(); err == nil || !strings.Contains(err.Error(), "chmod 700") {
+		t.Fatalf("restartDaemon with an open socket directory = %v, want its refusal", err)
+	}
+	stop, stopped := w.stopDaemon, make(chan struct{})
+	go func() {
+		defer close(stopped)
+		stop()
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		w.stopDaemon = func() {} // let the cleanup finish; the goroutine above stays blocked
+		t.Fatal("stopDaemon after a failed restart did not return: it waits again on the daemon the restart stopped")
 	}
 }
 
