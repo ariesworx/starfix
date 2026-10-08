@@ -182,6 +182,19 @@ func TestImportIssueHeld(t *testing.T) {
 			if held := c != nil; held == tc.ends {
 				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.ends)
 			}
+			h, err := s.History(ctx, in.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			released := 0
+			for _, e := range h {
+				if e.Op == OpClaimRelease && e.Actor == importer {
+					released++
+				}
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.ends]; released != want {
+				t.Errorf("after the import, History(%s) has %d claim.release events by the importer, want %d", in.ID, released, want)
+			}
 			var want []item
 			if tc.ends {
 				want = []item{{"alice", "sess-a", InboxClaimLost, in.ID, importer.Principal}}

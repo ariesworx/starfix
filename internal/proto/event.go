@@ -55,7 +55,7 @@ func (e Event) Changed() string {
 			}
 		}
 		return out
-	case "claim.take", "claim.expire":
+	case "claim.take", "claim.expire", "claim.release":
 		if h, ok := pick["holder"].(map[string]any); ok {
 			return fmt.Sprintf("epoch %v, %v/%v", pick["epoch"], h["principal"], h["session"])
 		}

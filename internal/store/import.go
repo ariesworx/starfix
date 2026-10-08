@@ -196,7 +196,7 @@ func importEndsClaim(ctx context.Context, w *wtx, is Issue) (map[string]any, err
 	if err := w.ended(ctx, c, why); err != nil {
 		return nil, err
 	}
-	if err := releaseClaim(ctx, w, c); err != nil {
+	if err := endClaim(ctx, w, c); err != nil {
 		return nil, err
 	}
 	return map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil

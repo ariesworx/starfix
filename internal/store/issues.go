@@ -720,7 +720,7 @@ func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force boo
 	if err := w.ended(ctx, c, "closed"); err != nil {
 		return Issue{}, err
 	}
-	if err := releaseClaim(ctx, w, c); err != nil {
+	if err := endClaim(ctx, w, c); err != nil {
 		return Issue{}, err
 	}
 	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)}, extra)
