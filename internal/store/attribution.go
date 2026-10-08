@@ -35,10 +35,16 @@ import (
 //     claim, at its lease's expiry if that came first.
 //
 // A hold still open ends now, or when its lease ran out if the reaper has
-// not yet noticed. A request record goes to the issues its session held at its
-// time, shared evenly if it held several. A turn or session record is
-// split over its span by time held, sharing each stretch evenly among the
-// issues held then; stretches with nothing held are unattributed.
+// not yet noticed. A request record goes to the issues its session held
+// at its time, shared evenly if it held several. A turn or session record
+// is split over its span by time held, sharing each stretch evenly among
+// the issues held then; stretches with nothing held are unattributed.
+// Each count is divided in whole tokens that sum to it (apportion).
+//
+// Reads are bounded: an issue's records are read stretch by stretch of
+// its holds, a span is at most MaxUsageSpan, one read keeps at most
+// usageScanRows records, and only the holds of the records' sessions
+// that overlap them are loaded and indexed (sessionHolds, holdIndex).
 
 // IssueUsage is what is attributed to one issue: the time it was held,
 // its tokens by model and the account they report against.
@@ -151,7 +157,7 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 	rows := ur.rows
 	out.Capped = ur.capped
 	// To split a record, every issue its session held matters.
-	holds, err := sessionHolds(ctx, q, keys, now)
+	holds, err := sessionHolds(ctx, q, rows, now)
 	if err != nil {
 		return IssueUsage{}, err
 	}
@@ -163,11 +169,11 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 			}
 		}
 		d := divide(r, holds[r.key])
-		i := d.part(id)
-		if i < 0 {
+		p := d.part(id)
+		if p < 0 {
 			continue
 		}
-		sum.add(r, func(n int64) int64 { return d.parts(n)[i] })
+		sum.add(r, func(n int64) int64 { return d.parts(n)[p] })
 		out.Split = out.Split || d.split()
 	}
 	out.Models = sum.models()
@@ -295,43 +301,95 @@ func lapsedAt(at, expires time.Time) time.Time {
 	return at
 }
 
-// sessionHolds returns every hold of the sessions keys, on any issue,
-// indexed by session.
-func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Time) (map[sessionKey]*holdIndex, error) {
-	var issues []IssueID
-	seen := map[IssueID]bool{}
-	for _, k := range keys {
-		rows, err := q.QueryContext(ctx, `SELECT DISTINCT target FROM events WHERE op = ? AND principal = ? AND session = ?`,
-			string(OpClaimTake), k.principal, k.session)
-		if err != nil {
-			return nil, fmt.Errorf("issues taken: %w", err)
+// sessionHolds returns the holds that divide rows: those of the rows'
+// sessions, on any issue, that overlap the rows of their session,
+// indexed by session. It reads a constant number of queries a chunk of
+// sessions or issues, and loads the claim history only of issues whose
+// history reaches a session's rows.
+func sessionHolds(ctx context.Context, q querier, rows []usageRow, now time.Time) (map[sessionKey]*holdIndex, error) {
+	spans := map[sessionKey]window{} // each session's rows, first to last
+	for _, r := range rows {
+		w, ok := spans[r.key]
+		if !ok {
+			w = window{r.from, r.to}
 		}
-		for rows.Next() {
+		spans[r.key] = window{minTime(w.from, r.from), maxTime(w.to, r.to)}
+	}
+	keys := slices.SortedFunc(maps.Keys(spans), func(a, b sessionKey) int {
+		return cmp.Or(strings.Compare(a.principal, b.principal), strings.Compare(a.session, b.session))
+	})
+	// The issues the sessions took before their rows ended, each with the
+	// earliest start of the rows of a session that took it.
+	from := map[IssueID]time.Time{}
+	for chunk := range slices.Chunk(keys, 300) {
+		terms := make([]string, len(chunk))
+		args := []any{string(OpClaimTake)}
+		for i, k := range chunk {
+			terms[i] = `(principal = ? AND session = ? AND at <= ?)`
+			args = append(args, k.principal, k.session, spans[k].to)
+		}
+		query := `SELECT DISTINCT target, principal, session FROM events WHERE op = ? AND (` + strings.Join(terms, " OR ") + `)` //nolint:gosec // constant terms; values are arguments
+		err := scanAll(ctx, q, "issues taken", query, args, func(rs *sql.Rows) error {
 			var id IssueID
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("issues taken: %w", err)
+			var k sessionKey
+			if err := rs.Scan(&id, &k.principal, &k.session); err != nil {
+				return err
 			}
-			if !seen[id] {
-				seen[id] = true
-				issues = append(issues, id)
+			if t, ok := from[id]; !ok || spans[k].from.Before(t) {
+				from[id] = spans[k].from
 			}
-		}
-		if err := closeRows(rows); err != nil {
-			return nil, fmt.Errorf("issues taken: %w", err)
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
-	all, err := loadHolds(ctx, q, issues, now)
+	// Of those, the issues still claimed, or with a claim event since
+	// then: a hold that ended before has its last event before.
+	ops := make([]any, len(claimEventOps))
+	for i, op := range claimEventOps {
+		ops[i] = string(op)
+	}
+	var keep []IssueID
+	for chunk := range slices.Chunk(slices.Sorted(maps.Keys(from)), 1000) {
+		ids := make([]any, len(chunk))
+		for i, id := range chunk {
+			ids[i] = string(id)
+		}
+		reaches := map[IssueID]bool{}
+		mark := func(rs *sql.Rows) error {
+			var id IssueID
+			var last sql.NullTime
+			if err := rs.Scan(&id, &last); err != nil {
+				return err
+			}
+			if !last.Valid || !last.Time.Before(from[id]) {
+				reaches[id] = true
+			}
+			return nil
+		}
+		query := `SELECT target, MAX(at) FROM events WHERE target IN (` + placeholders(len(ids)) + `) AND op IN (` + //nolint:gosec // placeholders only; values are arguments
+			placeholders(len(ops)) + `) GROUP BY target`
+		if err := scanAll(ctx, q, "claim history", query, append(slices.Clone(ids), ops...), mark); err != nil {
+			return nil, err
+		}
+		query = `SELECT issue_id, NULL FROM claims WHERE principal IS NOT NULL AND issue_id IN (` + placeholders(len(ids)) + `)` //nolint:gosec // placeholders only; values are arguments
+		if err := scanAll(ctx, q, "claims", query, ids, mark); err != nil {
+			return nil, err
+		}
+		for _, id := range chunk {
+			if reaches[id] {
+				keep = append(keep, id)
+			}
+		}
+	}
+	all, err := loadHolds(ctx, q, keep, now)
 	if err != nil {
 		return nil, err
 	}
-	want := map[sessionKey]bool{}
-	for _, k := range keys {
-		want[k] = true
-	}
 	byKey := map[sessionKey][]hold{}
 	for _, h := range all {
-		if want[h.key] {
+		if w, ok := spans[h.key]; ok && !h.start.After(w.to) && h.end.After(w.from) {
 			byKey[h.key] = append(byKey[h.key], h)
 		}
 	}
@@ -340,6 +398,25 @@ func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Ti
 		out[k] = newHoldIndex(hs)
 	}
 	return out, nil
+}
+
+// scanAll runs query and calls scan for each row; what names the read in
+// an error.
+func scanAll(ctx context.Context, q querier, what, query string, args []any, scan func(*sql.Rows) error) error {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	for rows.Next() {
+		if err := scan(rows); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("%s: %w", what, err)
+		}
+	}
+	if err := closeRows(rows); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return nil
 }
 
 // usageIn matches a session's records whose time is in [from, to) and
@@ -780,15 +857,7 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 	if err != nil {
 		return err
 	}
-	var keys []sessionKey
-	seen := map[sessionKey]bool{}
-	for _, r := range rows {
-		if !seen[r.key] {
-			seen[r.key] = true
-			keys = append(keys, r.key)
-		}
-	}
-	bySession, err := sessionHolds(ctx, q.tx, keys, q.now)
+	bySession, err := sessionHolds(ctx, q.tx, rows, q.now)
 	if err != nil {
 		return err
 	}

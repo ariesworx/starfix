@@ -508,3 +508,65 @@ func setUsageScanRows(t *testing.T, n int) {
 	usageScanRows = n
 	t.Cleanup(func() { usageScanRows = was })
 }
+
+// Dividing records needs only the holds of their sessions that overlap
+// them: not every issue the sessions ever took.
+func TestSessionHoldsOverlapTheRecords(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now()
+	at := func(d time.Duration) time.Time { return t0.Add(d) }
+	issue := func(title string) IssueID { return mustCreate(t, s, NewIssue{Title: title}).ID }
+	before, open, endsIn, now, bobs := issue("ended before"), issue("open since"), issue("ends inside"), issue("taken now"), issue("bob's")
+	step := func(to time.Duration, f func() error) {
+		t.Helper()
+		clk.add(at(to).Sub(clk.now()))
+		if err := f(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := func(a Actor, id IssueID) func() error {
+		return func() error { _, _, err := s.StartIssue(ctx, a, id, 24*time.Hour, false); return err }
+	}
+	finish := func(a Actor, id IssueID) func() error {
+		return func() error { _, _, err := s.FinishIssue(ctx, a, id, 0, Finish{}); return err }
+	}
+	step(0, start(alice, before))
+	step(time.Minute, start(alice, open))
+	step(10*time.Minute, finish(alice, before))
+	step(time.Hour, start(alice, endsIn))
+	step(2*time.Hour, start(alice, now))
+	step(2*time.Hour, start(bob, bobs))
+	step(2*time.Hour+10*time.Minute, finish(alice, endsIn))
+	rows := []usageRow{
+		{key: sessionKey{"alice", "sess-a"}, requestID: "a", from: at(2*time.Hour + 5*time.Minute), to: at(2*time.Hour + 5*time.Minute)},
+		{key: sessionKey{"bob", "sess-b"}, requestID: "b", from: at(2*time.Hour + 5*time.Minute), to: at(2*time.Hour + 6*time.Minute)},
+	}
+	q, end, err := s.beginRead(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end()
+	got, err := sessionHolds(ctx, q, rows, clk.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := func(k sessionKey) []IssueID {
+		var out []IssueID
+		if x := got[k]; x != nil {
+			for _, h := range x.holds {
+				out = append(out, h.issue)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := []IssueID{open, endsIn, now}
+	slices.Sort(want)
+	if g := issues(rows[0].key); !slices.Equal(g, want) {
+		t.Errorf("alice's holds over her record = %v, want %v (not %s, which ended before it)", g, want, before)
+	}
+	if g := issues(rows[1].key); !slices.Equal(g, []IssueID{bobs}) {
+		t.Errorf("bob's holds over his record = %v, want [%s]", g, bobs)
+	}
+}
