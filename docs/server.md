@@ -538,7 +538,9 @@ one per row. `usage_per_day` bounds how fast one principal can grow it.
 An issue's paths are at most `paths_per_issue` rows in `issue_paths`. A
 call that adds paths records one `issue.paths` event listing at most 20;
 one that only sees paths already recorded refreshes their time and
-records nothing.
+records nothing. A request carries at most 200 paths for an issue, and a
+`renew` paths for at most 50 issues, whatever `paths_per_issue` is;
+past either it is refused with `invalid`.
 
 Watch the size of `/var/lib/dolt/data`. If it grows, run `dolt gc` in a
 quiet hour: `cd /var/lib/dolt/data/starfix && sudo -u dolt -H dolt gc`.

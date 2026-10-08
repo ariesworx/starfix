@@ -111,10 +111,12 @@ two sources:
   `handoff` and `away`. An issue's paths are those of the commits since
   the default branch whose `Starfix:` trailer names it, or, on the
   issue's own branch, every commit on it and the uncommitted files.
-  Earlier holders' paths stay with the issue.
+  Commits a merge brought in are not counted. Earlier holders' paths
+  stay with the issue.
 - **Declared paths** are what someone expects the work to touch, given
-  with `sfx create --paths` or `sfx update --paths`. A path ending in `/`
-  is a directory and covers everything under it. `update --paths`
+  with `sfx create --paths` or `sfx update --paths`, relative to the
+  current directory. A path ending in `/` is a directory and covers
+  everything under it. `update --paths`
   replaces the declared set, and an empty value clears it.
 
 Paths are relative to the repository's root, with forward slashes. An
@@ -126,8 +128,9 @@ that are refused.
 path of an issue another session holds, or when a declared directory of
 either covers a path of the other. It names those issues (`overlaps
 ID`), and `show` lists the likely files and who holds the overlapping
-work. Your own session's claims do not count, and `start` with no id
-takes the first issue that overlaps nothing, if there is one.
+work. Your own session's claims do not count, nor does a path that more
+than 10 held issues share, such as `go.mod`. `start` with no id takes
+the first issue that overlaps nothing, if there is one.
 
 Reading git is a hint, never a requirement: with no git, no repository
 or a detached HEAD, `sfx` sends nothing and the work goes on.
