@@ -87,6 +87,26 @@ func TestReplayCatches(t *testing.T) {
 			want: "closes sf-1 while alice/s1 holds epoch 1",
 		},
 		{
+			name: "an update out of progress of an issue still held",
+			log: func(b *logBuilder) *logBuilder {
+				return b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "").
+					add(0, alice, "issue.update", "sf-1", `{"status": "open"}`, `{"status": "in_progress", "assignee": "alice"}`).
+					add(time.Minute, alice, "issue.update", "sf-1", `{"status": "in_progress"}`, `{"status": "blocked"}`)
+			},
+			want: "changes sf-1's status or assignee while alice/s1 holds epoch 1, with no claim.release",
+		},
+		{
+			name: "an update after the lease lapsed that ends the claim first",
+			log: func(b *logBuilder) *logBuilder {
+				b.create(alice, "sf-1").take(alice, "sf-1", 1, time.Minute, "").
+					add(0, alice, "issue.update", "sf-1", `{"status": "open"}`, `{"status": "in_progress", "assignee": "alice"}`)
+				b.at += 5 * time.Minute // the lease ran out at 3m; the reaper has not run
+				return b.add(time.Minute, bob, "claim.release", "sf-1", b.claimOf(alice, 1, 3*time.Minute), "").
+					add(0, bob, "issue.update", "sf-1", `{"status": "in_progress"}`, `{"status": "blocked"}`)
+			},
+			guards: 1,
+		},
+		{
 			name: "a release, then another principal's take",
 			log: func(b *logBuilder) *logBuilder {
 				b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "")
@@ -439,9 +459,11 @@ func TestCheckFencing(t *testing.T) {
 	}
 }
 
-// A claim that ends with no event of its own, as a releasing handoff of
-// an issue not in progress once did, fails the replay: the next take
-// replaces a holder the log says is still there.
+// A claim that ends with no event of its own fails the replay: the
+// update that moved the issue out of progress after the lease lapsed
+// once left the claim to the reaper, and the handoff that followed
+// released it silently, so the change and the next take each act on a
+// holder the log says is still there.
 func TestReplaySilentRelease(t *testing.T) {
 	alice, bob := sessKey{"alice", "s1"}, sessKey{"bob", "s1"}
 	b := newLog().create(alice, "sf-1").take(alice, "sf-1", 1, time.Minute, "")
@@ -454,8 +476,9 @@ func TestReplaySilentRelease(t *testing.T) {
 	r := newReplay(func(_, format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) }, nil)
 	r.feed(b.evs)
 	r.flush()
-	if want := "without naming alice/s1"; len(got) != 1 || !strings.Contains(got[0], want) {
-		t.Errorf("replay of a silent release found %q, want one violation containing %q", got, want)
+	want := []string{"changes sf-1's status or assignee while alice/s1 holds epoch 1", "without naming alice/s1"}
+	if len(got) != len(want) || !strings.Contains(got[0], want[0]) || !strings.Contains(got[1], want[1]) {
+		t.Errorf("replay of a silent release found %q, want violations containing %q", got, want)
 	}
 }
 

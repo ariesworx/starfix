@@ -98,6 +98,24 @@ func TestInboxKinds(t *testing.T) {
 			want:   []item{{"alice", "sess-a", InboxClaimLost, "", "bob"}},
 		},
 		{
+			name: "an update out of progress after expiry tells the losing session",
+			do: func(t *testing.T, s *Store, clk *clock) IssueID {
+				is := mustCreate(t, s, NewIssue{Title: "work"})
+				mustStart(t, s, alice, is.ID)
+				clk.add(DefaultLease + time.Second)
+				is, err := s.GetIssue(t.Context(), is.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.UpdateIssue(t.Context(), bob, is.ID, is.Rev, IssuePatch{Status: ptr(StatusBlocked)}); err != nil {
+					t.Fatal(err)
+				}
+				return is.ID
+			},
+			reader: alice,
+			want:   []item{{"alice", "sess-a", InboxClaimLost, "", "bob"}},
+		},
+		{
 			name: "a release after expiry by the holder's own session is not news",
 			do: func(t *testing.T, s *Store, clk *clock) IssueID {
 				is := mustCreate(t, s, NewIssue{Title: "work"})

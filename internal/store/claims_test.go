@@ -275,9 +275,10 @@ func TestClaimEndsAreRecorded(t *testing.T) {
 			}
 			return alice
 		}},
-		{name: "a releasing handoff of an issue no longer in progress", ends: true, end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
-			// The lease lapsed and, before the reaper ran, bob moved the
-			// issue out of progress, which a lapsed claim does not stop.
+		{name: "an update moving the issue out of progress after the lease lapsed", ends: true, end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			// Before the reaper ran, bob moved the issue out of progress,
+			// which a lapsed claim does not stop; the update ends the
+			// claim, and alice's later release finds nothing to end.
 			clk.add(DefaultLease + time.Minute)
 			is, err := s.GetIssue(t.Context(), id)
 			if err != nil {
@@ -289,7 +290,29 @@ func TestClaimEndsAreRecorded(t *testing.T) {
 			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "parked"}, true, "", nil); err != nil {
 				t.Fatal(err)
 			}
-			return alice
+			return bob
+		}},
+		{name: "an update reassigning the issue after the lease lapsed", ends: true, end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Assignee: ptr("bob")}); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "an update of other fields after the lease lapsed", end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Title: ptr("renamed")}); err != nil {
+				t.Fatal(err)
+			}
+			return bob
 		}},
 		{name: "a handoff that keeps the claim", end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
 			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "progress"}, false, "", nil); err != nil {

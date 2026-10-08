@@ -561,6 +561,10 @@ func (r *replay) patch(e sevent) {
 	}
 }
 
+// update applies an issue.update. Only start changes the status or
+// assignee of a held issue, putting it in progress with the holder that
+// just took it; any other such change ends the claim first, with a
+// claim.release, live or lapsed, so no update ends a hold.
 func (r *replay) update(e sevent) {
 	is := r.issues[e.target]
 	var s issueState
@@ -570,8 +574,15 @@ func (r *replay) update(e sevent) {
 	}
 	r.patch(e)
 	is.rev++
-	if s.Status != nil && *s.Status != "in_progress" {
-		r.endHold(e.target, e.at, time.Time{})
+	var changed map[string]json.RawMessage
+	_ = json.Unmarshal(e.after, &changed)
+	_, status := changed["status"]
+	_, assignee := changed["assignee"]
+	c := r.claim(e.target)
+	started := e.actor == c.holder && is.status == "in_progress" && is.assignee == c.holder.principal
+	if (status || assignee) && c.holder != (sessKey{}) && !started {
+		r.fail(e.target, "event %d changes %s's status or assignee while %s holds epoch %d, with no claim.release",
+			e.seq, e.target, c.holder, c.epoch)
 	}
 }
 

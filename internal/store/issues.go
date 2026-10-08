@@ -370,7 +370,9 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // Holds come only from claims, so status in_progress is refused with
 // [ErrStatusInProgress] (StartIssue sets it), and a change of status or
 // assignee while the issue is claimed with ErrInvalid (finish, close or a
-// releasing handoff ends the claim first). An issue another principal
+// releasing handoff ends the claim first). Such a change to an issue
+// whose claim has lapsed, before the reaper ran, ends that claim, as
+// claim.release, and tells its holder. An issue another principal
 // holds is refused with a [*ForbiddenError] unless the actor is an admin,
 // a parent that does not exist with ErrNotFound, and a parent that would
 // make a cycle with ErrCycle. New acceptance text cannot tick items ("[x]"
@@ -425,9 +427,19 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		if err := w.guard(ctx, c, "update"); err != nil {
 			return err
 		}
-		if c.active(w.now) && (patch.Status != nil && *patch.Status != before.Status ||
-			patch.Assignee != nil && *patch.Assignee != before.Assignee) {
-			return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
+		if patch.Status != nil && *patch.Status != before.Status ||
+			patch.Assignee != nil && *patch.Assignee != before.Assignee {
+			if c.active(w.now) {
+				return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
+			}
+			// A lapsed claim the reaper has not reached ends here, ahead
+			// of the change, so the log says the hold ended at its lease.
+			if err := w.ended(ctx, c, "updated"); err != nil {
+				return err
+			}
+			if err := endClaim(ctx, w, c); err != nil {
+				return err
+			}
 		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
 			if err := mustExist(ctx, w.tx, *patch.ParentID); err != nil {
