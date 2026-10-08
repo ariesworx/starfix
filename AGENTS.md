@@ -121,8 +121,11 @@ skip without it too.
    transaction. `writeOnce` refuses a transaction that changed rows but
    recorded no event. Only bookkeeping that is not history skips the
    event, by setting `wtx.quiet`: lease renewals, registry touches, inbox
-   acks and pruning. The event log is the truth; ready, blocked and
-   digest are derived from it and never stored.
+   acks, pruning, and refreshing the time of an issue's paths already
+   recorded (a client resends what git shows every few minutes; only a
+   new path is history, and it records an `issue.paths` event). The
+   event log is the truth; ready, blocked and digest are derived from it
+   and never stored.
 8. **Write closures must be safe to rerun.** A write that loses to a
    concurrent transaction is retried from the start.
 9. **Migrations are append-only.** Add the next `NNNN_name.sql`; never edit,

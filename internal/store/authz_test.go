@@ -43,11 +43,11 @@ func TestHeldIssueWrites(t *testing.T) {
 			return err
 		}},
 		{name: "handoff note", run: func(s *Store, a Actor, is Issue) error {
-			_, err := s.HandoffIssue(t.Context(), a, is.ID, 0, HandoffNote{Note: "n"}, false, "")
+			_, err := s.HandoffIssue(t.Context(), a, is.ID, 0, HandoffNote{Note: "n"}, false, "", nil)
 			return err
 		}},
 		{name: "release", run: func(s *Store, a Actor, is Issue) error {
-			_, err := s.HandoffIssue(t.Context(), a, is.ID, 0, HandoffNote{Note: "n"}, true, "")
+			_, err := s.HandoffIssue(t.Context(), a, is.ID, 0, HandoffNote{Note: "n"}, true, "", nil)
 			return err
 		}},
 		{name: "accept", acc: "- a", run: func(s *Store, a Actor, is Issue) error {
@@ -180,7 +180,7 @@ func TestAdminEndTellsHolder(t *testing.T) {
 	if _, err := s.CloseIssue(ctx, dana, a.ID, 0, "dup"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.HandoffIssue(ctx, dana, b.ID, 0, HandoffNote{Note: "moving it"}, true, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, dana, b.ID, 0, HandoffNote{Note: "moving it"}, true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	page, err := s.Inbox(ctx, alice, false, 10)
@@ -316,11 +316,11 @@ func TestLeaseCaps(t *testing.T) {
 			return err
 		}, ErrInvalid},
 		{"renew session over a day", func() error {
-			_, err := s.RenewClaims(ctx, alice, MaxClaimLease+time.Minute, false)
+			_, err := s.RenewClaims(ctx, alice, MaxClaimLease+time.Minute, false, nil)
 			return err
 		}, ErrInvalid},
-		{"renew all a week", func() error { _, err := s.RenewClaims(ctx, alice, MaxLease, true); return err }, nil},
-		{"renew all over a week", func() error { _, err := s.RenewClaims(ctx, alice, MaxLease+time.Minute, true); return err }, ErrInvalid},
+		{"renew all a week", func() error { _, err := s.RenewClaims(ctx, alice, MaxLease, true, nil); return err }, nil},
+		{"renew all over a week", func() error { _, err := s.RenewClaims(ctx, alice, MaxLease+time.Minute, true, nil); return err }, ErrInvalid},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

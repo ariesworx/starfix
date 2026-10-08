@@ -187,14 +187,13 @@ deferred (id) AS (
 )
 `
 
-// readyWhere selects and orders the ready issues of blockedCTE, best
-// first; its one parameter is the limit. Ready and StartIssue share it, so
-// start takes what ready shows first.
-const readyWhere = `WHERE i.status = 'open' AND i.template = FALSE
+// readyFilter selects and orders the ready issues of blockedCTE, best
+// first. Ready and StartIssue share it, through rankReady, so start takes
+// what ready shows first.
+const readyFilter = `WHERE i.status = 'open' AND i.template = FALSE
   AND i.id NOT IN (SELECT id FROM blocked)
   AND i.id NOT IN (SELECT id FROM deferred)
-ORDER BY i.priority, i.created_at, i.id
-LIMIT ?`
+ORDER BY i.priority, i.created_at, i.id`
 
 // clampLimit returns def when n is not positive, and otherwise n capped
 // at maxN.
@@ -208,33 +207,66 @@ func clampLimit(n, def, maxN int) int {
 // Ready returns open issues that nothing holds back: no unclosed blocks or
 // conditional-blocks target on the issue or an ancestor, not deferred (by
 // status or a future defer_until) on the issue or an ancestor, and not a
-// template. Ordered by priority, then age, at most limit (0 means 10, at
-// most 500). Computed at read time, from one snapshot.
-func (s *Store) Ready(ctx context.Context, limit int) ([]Issue, error) {
+// template. Ordered by priority, then age, except that an issue whose
+// paths overlap those of an issue another session than actor's holds
+// comes after every issue that does not, with those held issues as its
+// Overlaps. At most limit (0 means 10, at most 500). Computed at read
+// time, from one snapshot.
+func (s *Store) Ready(ctx context.Context, actor Actor, limit int) ([]ReadyIssue, error) {
 	limit = clampLimit(limit, 10, 500)
 	tx, end, err := s.beginRead(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ready: %w", err)
 	}
 	defer end()
-	rows, err := tx.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+` FROM issues i
-`+readyWhere, s.now(), limit)
+	ids, overlaps, err := rankReady(ctx, tx, actor, s.now(), limit)
+	if err != nil {
+		return nil, err
+	}
+	issues, err := loadIssues(ctx, tx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("ready: %w", err)
 	}
+	out := make([]ReadyIssue, len(issues))
+	for i, is := range issues {
+		out[i] = ReadyIssue{Issue: is, Overlaps: overlaps[is.ID]}
+	}
+	return out, nil
+}
+
+// loadIssues reads the issues ids, with their labels, in the order given;
+// an id with no issue is left out.
+func loadIssues(ctx context.Context, q querier, ids []IssueID) ([]Issue, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = string(id)
+	}
+	rows, err := q.QueryContext(ctx, `SELECT `+issueCols+` FROM issues i WHERE i.id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
 	defer func() { _ = rows.Close() }()
-	var out []Issue
+	byID := make(map[IssueID]Issue, len(ids))
 	for rows.Next() {
 		is, err := scanIssue(rows)
 		if err != nil {
-			return nil, fmt.Errorf("ready: %w", err)
+			return nil, err
 		}
-		out = append(out, is)
+		byID[is.ID] = is
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("ready: %w", err)
+		return nil, err
 	}
-	return out, withLabels(ctx, tx, out)
+	out := make([]Issue, 0, len(ids))
+	for _, id := range ids {
+		if is, ok := byID[id]; ok {
+			out = append(out, is)
+		}
+	}
+	return out, withLabels(ctx, q, out)
 }
 
 // Blocked returns unclosed issues held back by unclosed blockers, their own

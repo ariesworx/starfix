@@ -192,7 +192,7 @@ func (s *Server) held(ctx context.Context, h *store.HeldError) *proto.Error {
 			fmt.Sprintf("%s is held by your session %s", h.ID, h.Session))
 	}
 	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
-	next, err := s.cfg.Store.Ready(ctx, 1)
+	next, err := s.cfg.Store.Ready(ctx, store.Actor{}, 1)
 	if err != nil || len(next) == 0 {
 		return proto.Errf(proto.CodeConflict, fmt.Sprintf(proto.FixLeaveIt+" %s; nothing else is ready, so see `sfx blocked`", h.By),
 			msg+"; nothing else is ready")

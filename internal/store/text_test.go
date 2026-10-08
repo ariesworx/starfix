@@ -38,7 +38,7 @@ func TestControlCharsRefused(t *testing.T) {
 		return err
 	}
 	handoff := func(f HandoffFields) error {
-		_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "n", HandoffFields: f}, false, "")
+		_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "n", HandoffFields: f}, false, "", nil)
 		return err
 	}
 	// Single-line fields refuse newlines and tabs too.
@@ -122,7 +122,7 @@ func TestControlCharsRefused(t *testing.T) {
 		{"updated notes", func(v string) error { return update(IssuePatch{Notes: str(v)}) }},
 		{"comment", func(v string) error { _, err := s.AddComment(ctx, alice, is.ID, v, ""); return err }},
 		{"handoff note", func(v string) error {
-			_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: v}, false, "")
+			_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: v}, false, "", nil)
 			return err
 		}},
 	}

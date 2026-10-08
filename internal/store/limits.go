@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Limits bound what one request, or one principal, can make the store
@@ -39,11 +41,16 @@ type Limits struct {
 	// per session: sessions are the client's to name, so a cap per
 	// session would bound nothing.
 	UsagePerDay int `yaml:"usage_per_day"`
+	// Paths caps the paths one issue keeps, declared and from commits;
+	// declared paths past it are refused, and commit paths past it, less
+	// the declared ones, drop the least recently recorded. It also bounds
+	// the commit paths one request records.
+	Paths int `yaml:"paths_per_issue"`
 }
 
 // DefaultLimits are the limits a zero field takes.
 var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10,
-	UsageRecords: 500, UsagePerDay: 50000}
+	UsageRecords: 500, UsagePerDay: 50000, Paths: proto.MaxPaths}
 
 // withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
@@ -52,6 +59,7 @@ func (l Limits) withDefaults() Limits {
 		{&l.Deps, &DefaultLimits.Deps}, {&l.Sessions, &DefaultLimits.Sessions},
 		{&l.InboxUnread, &DefaultLimits.InboxUnread}, {&l.Notices, &DefaultLimits.Notices},
 		{&l.UsageRecords, &DefaultLimits.UsageRecords}, {&l.UsagePerDay, &DefaultLimits.UsagePerDay},
+		{&l.Paths, &DefaultLimits.Paths},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -69,7 +77,7 @@ func (l Limits) Validate() error {
 	}{
 		{"labels_per_issue", l.Labels}, {"acceptance_items", l.AcceptanceItems}, {"deps_per_issue", l.Deps},
 		{"sessions_per_principal", l.Sessions}, {"inbox_unread", l.InboxUnread}, {"notices_per_minute", l.Notices},
-		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay},
+		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay}, {"paths_per_issue", l.Paths},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%w: limit %s is %d; give a positive number, or leave it out for the default", ErrInvalid, f.name, f.v)

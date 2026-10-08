@@ -151,7 +151,7 @@ func TestWho(t *testing.T) {
 		}
 	}
 	clk.add(2 * time.Minute)
-	if _, err := s.RenewClaims(ctx, alice, DefaultLease, false); err != nil { // renews a1, a2; lapsed is gone
+	if _, err := s.RenewClaims(ctx, alice, DefaultLease, false, nil); err != nil { // renews a1, a2; lapsed is gone
 		t.Fatal(err)
 	}
 	clk.add(-time.Minute) // the clock may step back; Who still answers

@@ -103,6 +103,9 @@ type Summary struct {
 	Title    string `json:"title"`
 	Status   string `json:"status"`
 	Priority int    `json:"priority"`
+	// Overlaps, in ready, are the issues other sessions hold whose paths
+	// overlap this one's; ready lists such issues after the rest.
+	Overlaps []string `json:"overlaps,omitempty"`
 }
 
 // Dep is a dependency edge: From depends on To.
@@ -157,6 +160,10 @@ type CreateArgs struct {
 	// Account is a code name for the issue's time and tokens; empty
 	// inherits the parent's, then the server's default (protocol 3).
 	Account string `json:"account,omitempty"`
+	// Paths are the files the work is expected to touch, each a path or a
+	// directory prefix ending in "/" ([CheckPath]); at most MaxPaths
+	// (protocol 3).
+	Paths []string `json:"paths,omitempty"`
 }
 
 // WriteResult is what every issue write returns (design §9).
@@ -197,6 +204,9 @@ type ShowResult struct {
 	// Usage is the time and tokens attributed to the issue and the account
 	// they report against (protocol 3).
 	Usage *IssueUsage `json:"usage,omitempty"`
+	// Files are the issue's likely files and the issues others hold that
+	// overlap them (protocol 3).
+	Files *Files `json:"files,omitempty"`
 }
 
 // Tokens are token counts. A count left out is unknown, which is not 0.
@@ -374,6 +384,9 @@ type UpdateArgs struct {
 	// Account sets the issue's account; empty clears it, to inherit
 	// (protocol 3).
 	Account *string `json:"account,omitempty"`
+	// Paths replaces the issue's declared paths; empty clears them
+	// (protocol 3).
+	Paths *[]string `json:"paths,omitempty"`
 }
 
 // CloseArgs closes an issue. Rev 0 skips the revision check: close wins
@@ -486,9 +499,14 @@ type Claim struct {
 // takes 15m; at most 24h). All renews every session's claims, not only
 // this one's, for up to 7d; the server accepts it only from CLISession, a
 // person's own terminal.
+//
+// Paths maps an issue to the paths its work touched, as the client found
+// them in git, most recent first; the server records them only for the
+// claims it renews, at most MaxPaths in all (protocol 3).
 type RenewArgs struct {
-	Lease string `json:"lease,omitempty"`
-	All   bool   `json:"all,omitempty"`
+	Lease string              `json:"lease,omitempty"`
+	All   bool                `json:"all,omitempty"`
+	Paths map[string][]string `json:"paths,omitempty"`
 }
 
 // CLISession is the session of a person's own `sfx` commands, run without
@@ -524,6 +542,9 @@ type FinishArgs struct {
 	Ticked     []int          `json:"ticked,omitempty"`
 	Waived     map[int]string `json:"waived,omitempty"`
 	Idem       string         `json:"idem,omitempty"`
+	// Paths are the paths the issue's work touched, as the client found
+	// them in git, most recent first; at most MaxPaths (protocol 3).
+	Paths []string `json:"paths,omitempty"`
 	HandoffFields
 }
 
@@ -546,6 +567,8 @@ type HandoffArgs struct {
 	Note    string `json:"note"`
 	Release bool   `json:"release,omitempty"`
 	Idem    string `json:"idem,omitempty"`
+	// Paths are as FinishArgs' (protocol 3).
+	Paths []string `json:"paths,omitempty"`
 	HandoffFields
 }
 

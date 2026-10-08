@@ -207,6 +207,9 @@ type NewIssue struct {
 	Labels         []string
 	// Account is empty to inherit the parent's, or the project default.
 	Account string
+	// Paths are the issue's declared paths: files, or directory prefixes
+	// ending in "/" (proto.CheckPath), at most the paths_per_issue limit.
+	Paths []string
 }
 
 // IssuePatch lists the fields UpdateIssue changes; nil leaves a field alone.
@@ -233,6 +236,9 @@ type IssuePatch struct {
 	Template   *bool
 	Metadata   json.RawMessage
 	Account    *string
+	// Paths replaces the declared paths; an empty slice clears them. They
+	// have their own rows, like labels, so changing them keeps Rev.
+	Paths *[]string
 }
 
 // Dep is a dependency edge: From depends on To.
