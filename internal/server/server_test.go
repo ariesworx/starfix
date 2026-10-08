@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -254,26 +256,25 @@ func TestDispatchErrors(t *testing.T) {
 	}
 }
 
-// pipeConn wires a handshake through net.Pipe, playing the bridge and the
-// client.
+// handshake plays the bridge and the client over net.Pipe: it sends frames
+// to a connection s handles, and returns the first frame s writes back.
 func handshake(t *testing.T, s *Server, frames ...*proto.Frame) (*proto.Frame, error) {
 	t.Helper()
 	srv, cli := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	var wg sync.WaitGroup
+	defer func() { _ = cli.Close(); wg.Wait() }()
+	wg.Go(func() {
 		defer func() { _ = srv.Close() }()
 		s.handle(t.Context(), srv)
-	}()
-	defer func() { _ = cli.Close(); <-done }()
+	})
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
-	go func() {
+	wg.Go(func() {
 		for _, f := range frames {
 			if enc.Encode(f) != nil {
 				return
 			}
 		}
-	}()
+	})
 	_ = cli.SetReadDeadline(time.Now().Add(10 * time.Second))
 	return dec.Decode()
 }
@@ -372,17 +373,18 @@ func TestServeRefusesPeer(t *testing.T) {
 func TestBridgeFrameOnlyFirst(t *testing.T) {
 	s := newServer(t)
 	srv, cli := net.Pipe()
-	go func() { s.handle(t.Context(), srv); _ = srv.Close() }()
-	defer func() { _ = cli.Close() }()
+	var wg sync.WaitGroup
+	defer func() { _ = cli.Close(); wg.Wait() }()
+	wg.Go(func() { s.handle(t.Context(), srv); _ = srv.Close() })
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
-	go func() {
+	wg.Go(func() {
 		_ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "alice"})
 		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 1, Project: project})
-	}()
+	})
 	if f, err := dec.Decode(); err != nil || f.Err != nil {
 		t.Fatalf("welcome: %v %+v", err, f)
 	}
-	go func() { _ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "root"}) }()
+	wg.Go(func() { _ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "root"}) })
 	f, err := dec.Decode()
 	if err != nil {
 		t.Fatal(err)
@@ -396,6 +398,7 @@ func TestBridgeFrameOnlyFirst(t *testing.T) {
 }
 
 func TestListen(t *testing.T) {
+	// Not t.TempDir, whose path can be too long for a unix socket.
 	base, err := os.MkdirTemp("", "sfl")
 	if err != nil {
 		t.Fatal(err)
@@ -520,6 +523,9 @@ func TestResolveSettings(t *testing.T) {
 	logs := write("logs.yaml", "log_level: warn\nlog_format: json\n", 0o600)
 	admins := write("admins.yaml", "admins: [alice, bob]\n", 0o600)
 	reserved := write("reserved.yaml", "admins: [starfixd]\n", 0o600)
+	// Cases that set no file name this one, so that a DefaultConfigFile
+	// on the host cannot change their outcome.
+	empty := write("empty.yaml", "", 0o600)
 	env := map[string]string{}
 	getenv := func(k string) string { return env[k] }
 
@@ -539,29 +545,29 @@ func TestResolveSettings(t *testing.T) {
 		{name: "flag beats env", path: good, flags: Settings{Socket: "/run/flag.sock"}, env: map[string]string{EnvSocket: "/run/env.sock"},
 			check: func(s Settings) bool { return s.Socket == "/run/flag.sock" }},
 		{name: "config from env", env: map[string]string{EnvConfig: good}, check: func(s Settings) bool { return s.Project == project }},
-		{name: "defaults without a file", path: "", check: func(s Settings) bool { return s.Socket == DefaultSocket && s.Prefix == "sf" }},
+		{name: "defaults from an empty file", path: empty, check: func(s Settings) bool { return s.Socket == DefaultSocket && s.Prefix == "sf" }},
 		{name: "password in flag refused", flags: Settings{DSN: "u:secret@tcp(h:1)/d"}, err: "process list"},
 		{name: "password in a loose file refused", path: loose, err: "chmod 600"},
 		{name: "loose file without password", path: nopw, check: func(s Settings) bool { return s.DSN != "" }},
 		{name: "unknown key refused", path: unknown, err: "dns"},
 		{name: "systemd unit", path: unit, check: func(s Settings) bool { return s.SystemdUnit == "starfixd.service" }},
 		{name: "option-like unit refused", path: badUnit, err: "is not a unit name"},
-		{name: "log settings default", path: "", check: func(s Settings) bool { return s.LogLevel == "info" && s.LogFormat == "text" }},
+		{name: "log settings default", path: empty, check: func(s Settings) bool { return s.LogLevel == "info" && s.LogFormat == "text" }},
 		{name: "log settings from file", path: logs, check: func(s Settings) bool { return s.LogLevel == "warn" && s.LogFormat == "json" }},
 		{name: "log level env beats file", path: logs, env: map[string]string{EnvLogLevel: "debug"},
 			check: func(s Settings) bool { return s.LogLevel == "debug" && s.LogFormat == "json" }},
 		{name: "log format flag beats env", path: logs, flags: Settings{LogFormat: "text"}, env: map[string]string{EnvLogFormat: "json"},
 			check: func(s Settings) bool { return s.LogFormat == "text" }},
-		{name: "unknown log level refused", flags: Settings{LogLevel: "loud"}, err: "log level"},
-		{name: "unknown log format refused", flags: Settings{LogFormat: "xml"}, err: "log format"},
+		{name: "unknown log level refused", path: empty, flags: Settings{LogLevel: "loud"}, err: "log level"},
+		{name: "unknown log format refused", path: empty, flags: Settings{LogFormat: "xml"}, err: "log format"},
 		{name: "named file must exist", path: filepath.Join(dir, "missing.yaml"), err: "no such file"},
-		{name: "no admins by default", path: "", check: func(s Settings) bool { return len(s.Admins) == 0 }},
+		{name: "no admins by default", path: empty, check: func(s Settings) bool { return len(s.Admins) == 0 }},
 		{name: "admins from file", path: admins, check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"alice", "bob"}) }},
 		{name: "admins env beats file", path: admins, env: map[string]string{EnvAdmins: "dana, erin"},
 			check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"dana", "erin"}) }},
 		{name: "reserved admin refused", path: reserved, err: `admin "starfixd"`},
-		{name: "reserved admin in env refused", env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
-		{name: "invalid admin refused", env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
+		{name: "reserved admin in env refused", path: empty, env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
+		{name: "invalid admin refused", path: empty, env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -581,6 +587,19 @@ func TestResolveSettings(t *testing.T) {
 			}
 		})
 	}
+
+	// Only a host without a DefaultConfigFile can show that ResolveSettings
+	// goes on without one.
+	t.Run("no default file", func(t *testing.T) {
+		if _, err := os.Stat(DefaultConfigFile); !errors.Is(err, fs.ErrNotExist) {
+			t.Skipf("needs a host without %s", DefaultConfigFile)
+		}
+		s, err := ResolveSettings(Settings{}, "", func(string) string { return "" })
+		if err != nil || s.Socket != DefaultSocket || s.Prefix != "sf" {
+			t.Errorf(`ResolveSettings(Settings{}, "", no environment) = socket %q, prefix %q, %v; want %q, "sf", nil`,
+				s.Socket, s.Prefix, err, DefaultSocket)
+		}
+	})
 }
 
 func TestDispatchWork(t *testing.T) {

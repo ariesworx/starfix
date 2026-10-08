@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -13,7 +12,7 @@ import (
 func runCLI(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := Run(context.Background(), args, Env{Stdout: &out, Stderr: &errb,
+	code := Run(t.Context(), args, Env{Stdout: &out, Stderr: &errb,
 		Getenv: func(string) string { return "" }, Version: "v0.3.0"})
 	return code, out.String(), errb.String()
 }

@@ -46,7 +46,11 @@ func explain(err error) toolErr {
 	return e
 }
 
-// nextStep is the agent's next step after a server refusal.
+// nextStep is the agent's next step after a server refusal. It tells
+// refusals apart by the opening words of the server's fix (written in
+// internal/server), so rewording a fix there means updating its match
+// here. The unit tests use copies of that wording; only the end-to-end
+// tests, which reach a few of the pairs, would catch a drift.
 func nextStep(pe *proto.Error) string {
 	switch pe.Code {
 	case proto.CodeNotFound:

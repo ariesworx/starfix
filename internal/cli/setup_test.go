@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -31,7 +30,7 @@ func repoWithConfig(t *testing.T) (root, sub string) {
 func runIn(t *testing.T, home string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := Run(context.Background(), args, Env{Stdout: &out, Stderr: &errb,
+	code := Run(t.Context(), args, Env{Stdout: &out, Stderr: &errb,
 		Getenv: func(string) string { return "" }, Version: "v0.3.0",
 		UserHomeDir: func() (string, error) { return home, nil }})
 	return code, out.String(), errb.String()

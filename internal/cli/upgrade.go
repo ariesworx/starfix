@@ -21,7 +21,8 @@ type Upgrader struct {
 	// Releases reads and verifies releases. Default GitHub, verified with
 	// the release keys built into this binary.
 	Releases *release.Client
-	// Exe is the binary to replace. Default this executable.
+	// Exe is the binary to replace, symlinks resolved. Default this
+	// executable.
 	Exe string
 	// Check runs the staged binary before it is installed. Default runs
 	// `<new> version` and wants the release's tag.
@@ -30,6 +31,8 @@ type Upgrader struct {
 	GOOS, GOARCH string
 }
 
+// upgrader returns Env.Upgrader, or the zero Upgrader, with its defaults
+// filled in, except Exe, which exe resolves when it is needed.
 func (r *runner) upgrader() Upgrader {
 	var u Upgrader
 	if r.env.Upgrader != nil {
@@ -50,6 +53,8 @@ func (r *runner) upgrader() Upgrader {
 	return u
 }
 
+// exe returns the binary to replace: u.Exe, or this executable with
+// symlinks resolved.
 func (u Upgrader) exe() (string, error) {
 	if u.Exe != "" {
 		return u.Exe, nil
@@ -139,6 +144,7 @@ func cmdUpgrade(ctx context.Context, r *runner, args []string) error {
 	return nil
 }
 
+// rollback restores the binary the last upgrade replaced.
 func (r *runner) rollback(u Upgrader) error {
 	exe, err := u.exe()
 	if err != nil {

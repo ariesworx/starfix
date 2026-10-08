@@ -35,10 +35,15 @@ import (
 // fileBase is the directory setup's files are under, and how they may be
 // reached.
 type fileBase struct {
+	// dir is the directory the files are under: the repository root, the
+	// person's home or, for a desktop app's config outside home, the
+	// directory above the config's own.
 	dir string
 	// user marks the person's own files: links into home are followed,
 	// and new files are private.
 	user bool
+	// home is the person's home directory, which their links must stay
+	// inside.
 	home string
 }
 
@@ -50,6 +55,8 @@ func (b fileBase) newMode() (file, dir fs.FileMode) {
 	return 0o644, 0o755
 }
 
+// byHand ends the fix for a file setup will not edit: the person can
+// still make the edit.
 const byHand = "or make the edit by hand: run the same setup without --write to print it"
 
 // resolve checks path, which is under b.dir, and returns the path to
@@ -186,6 +193,7 @@ func (b fileBase) readConfig(path string) ([]byte, fs.FileMode, error) {
 // maxConfig caps a config file setup reads.
 const maxConfig = 16 << 20
 
+// readAll reads f, refusing a file larger than maxConfig.
 func readAll(f *os.File) ([]byte, error) {
 	b, err := io.ReadAll(io.LimitReader(f, maxConfig+1))
 	if err == nil && len(b) > maxConfig {

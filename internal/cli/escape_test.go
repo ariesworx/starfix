@@ -35,7 +35,7 @@ func checkOutput(t *testing.T, name, out string) {
 			t.Errorf("%s: %q reached the output raw:\n%s", name, r, out)
 		}
 	}
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(l), "FORGED") {
 			t.Errorf("%s: a field started a line of its own:\n%s", name, out)
 		}
@@ -54,8 +54,8 @@ func TestPrintEscapesControl(t *testing.T) {
 		Claim:   &proto.Claim{ID: "sf-a", By: evil, Session: evil, Machine: evil, Epoch: 1, ExpiresAt: now},
 		Items:   []proto.AcceptanceItem{{N: 1, Text: evil, State: "waived", Reason: evil, By: evil}, {N: 2, Text: evil, State: "ticked", By: evil}},
 		Similar: []proto.Summary{sum},
-		Handoff: &proto.Handoff{Comment: proto.Comment{Author: evil, Body: evilMD, CreatedAt: now},
-			HandoffFields: proto.HandoffFields{State: "partial" + evil, Next: evil, Branch: evil, Worktree: evil, To: evil}}}
+		Handoff: &proto.Handoff{Author: evil, Body: evilMD, CreatedAt: now,
+			State: "partial" + evil, Next: evil, Branch: evil, Worktree: evil, To: evil}}
 	digestItem := proto.DigestItem{ID: "sf-d" + evil, Title: evil, By: evil, At: now, Note: evil, From: evil, BlockedBy: []string{evil}}
 	tests := []struct {
 		name  string
@@ -110,7 +110,7 @@ func TestPrintEscapesControl(t *testing.T) {
 			_, _ = w.Write(b.Bytes())
 			_ = w.Flush()
 			checkOutput(t, tc.name, out.String())
-			for _, l := range strings.Split(b.String(), "\n") {
+			for l := range strings.SplitSeq(b.String(), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(l), "FORGED") {
 					t.Errorf("printer output has a forged line:\n%s", b.String())
 				}

@@ -4,6 +4,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -92,30 +93,25 @@ func TestDispatchStructuredHandoff(t *testing.T) {
 }
 
 // conn is a client of s over net.Pipe, past the handshake.
+// conn is the client end of a connection a test server handles
+// (handshakeAs).
 type conn struct {
 	t      *testing.T
 	enc    *proto.Encoder
 	dec    *proto.Decoder
 	nc     net.Conn
 	nextID uint64
+	// wg counts the server's handler and the goroutines writing to nc;
+	// the test's cleanup closes nc and waits for them.
+	wg sync.WaitGroup
 }
 
+// dialPipe connects a over a pipe, failing the test unless a is welcomed.
 func dialPipe(t *testing.T, s *Server, a store.Actor) *conn {
 	t.Helper()
-	srv, cli := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.handle(t.Context(), srv)
-	}()
-	t.Cleanup(func() { _ = cli.Close(); <-done })
-	c := &conn{t: t, enc: proto.NewEncoder(cli), dec: proto.NewDecoder(cli), nc: cli}
-	go func() {
-		_ = c.enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: a.Principal})
-		_ = c.enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: a.Session, Machine: a.Machine})
-	}()
-	if f := c.read(); f.T != proto.FrameWelcome || f.Err != nil {
-		t.Fatalf("welcome: %+v", f)
+	w, c := handshakeAs(t, s, a)
+	if w.T != proto.FrameWelcome || w.Err != nil {
+		t.Fatalf("welcome: %+v", w)
 	}
 	return c
 }
@@ -139,11 +135,11 @@ func (c *conn) send(op string, args any) uint64 {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	go func() { _ = c.enc.Encode(f) }()
+	c.wg.Go(func() { _ = c.enc.Encode(f) })
 	return c.nextID
 }
 
-// frames reads until the response to id, returning the pushes before it.
+// until reads until the response to id, returning the pushes before it.
 func (c *conn) until(id uint64) []proto.Push {
 	c.t.Helper()
 	var out []proto.Push

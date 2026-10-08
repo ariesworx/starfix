@@ -11,11 +11,14 @@ import (
 	"github.com/ariesworx/starfix/internal/release"
 )
 
+// result is what one run returned and printed.
 type result struct {
 	code           int
 	stdout, stderr string
 }
 
+// runWith runs the command with secret in $STARFIX_RELEASE_KEY and
+// trusted standing in for keys.go's keys.
 func runWith(t *testing.T, secret string, trusted []ed25519.PublicKey, args ...string) result {
 	t.Helper()
 	var out, errb bytes.Buffer

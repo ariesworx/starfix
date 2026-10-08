@@ -35,6 +35,7 @@ func gitInit(t *testing.T, dir string) {
 	}
 }
 
+// gitBranch returns the branch checked out in dir.
 func gitBranch(t *testing.T, dir string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", dir, "branch", "--show-current").Output() //nolint:gosec // test fixture

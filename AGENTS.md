@@ -15,9 +15,10 @@ server daemon and the sshd forced-command bridge. Bearings, the orchestrator,
 is a design only ([docs/design/bearings.md](docs/design/bearings.md)); no
 Bearings code exists yet.
 
-Read [README.md](README.md) for usage and the roadmap, and
-[docs/design/starfix.md](docs/design/starfix.md) for the principles and
-architecture. The README's status line says which stage is in progress.
+Read [README.md](README.md) for the overview, the roadmap and the map of
+the guides in `docs/`, and [docs/design/starfix.md](docs/design/starfix.md)
+for the principles and architecture. The README's status line says which
+stage is in progress.
 
 ## Layout
 
@@ -41,7 +42,9 @@ architecture. The README's status line says which stage is in progress.
 | `internal/dolttest` | Starts a throwaway `dolt sql-server` for tests |
 | `internal/iaptest` | A fake `gcloud` for tests of the IAP transport: the test binary, re-executed from `PATH` |
 | `internal/e2e` | End-to-end tests: CLI and MCP through an in-process SSH server to a real daemon and store |
+| `install.sh` | The one-line installer for `sfx` and `starfixd`; `internal/release/install_test.go` runs it and checks that its key is in `keys.go` |
 | `spike/dolt` | Stage 0 measurements, kept as evidence; not maintained and excluded from lint |
+| `docs` | User guides: concepts, `sfx`, agents, running a server, deployment examples, install, moving from bd, the security model |
 | `docs/design` | Design documents |
 | `.claude/agents`, `.codex/agents`, `.gemini/agents` | Agent specifications (below); `internal/agentspec` keeps them in step |
 
@@ -61,6 +64,7 @@ for os in darwin windows; do     # sfx must build and vet on every developer OS
   GOOS=$os GOARCH=amd64 go build ./cmd/...
 done
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+shellcheck install.sh
 ```
 
 The Go version is the `go` line in `go.mod`. CI also runs
@@ -110,7 +114,9 @@ skip without it too.
    `SELECT ... FOR UPDATE` does not lock in Dolt; do not use it.
 7. **Every mutation appends an event** with `wtx.event`, in the same
    transaction. `writeOnce` refuses a transaction that changed rows but
-   recorded no event. The event log is the truth; ready, blocked and
+   recorded no event. Only bookkeeping that is not history skips the
+   event, by setting `wtx.quiet`: lease renewals, registry touches, inbox
+   acks and pruning. The event log is the truth; ready, blocked and
    digest are derived from it and never stored.
 8. **Write closures must be safe to rerun.** A write that loses to a
    concurrent transaction is retried from the start.
@@ -155,14 +161,16 @@ skip without it too.
 16. **American English** in code, comments and docs: "behavior", "color",
     "organization", "license" (noun and verb), "-ize".
 17. **Keep the docs true.** A change in behavior updates the doc that
-    describes it in the same pull request: the README's command tables,
+    describes it in the same pull request: the guide in `docs/` that
+    covers it ([CONTRIBUTING.md](CONTRIBUTING.md) lists which),
     `RELEASING.md`, or the design doc. Where the build departs from the
     design, add to that section's dated **As built** note in
     `docs/design/starfix.md` rather than rewriting the plan.
 18. **Bound what a client can grow.** Anything a principal can add to
     without limit (rows, items, connections, writes) gets a cap in
     `store.Limits` or `server.Limits`, with a default, a `limits:`
-    setting, a table-driven test and a row in the README's Limits table.
+    setting, a table-driven test and a row in the Limits table in
+    `docs/server.md`.
     A refusal past a cap is `invalid` or `busy` with a `Fix`. Tests run
     against a locked-down Dolt account (`dolttest`), as `starfixd` does.
 

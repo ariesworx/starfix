@@ -1,25 +1,3 @@
-// Package agentsetup registers `sfx mcp` with an agent harness (design
-// §5, `sfx setup`). It maintains up to three files per harness: the MCP
-// configuration, a marker-delimited pointer in the agent's instruction
-// file, and, where the harness has one, a SessionStart hook that runs
-// `sfx prime --hook=AGENT`. Where a harness keeps two parts in one file
-// (Gemini CLI's settings.json) or two harnesses share a file (AGENTS.md
-// for Codex and Junie), the caller applies each part to the output of
-// the last. A desktop app (Claude Desktop) has only its user-global MCP
-// config, with one entry per project (desktop.go).
-//
-// Edits are idempotent and minimal: an existing file keeps its other
-// servers, its other keys and their order. The starfix entry itself is
-// replaced wholesale: an extra key (cwd, another env variable such as
-// PATH or LD_PRELOAD) could make a server named starfix run something
-// else, so Registered fails on one and Apply drops it. The
-// entry's env sets HarnessEnv to the agent's name, so the agents registry
-// knows which harness each session runs under. A JSON file with a
-// duplicate key is refused: harnesses keep the last copy, so editing the
-// first would report a registration the harness never runs. Applying a
-// registration that is already in place changes nothing, byte for byte.
-// The functions here work on file contents; reading and writing the files
-// is the caller's.
 package agentsetup
 
 import (
@@ -59,8 +37,9 @@ type Agent struct {
 	// SessionEnv is the variable the harness sets to its session id for
 	// the processes it starts, or "" when it sets none.
 	SessionEnv string
-	// Note is said after a project snippet: anything the person must do that a
-	// file edit cannot.
+	// Note is the step the person must still take that a file edit
+	// cannot, such as approving the server. Setup prints it after a
+	// project snippet, and after it adds a part to a project file.
 	Note string
 	// Desktop marks a desktop app: one user-global MCP config at a
 	// per-platform path (ConfigPath), no pointer or hook, and no working
@@ -71,9 +50,9 @@ type Agent struct {
 	// relative to the platform's application data directory.
 	AppConfig string
 
-	format  format
-	pointer pointerStyle
-	hook    hookStyle
+	format  format       // the MCP config's shape
+	pointer pointerStyle // where the pointer goes
+	hook    hookStyle    // how the hook is written, if there is one
 }
 
 // ManualMCP reports whether the person registers the MCP server by hand,
@@ -89,6 +68,7 @@ func (a Agent) Steps(e Entry) string {
 	return a.Note
 }
 
+// format is the shape of an agent's MCP config file.
 type format int
 
 const (
@@ -101,7 +81,7 @@ const (
 // Agents are the supported harnesses, by name: every path setup writes
 // is in this table, and each hook's format is in hook.go. The hook
 // formats follow each harness's documentation as of 7 Oct 2026 (design
-// §5, As built).
+// §5, As built). Callers must not modify it.
 var Agents = map[string]Agent{
 	"claude-code": {Name: "claude-code", Title: "Claude Code", Project: ".mcp.json", Global: ".claude.json",
 		Pointer: "CLAUDE.md", GlobalPointer: ".claude/CLAUDE.md",
@@ -156,8 +136,10 @@ func Names() []string {
 	return out
 }
 
-// Entry is how the harness starts the server.
+// Entry is how the harness starts the server: it runs Command with Args.
 type Entry struct {
+	// Command is a program name the harness looks up on PATH, or an
+	// absolute path.
 	Command string
 	Args    []string
 	// Server is the name the entry is registered under; "" means
@@ -166,6 +148,7 @@ type Entry struct {
 	Server string
 }
 
+// server is the name e is registered under.
 func (e Entry) server() string {
 	if e.Server == "" {
 		return ServerName
@@ -180,7 +163,7 @@ var DefaultEntry = Entry{Command: "sfx", Args: []string{"mcp"}}
 // Result says what Apply or Remove did.
 type Result int
 
-// Results.
+// Results of Apply and Remove.
 const (
 	Unchanged Result = iota
 	Added
@@ -205,7 +188,10 @@ func (a Agent) Snippet(e Entry) string {
 }
 
 // Apply registers e in the config file content (nil or empty for a new
-// file) and returns the new content.
+// file) and returns the new content and what changed: Unchanged, with
+// content itself, when e is registered already; Updated when it replaced
+// an entry of the same name; Added otherwise. It fails on content it
+// cannot parse or edit.
 func (a Agent) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	if a.Registered(content, e) {
 		return content, Unchanged, nil
@@ -226,13 +212,13 @@ func (a Agent) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	return out, Added, nil
 }
 
-// Remove takes the starfix registration out of content.
+// Remove takes the entry registered under ServerName out of content.
 func (a Agent) Remove(content []byte) ([]byte, Result, error) {
 	return a.remove(content, DefaultEntry)
 }
 
-// remove takes out the entry registered under e's name. A file that
-// cannot be read is an error, not "unchanged".
+// remove takes out the entry registered under e's name. Content that
+// cannot be parsed is an error, not Unchanged.
 func (a Agent) remove(content []byte, e Entry) ([]byte, Result, error) {
 	var out []byte
 	var found bool
@@ -290,8 +276,10 @@ type Target struct {
 }
 
 // Targets lists the files setup maintains for the agent, in the project
-// or, with global, in the home directory. A global setup has no MCP
-// target when Global is "".
+// or, with global, in the home directory. A part with no file there, such
+// as an MCP config the harness keeps in its own settings or a hook it
+// lacks, has no target, and a desktop app has none at all (see
+// [Agent.DesktopTarget]).
 func (a Agent) Targets(global bool) []Target {
 	mcp, pointer, hook := a.Project, a.Pointer, a.Hook
 	if global {
@@ -306,7 +294,8 @@ func (a Agent) Targets(global bool) []Target {
 	return out
 }
 
-// Apply puts the target's part in content and returns the new content.
+// Apply puts the target's part in content and returns the new content
+// and what changed, as [Agent.Apply] does.
 func (t Target) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	switch t.Kind {
 	case KindPointer:
@@ -317,9 +306,9 @@ func (t Target) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	return t.agent.Apply(content, e)
 }
 
-// Remove takes the target's part out of content. Empty output means the
-// file held nothing else and may be deleted: a pointer file, or a hook
-// file that is starfix's own.
+// Remove takes the target's part out of content. For a pointer or a
+// hook, empty output means the file held nothing else and may be
+// deleted.
 func (t Target) Remove(content []byte, e Entry) ([]byte, Result, error) {
 	switch t.Kind {
 	case KindPointer:

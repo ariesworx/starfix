@@ -1,13 +1,20 @@
 // Package safetext keeps text written by other people from acting on a
 // terminal or posing as a program's own output. It is the one definition
 // of an unsafe character, used by the store to refuse such text, by the
-// importer to clean it, and by every client to escape what it prints.
+// importer to clean it, and by every client to escape what it prints
+// (docs/design/starfix.md §7, "As built (untrusted text)").
 //
 // Unsafe characters are the C0 controls (newline and tab included), DEL,
 // the C1 controls, the Unicode bidirectional controls and marks, and the
 // line and paragraph separators. Through them, text can clear a screen,
 // set the clipboard (OSC 52), hide a link (OSC 8), rewrite a line, reorder
 // what a reader sees, or start a line that looks like the program's own.
+//
+// Each operation has a single-line form and a multi-line form, which also
+// allows newline and tab: [ValidLine] and [ValidText] check text, [Line]
+// and [Text] escape it, and [CleanLine] and [CleanText] repair it. [JSON]
+// escapes a JSON document and a [Writer] escapes a stream. The functions
+// are safe for concurrent use; a Writer is not.
 package safetext
 
 import (
@@ -19,7 +26,8 @@ import (
 )
 
 // Unsafe reports whether r is a control or formatting character that can
-// change how text displays.
+// change how text displays, as the package comment lists them. Newline
+// and tab are unsafe too; the multi-line functions allow them.
 func Unsafe(r rune) bool {
 	switch {
 	case r < 0x20, r >= 0x7f && r <= 0x9f: // C0, DEL, C1
@@ -46,6 +54,8 @@ func ValidLine(s string) bool { return valid(s, false) }
 // allowed.
 func ValidText(s string) bool { return valid(s, true) }
 
+// valid reports whether s is valid UTF-8 without unsafe characters,
+// allowing newline and tab when lines is set.
 func valid(s string, lines bool) bool {
 	for i, r := range s {
 		if r == utf8.RuneError {
@@ -60,8 +70,12 @@ func valid(s string, lines bool) bool {
 	return true
 }
 
-// Line escapes every unsafe character and invalid byte in s, so it prints
-// on one line exactly as written: \n, \t, \r, \x1b, \u202e.
+// Line escapes every unsafe character and invalid byte in s, so that it
+// prints on one line and shows what it holds: newline, tab and carriage
+// return as \n, \t and \r, other ASCII controls and invalid bytes as \xhh
+// (\x1b), and other unsafe characters as \uhhhh (\u202e). It returns s
+// unchanged when nothing needs escaping. The result is for display, not
+// decoding: a backslash already in s is left as it is.
 func Line(s string) string { return escape(s, false) }
 
 // Text is Line for multi-line text: newlines and tabs are kept.
@@ -97,13 +111,14 @@ func escape(s string, lines bool) string {
 }
 
 // CleanLine makes s safe for a single-line field, for text that must be
-// kept rather than refused (an import): invalid bytes become U+FFFD, each
-// run of line breaks and tabs one space, and other unsafe characters are
-// dropped.
+// kept rather than refused (an import): each run of invalid bytes becomes
+// one U+FFFD, each run of line breaks and tabs one space, and other unsafe
+// characters are dropped. It returns s unchanged when s is safe already.
 func CleanLine(s string) string { return clean(s, false) }
 
-// CleanText is CleanLine for multi-line text: CRLF becomes a newline, and
-// newlines and tabs are kept.
+// CleanText is CleanLine for multi-line text: newlines and tabs are kept,
+// CRLF becomes a newline, and a lone carriage return is dropped with the
+// other unsafe characters.
 func CleanText(s string) string { return clean(s, true) }
 
 func clean(s string, lines bool) string {
@@ -131,10 +146,12 @@ func clean(s string, lines bool) string {
 	return b.String()
 }
 
-// JSON escapes the unsafe characters in a JSON document as \uXXXX. The
-// document stays valid and decodes to the same value: encoding/json
-// already escapes the C0 controls, and outside strings JSON has none of
-// these characters.
+// JSON escapes each unsafe character in doc as \uXXXX. doc must be
+// compact, as [encoding/json.Marshal] writes it: the newlines that
+// indentation puts between tokens would be escaped too, which breaks the
+// document. A compact document stays valid and decodes to the same value,
+// because Marshal already escapes the C0 controls in strings and the other
+// unsafe characters occur only inside strings.
 func JSON(doc []byte) []byte {
 	if valid(string(doc), false) {
 		return doc
@@ -150,20 +167,22 @@ func JSON(doc []byte) []byte {
 	return []byte(b.String())
 }
 
-// Writer escapes what is written through it as Text does: newlines and
-// tabs pass, every other unsafe character is shown as an escape. A rune
-// split across writes is held until it is whole; Flush writes what is
-// held.
+// Writer escapes what is written through it as [Text] does: newlines and
+// tabs pass, and every other unsafe character is shown as an escape. A
+// rune split across writes is held until it is whole, and Flush writes
+// what is held. A Writer is not safe for concurrent use.
 type Writer struct {
-	w    *bufio.Writer
+	w *bufio.Writer
+	// held is the start of a rune the last Write ended partway through.
 	held []byte
 }
 
 // NewWriter returns a Writer to w.
 func NewWriter(w io.Writer) *Writer { return &Writer{w: bufio.NewWriter(w)} }
 
-// Write escapes p and writes it. Text up to the last whole rune is written
-// before it returns.
+// Write escapes p and writes it to the underlying writer, up to the last
+// whole rune, before it returns. The bytes of a rune that p ends partway
+// through are held for the next Write or Flush.
 func (w *Writer) Write(p []byte) (int, error) {
 	data := append(w.held, p...)
 	cut := len(data)
@@ -182,7 +201,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 	return len(p), w.w.Flush()
 }
 
-// Flush writes any partial rune still held, escaped.
+// Flush writes any partial rune still held, escaped as invalid bytes.
 func (w *Writer) Flush() error {
 	if len(w.held) > 0 {
 		if _, err := w.w.WriteString(Text(string(w.held))); err != nil {

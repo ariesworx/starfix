@@ -49,6 +49,7 @@ func (s *fakeServer) send(f *proto.Frame) {
 	}
 }
 
+// push encodes p as an evt frame.
 func push(t *testing.T, p proto.Push) *proto.Frame {
 	t.Helper()
 	f, err := p.Frame()
@@ -77,6 +78,11 @@ func TestConnPushes(t *testing.T) {
 		arrived <- struct{}{}
 	})
 
+	// Encoded here, since push may stop the test, which only the test's
+	// own goroutine may do.
+	mention := push(t, proto.Push{Op: proto.EvInbox, Item: &proto.InboxItem{ID: 1, Kind: "mention"}})
+	lost := push(t, proto.Push{Op: proto.EvInbox, Item: &proto.InboxItem{ID: 2, Kind: "claim.lost"}})
+	resync := push(t, proto.Push{Op: proto.EvResync})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -85,14 +91,14 @@ func TestConnPushes(t *testing.T) {
 			s.t.Errorf("first request %+v, want watch", f)
 			return
 		}
-		s.send(push(t, proto.Push{Op: proto.EvInbox, Item: &proto.InboxItem{ID: 1, Kind: "mention"}}))
+		s.send(mention)
 		s.send(&proto.Frame{T: "gossip"}) // a frame type from a newer server
 		s.send(&proto.Frame{T: proto.FrameEvent, Op: "weather"})
 		res, _ := proto.Response(f.ID, proto.WatchResult{Unread: 3}, nil)
 		s.send(res)
 		// Pushed while the client is idle.
-		s.send(push(t, proto.Push{Op: proto.EvInbox, Item: &proto.InboxItem{ID: 2, Kind: "claim.lost"}}))
-		s.send(push(t, proto.Push{Op: proto.EvResync}))
+		s.send(lost)
+		s.send(resync)
 	}()
 	var w proto.WatchResult
 	if err := c.Call(t.Context(), proto.OpWatch, proto.WatchArgs{}, &w); err != nil || w.Unread != 3 {
@@ -136,7 +142,9 @@ func TestConnEndsWhileIdle(t *testing.T) {
 // call waiting for it.
 func TestConnResponseBeforeEOF(t *testing.T) {
 	c, s := pipeConn(t, nil)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		f := s.req()
 		if f == nil {
 			return
@@ -149,6 +157,7 @@ func TestConnResponseBeforeEOF(t *testing.T) {
 	if err := c.Call(t.Context(), proto.OpAck, proto.AckArgs{All: true}, &r); err != nil || r.Acked != 2 {
 		t.Fatalf("Call = %+v, %v; want acked 2", r, err)
 	}
+	<-done
 }
 
 // What the server printed on stderr is quoted escaped, on one line (C-3).

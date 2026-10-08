@@ -18,6 +18,8 @@ import (
 //
 // When the daemon cannot be reached, Bridge writes a refusing welcome to
 // out, so the client reports a typed error rather than a dropped session.
+// An invalid or reserved principal is refused the same way, before
+// connecting.
 func Bridge(ctx context.Context, socket, principal string, in io.Reader, out io.Writer) error {
 	if !PrincipalPattern.MatchString(principal) || store.Reserved(principal) {
 		e := proto.Errf(proto.CodeAuth, "the server admin should fix this key's authorized_keys line",
@@ -37,6 +39,9 @@ func Bridge(ctx context.Context, socket, principal string, in io.Reader, out io.
 	if err := proto.NewEncoder(c).Encode(&proto.Frame{T: proto.FrameBridge, Principal: principal}); err != nil {
 		return err
 	}
+	// Not waited for: Bridge returns when the daemon closes the
+	// connection, and the stdio process exits with it, ending a read
+	// still blocked on in.
 	go func() {
 		_, _ = io.Copy(c, in)
 		if uc, ok := c.(*net.UnixConn); ok {
@@ -49,6 +54,8 @@ func Bridge(ctx context.Context, socket, principal string, in io.Reader, out io.
 	return nil
 }
 
+// refuse writes a welcome carrying e, which the client reads in place of
+// the daemon's.
 func refuse(out io.Writer, e *proto.Error) error {
 	return proto.NewEncoder(out).Encode(&proto.Frame{T: proto.FrameWelcome, Err: e})
 }

@@ -1,23 +1,3 @@
-// Package server is starfixd: the daemon that owns the store and serves the
-// protocol on a unix socket, and the stdio bridge that sshd runs as each
-// developer key's forced command.
-//
-// # Trust
-//
-// The daemon never authenticates anyone itself. sshd authenticates the
-// developer's key, and that key's authorized_keys line forces
-//
-//	restrict,command="starfixd stdio --principal NAME" ssh-ed25519 AAAA…
-//
-// so the principal is fixed by which key logged in; whatever command the
-// client asks for is ignored. The bridge connects to the daemon's socket
-// and sends a bridge frame naming that principal before any client byte.
-// The daemon believes the bridge frame only because the socket peer is
-// local and runs as the daemon's own Unix user: the socket lives in a 0700
-// directory, and on Linux each connection's SO_PEERCRED uid must equal the
-// daemon's. The SSH login account (server.user) is therefore the account
-// starfixd runs as, and its authorized_keys holds only restricted lines.
-// A bridge frame anywhere but first is refused.
 package server
 
 import (
@@ -52,12 +32,15 @@ type Config struct {
 	ProtoMin, ProtoMax int
 	// Latest is the latest release the server knows of; may be empty.
 	Latest string
-	// Logger records one line per request. Default discards.
+	// Logger receives the daemon's log: each request at debug, refusals
+	// sampled per principal (Limits.RefusalLogs), and reaping, pruning
+	// and store failures. Nil discards.
 	Logger *slog.Logger
 	// PeerCheck vets each connection before its bridge frame is trusted.
 	// Nil uses CheckPeer.
 	PeerCheck func(net.Conn) error
-	// RequestTimeout bounds one request. Default 60s.
+	// RequestTimeout bounds one request, and each reap, prune and
+	// presence update. Default 60s.
 	RequestTimeout time.Duration
 	// ReapInterval is how often expired claims are ended. Default 30s;
 	// negative turns the reaper off (tests call Reap and Prune).
@@ -73,8 +56,8 @@ type Server struct {
 	cfg Config
 
 	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	conns map[net.Conn]struct{} // open connections, guarded by mu
+	wg    sync.WaitGroup        // the reaper and each connection's handler
 
 	// slots counts connections past the handshake (Limits.Conns and
 	// ConnsPerPrincipal); writes is each principal's write bucket;
@@ -90,7 +73,8 @@ var (
 	// PrincipalPattern is what a principal name may look like; the store
 	// holds the one definition, which mentions and handoffs also use.
 	PrincipalPattern = store.PrincipalPattern
-	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	// uuidPattern is a lowercase UUID, as Config.Project must be.
+	uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // validActorPart reports whether a session or machine name is 1-255 bytes
@@ -138,7 +122,9 @@ func New(cfg Config) (*Server, error) {
 }
 
 // Serve accepts connections on l until ctx is done, then closes l and every
-// open connection and waits for their handlers to return.
+// open connection, waits for their handlers and the reaper to return, and
+// returns nil. If Accept fails for another reason, Serve returns that
+// error once the handlers and the reaper have returned.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 	stop := context.AfterFunc(ctx, func() {
 		_ = l.Close()
@@ -190,8 +176,8 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 // inbox.
 const pruneEvery = 10 * time.Minute
 
-// reapLoop ends expired claims every ReapInterval until ctx is done, and
-// prunes every pruneEvery.
+// reapLoop ends expired claims every ReapInterval until ctx is done. It
+// prunes on the first tick, then every pruneEvery.
 func (s *Server) reapLoop(ctx context.Context) {
 	t := time.NewTicker(s.cfg.ReapInterval)
 	defer t.Stop()
@@ -251,12 +237,17 @@ const (
 	helloTimeout  = 30 * time.Second
 )
 
+// session is one connection's state, from the handshake on.
 type session struct {
+	// actor is the principal from the bridge frame, and the session and
+	// machine from the hello.
 	actor store.Actor
 	// harness is what the hello said the client runs under, unchecked.
 	harness string
-	enc     *proto.Encoder
-	dec     *proto.Decoder
+	// enc is shared by the request loop and the pusher; only the request
+	// loop reads dec.
+	enc *proto.Encoder
+	dec *proto.Decoder
 
 	// push is the running watch, if the client sent watch. Only the
 	// request loop sets it; pushMu orders pushed frames against the
@@ -279,6 +270,11 @@ func (sess *session) watching() bool {
 	return !p.ended
 }
 
+// handle serves one connection: it checks the peer and runs the
+// handshake, then answers requests in order until the client leaves, the
+// connection idles out, a read or write fails, or ctx is done. The
+// connection's pusher, if it watched, has ended when handle returns. The
+// caller closes c.
 func (s *Server) handle(ctx context.Context, c net.Conn) {
 	log := s.cfg.Logger
 	if err := s.cfg.PeerCheck(c); err != nil {
@@ -371,6 +367,10 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	}
 }
 
+// send writes the response to request id: perr when it is set, else res.
+// A result that cannot be encoded is answered with unavailable, and one
+// larger than proto.MaxFrame with invalid, so the client gets an answer
+// rather than a dropped connection. The error is the write's.
 func (s *Server) send(sess *session, id uint64, res any, perr *proto.Error) error {
 	f, err := proto.Response(id, res, perr)
 	if err != nil {
@@ -395,7 +395,10 @@ func (s *Server) busyWrites(principal string, wait time.Duration) *proto.Error {
 }
 
 // handshake reads the bridge frame and the client's hello, and answers with
-// a welcome, or a refusal and an error.
+// a welcome, or a refusal and an error. On success the session holds a
+// connection slot (sess.slot). A refusal after a valid bridge frame also
+// returns the session, so the caller can say whose it was; other failures
+// return nil.
 func (s *Server) handshake(c net.Conn) (*session, error) {
 	sess := &session{enc: proto.NewEncoder(c), dec: proto.NewDecoder(c)}
 	_ = c.SetReadDeadline(time.Now().Add(bridgeTimeout))
@@ -461,6 +464,8 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 
 var sessionEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
+// newSessionID returns a session id for a client that sent none: "s-" and
+// 16 lowercase base32 characters, 80 random bits.
 func newSessionID() (string, error) {
 	var b [10]byte
 	if _, err := rand.Read(b[:]); err != nil {

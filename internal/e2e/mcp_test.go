@@ -28,6 +28,9 @@ type agent struct {
 	version string
 }
 
+// mcp starts an agent for this user: an MCP session with an in-process
+// `sfx mcp` server built as version, which dials the world on its first
+// tool call.
 func (u *user) mcp(version string) *agent {
 	t := u.w.t
 	t.Helper()
@@ -74,6 +77,8 @@ func (a *agent) call(name string, args map[string]any) (string, bool) {
 	return tc.Text, res.IsError
 }
 
+// ok runs a tool and returns its text, failing the test if the result is
+// an error.
 func (a *agent) ok(name string, args map[string]any) string {
 	a.t.Helper()
 	out, isErr := a.call(name, args)

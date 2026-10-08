@@ -24,7 +24,9 @@ var (
 // stay stable while a project is small.
 const minShort = 4
 
-// NewID returns a random ID with the given prefix.
+// NewID returns a random ID with the given prefix. It refuses, with
+// ErrInvalid, a prefix longer than 32 bytes or not made of lowercase
+// letters, digits and inner hyphens, starting with a letter.
 func NewID(prefix string) (IssueID, error) {
 	if len(prefix) > 32 || !prefixPattern.MatchString(prefix) {
 		return "", fmt.Errorf("%w: prefix %q must be lowercase letters, digits and inner hyphens, at most 32", ErrInvalid, prefix)
@@ -36,7 +38,10 @@ func NewID(prefix string) (IssueID, error) {
 	return IssueID(prefix + "-" + idEncoding.EncodeToString(b[:])), nil
 }
 
-// Validate checks the ID's shape.
+// Validate refuses, with ErrInvalid, an ID longer than 64 bytes or not of
+// the form prefix-suffix: hyphen-separated runs of lowercase letters and
+// digits, starting with a letter and optionally ending in dotted child
+// numbers such as ".1", as bd writes them.
 func (id IssueID) Validate() error {
 	if len(id) > 64 || !idPattern.MatchString(string(id)) {
 		return fmt.Errorf("%w: issue id %q", ErrInvalid, string(id))
@@ -85,6 +90,7 @@ func ShortestUnique(ids []IssueID) map[IssueID]string {
 	return out
 }
 
+// joinID is the inverse of split.
 func joinID(p, s string) string {
 	if p == "" {
 		return s
@@ -92,6 +98,7 @@ func joinID(p, s string) string {
 	return p + "-" + s
 }
 
+// commonPrefix returns the length of the longest prefix a and b share.
 func commonPrefix(a, b string) int {
 	n := 0
 	for n < len(a) && n < len(b) && a[n] == b[n] {

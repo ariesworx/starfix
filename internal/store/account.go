@@ -15,7 +15,9 @@ import (
 // Options.AllowUnsafeAccount says otherwise.
 
 // UnsafeAccountError refuses a database account with more rights than
-// starfix needs. Problems lists each, in words.
+// starfix needs. User is the account as CURRENT_USER() names it
+// (user@host), and Problems lists what is unsafe, in words. Its message
+// ends with the fix.
 type UnsafeAccountError struct {
 	User     string
 	Problems []string
@@ -25,7 +27,7 @@ func (e *UnsafeAccountError) Error() string {
 	return fmt.Sprintf("dolt account %s is unsafe for starfixd: %s; fix: as Dolt's root, run "+
 		"CREATE USER 'starfix'@'localhost' IDENTIFIED BY '...'; GRANT ALL ON <database>.* TO 'starfix'@'localhost'; "+
 		"put that user in the DSN, and set system_variables: secure_file_priv: to a directory that does not exist "+
-		"in Dolt's config.yaml (README, quick start); for local development only, pass --dev --allow-unsafe-dolt",
+		"in Dolt's config.yaml (docs/server.md, steps 2 and 4); for local development only, pass --dev --allow-unsafe-dolt",
 		e.User, strings.Join(e.Problems, "; "))
 }
 

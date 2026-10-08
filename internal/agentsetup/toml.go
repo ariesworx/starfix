@@ -29,6 +29,7 @@ type tomlItem struct {
 	array      bool     // a [[header]]
 }
 
+// tomlKind is what a tomlItem is.
 type tomlKind int
 
 const (
@@ -40,15 +41,17 @@ const (
 
 // tomlScanner reads a document's statements.
 type tomlScanner struct {
-	s   string
-	pos int
+	s   string // the document
+	pos int    // the offset of the next byte to read
 }
 
+// errf is an error naming the line the scanner has reached.
 func (sc *tomlScanner) errf(format string, a ...any) error {
 	line := 1 + strings.Count(sc.s[:min(sc.pos, len(sc.s))], "\n")
 	return fmt.Errorf("TOML line %d: %s", line, fmt.Sprintf(format, a...))
 }
 
+// peek returns the next n bytes, or what is left if fewer.
 func (sc *tomlScanner) peek(n int) string {
 	if sc.pos+n > len(sc.s) {
 		return sc.s[sc.pos:]
@@ -124,11 +127,12 @@ func (sc *tomlScanner) gap() error {
 	}
 }
 
+// bareKeyByte reports whether c may appear in a bare key.
 func bareKeyByte(c byte) bool {
 	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
 
-// key reads a dotted key.
+// key reads a dotted key and returns its parts, unquoted.
 func (sc *tomlScanner) key() ([]string, error) {
 	var path []string
 	for {
@@ -204,8 +208,9 @@ func (sc *tomlScanner) literal() (string, error) {
 	return sc.s[start:sc.pos], nil
 }
 
-// multiline reads a multi-line string whose delimiter is q (""" or ”').
-// Up to two more quote characters may end its content.
+// multiline reads a multi-line string whose delimiter q is three double
+// quotes or three single quotes. Up to two more quote characters may end
+// its content.
 func (sc *tomlScanner) multiline(q string) error {
 	sc.pos += 3
 	for !sc.eof() {
@@ -321,6 +326,7 @@ func (sc *tomlScanner) value() error {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
+// isDate reports whether s is a full date, YYYY-MM-DD.
 func isDate(s string) bool {
 	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
 		return false
@@ -482,8 +488,11 @@ func tomlString(s string) string {
 	return b.String()
 }
 
+// harnessLine is the env table's key/value pair naming the harness.
 func harnessLine(harness string) string { return HarnessEnv + " = " + tomlString(harness) }
 
+// tomlTable is the starfix entry as setup writes it, one line each: the
+// server's table and its env table, with a blank line between.
 func tomlTable(e Entry, harness string) []string {
 	quoted := make([]string, len(e.Args))
 	for i, a := range e.Args {
@@ -575,6 +584,8 @@ func cut(content []byte, spans []tomlSpan) (rest []byte, at int) {
 	return append(rest, content[prev:]...), at
 }
 
+// applyTOML writes the starfix entry into content: in place of the first
+// of its tables when it has any, else at the end after a blank line.
 func applyTOML(content []byte, e Entry, harness string) ([]byte, error) {
 	spans, err := tomlEntry(content)
 	if err != nil {

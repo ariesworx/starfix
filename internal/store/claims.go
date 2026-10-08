@@ -13,21 +13,22 @@ import (
 // out at ExpiresAt unless renewed. Each take of an issue by a new holder
 // raises its epoch, and a finish or release that names an older epoch is
 // refused, so a session that lost its claim cannot close work another has
-// since taken. The server reaper (ReapClaims) returns expired issues to
-// open.
+// since taken.
 //
 // A principal may take over its own claim from another session, but only
 // when it asks to (StartIssue's take): a person who restarts their agent
 // should not wait out the lease, and an agent sharing the person's key
 // should not fence the person out by accident. Another principal must wait
 // for the lease to expire. Only a claim holds an issue: an issue set
-// in_progress without one (before claims existed, or by an import) holds
-// nothing, and update cannot set in_progress (issues.go).
+// in_progress without one (at create, by an import, or before claims
+// existed) holds nothing, and update cannot set in_progress. The reaper
+// (ReapClaims) returns an issue whose lease ran out to open, unassigned,
+// if it is still in_progress under the holder's principal.
 
 // Lease bounds. DefaultLease is an agent's lease, renewed while it runs.
-// A start, or a renewal of one session's claims, may ask for up to
-// MaxClaimLease; only a renewal of every session's claims (`sfx away`)
-// may reach MaxLease.
+// No lease is shorter than MinLease. A start, or a renewal of one
+// session's claims, may ask for up to MaxClaimLease; only a renewal of
+// every session's claims (`sfx away`) may reach MaxLease.
 const (
 	DefaultLease  = 15 * time.Minute
 	MinLease      = time.Minute
@@ -35,7 +36,8 @@ const (
 	MaxLease      = 7 * 24 * time.Hour
 )
 
-// Claim is an issue's current lease.
+// Claim is an issue's current lease: Holder holds it from ClaimedAt
+// until ExpiresAt, under Epoch, which rises with each new holder.
 type Claim struct {
 	Issue     IssueID   `json:"issue"`
 	Holder    Actor     `json:"holder"`
@@ -57,7 +59,9 @@ var ReaperActor = Actor{Principal: "starfixd", Session: "reaper", Machine: "serv
 // claimRow is a claims row; Holder.Principal is empty once released.
 type claimRow struct {
 	Claim
-	rev    int64
+	// rev is the row's revision, for the compare-and-swap in writeClaim.
+	rev int64
+	// exists is false for an issue never claimed, which has no row yet.
 	exists bool
 }
 
@@ -66,6 +70,8 @@ func (c claimRow) active(now time.Time) bool {
 	return c.Holder.Principal != "" && c.ExpiresAt.After(now)
 }
 
+// loadClaim reads the claim on id. An issue never claimed gets a
+// claimRow that does not exist yet, with epoch 0 and no holder.
 func loadClaim(ctx context.Context, q querier, id IssueID) (claimRow, error) {
 	var c claimRow
 	var p, sess, m sql.NullString
@@ -144,6 +150,8 @@ func checkLease(d, most time.Duration) error {
 	return nil
 }
 
+// leaseText spells checkLease's upper bound, MaxClaimLease or MaxLease,
+// as the refusal shows it.
 func leaseText(d time.Duration) string {
 	if d == MaxLease {
 		return "7d"
@@ -151,9 +159,10 @@ func leaseText(d time.Duration) string {
 	return "24h"
 }
 
-// takeClaim leases c to w's actor for lease. A new holder raises the epoch, and
-// the holder it replaced gets a claim.lost inbox item; the same session
-// taking again keeps it and only extends the lease.
+// takeClaim leases c to w's actor for lease. A new holder raises the
+// epoch, and the holder it replaced gets a claim.lost inbox item; the same
+// session taking again keeps the epoch and only extends the lease, which
+// is not an event.
 func takeClaim(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Claim, error) {
 	same := c.active(w.now) && c.Holder == w.actor
 	if !same && c.Holder.Principal != "" && c.Holder != w.actor {
@@ -190,7 +199,7 @@ func takeClaim(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Cl
 	return c.Claim, nil
 }
 
-// ClaimOf returns the active claim on an issue, or nil if none.
+// ClaimOf returns the active claim on an issue, or nil if none is live.
 func (s *Store) ClaimOf(ctx context.Context, id IssueID) (*Claim, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
@@ -208,6 +217,8 @@ func (s *Store) ClaimsOf(ctx context.Context, principal string) ([]Claim, error)
 	return s.claims(ctx, s.r, `principal = ? AND expires_at > ?`, principal, s.now())
 }
 
+// claims reads the claims that where, a constant condition with
+// placeholders for args, selects, soonest to expire first.
 func (s *Store) claims(ctx context.Context, q querier, where string, args ...any) ([]Claim, error) {
 	rows, err := q.QueryContext(ctx, `SELECT issue_id, principal, session, machine, epoch, claimed_at, expires_at
   FROM claims WHERE `+where+` ORDER BY expires_at, issue_id`, args...) //nolint:gosec // where is a constant from the callers
@@ -231,13 +242,14 @@ func (s *Store) claims(ctx context.Context, q querier, where string, args ...any
 	return out, nil
 }
 
-// RenewClaims extends the actor's active claims to at least now+lease and
-// returns them. With allSessions it renews every claim the principal
+// RenewClaims renews the actor's active claims and returns them all, with
+// their new expiry. With allSessions it renews every claim the principal
 // holds (a person going away, `sfx away`), for up to MaxLease; otherwise
-// only the actor's own session's, for up to MaxClaimLease. A lease is
-// never shortened. A claim with more than half its
-// lease left is not rewritten, so an agent renewing every minute writes
-// about every lease/2.
+// only the actor's own session's, for up to MaxClaimLease. A lease out of
+// range is refused with ErrInvalid. A claim with less than half of lease
+// left is extended to now+lease; one with more is not rewritten, so an
+// agent renewing every minute writes about every lease/2, and a lease is
+// never shortened. Renewals record no event.
 func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duration, allSessions bool) ([]Claim, error) {
 	most := MaxClaimLease
 	if allSessions {

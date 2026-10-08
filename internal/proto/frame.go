@@ -56,14 +56,15 @@ type Frame struct {
 
 // Encoder writes frames. It is safe for concurrent use.
 type Encoder struct {
-	mu sync.Mutex
+	mu sync.Mutex // held for each write, so frames never interleave
 	w  io.Writer
 }
 
 // NewEncoder returns an Encoder writing to w.
 func NewEncoder(w io.Writer) *Encoder { return &Encoder{w: w} }
 
-// Encode writes f as one line.
+// Encode writes f as one line, in a single Write. A frame larger than
+// MaxFrame is not written, and the error wraps [ErrFrameTooLarge].
 func (e *Encoder) Encode(f *Frame) error {
 	b, err := json.Marshal(f)
 	if err != nil {
@@ -93,7 +94,10 @@ func NewDecoder(r io.Reader) *Decoder {
 	return &Decoder{s: s}
 }
 
-// Decode reads the next frame. It returns io.EOF at a clean end of stream.
+// Decode reads the next frame. It returns [io.EOF] at a clean end of
+// stream, and [ErrFrameTooLarge] for a line longer than MaxFrame. A line
+// that is not JSON, or has no frame type, is an error, and the next call
+// reads the line after it; any other error is final.
 func (d *Decoder) Decode() (*Frame, error) {
 	if !d.s.Scan() {
 		err := d.s.Err()

@@ -39,21 +39,26 @@ const SimilarTTL = time.Minute
 type similarCache struct {
 	gen atomic.Uint64
 
+	// mu guards built, at and rows. It is held through a rebuild, so
+	// readers that find the cache stale together read the rows once.
 	mu    sync.Mutex
 	built uint64 // the gen the rows were read in, plus one; 0 is none
 	at    time.Time
 	rows  []closedTitle
 }
 
+// closedTitle is a closed issue with its title's tokens.
 type closedTitle struct {
 	SimilarIssue
 	tokens []string
 }
 
+// invalidate makes the cached titles stale, and any rebuild running now.
 func (c *similarCache) invalidate() { c.gen.Add(1) }
 
-// closedTitles returns the cached closed titles, reading them again when they
-// are stale.
+// closedTitles returns the cached closed titles, reading them again when
+// they are stale: invalidated, older than SimilarTTL, or read at a time
+// after now, as a clock set back makes them.
 func (s *Store) closedTitles(ctx context.Context) ([]closedTitle, error) {
 	c := &s.similar
 	c.mu.Lock()

@@ -30,7 +30,8 @@ var ReservedPrincipals = []string{ReaperActor.Principal, "import"}
 // Reserved reports whether p is a reserved principal name.
 func Reserved(p string) bool { return slices.Contains(ReservedPrincipals, p) }
 
-// checkAdmins validates Options.Admins.
+// checkAdmins refuses, with ErrInvalid, an admin in Options.Admins that is
+// not a principal name or is reserved.
 func checkAdmins(admins []string) error {
 	for _, a := range admins {
 		if !PrincipalPattern.MatchString(a) || Reserved(a) {

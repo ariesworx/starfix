@@ -35,9 +35,9 @@
 //
 // # Sequence
 //
-//	bridge → daemon:  {"t":"bridge","pr":"ed"}
-//	client → daemon:  {"t":"hello","v":"v0.1.0","p":1,"proj":"…","s":"…","m":"laptop"}
-//	daemon → client:  {"t":"welcome","v":"v0.1.0","min":1,"max":1,"s":"…","pr":"ed"}
+//	bridge → daemon:  {"t":"bridge","pr":"alice"}
+//	client → daemon:  {"t":"hello","v":"v0.2.0","p":2,"proj":"…","s":"…","m":"laptop"}
+//	daemon → client:  {"t":"welcome","v":"v0.2.0","min":1,"max":2,"s":"…","pr":"alice"}
 //	client → daemon:  {"t":"req","id":1,"op":"show","a":{"id":"sf-a1b2c3d4"}}
 //	daemon → client:  {"t":"res","id":1,"ok":{…}}
 //

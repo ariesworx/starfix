@@ -27,8 +27,10 @@ const (
 	ProtoMax = 2
 )
 
-// CheckProto refuses a client protocol version p outside [lo, hi]. The
-// error tells the person which side to upgrade.
+// CheckProto returns nil when the client protocol version p is in
+// [lo, hi], and otherwise a CodeVersion error that tells the person which
+// side to upgrade. A range that is empty, or starts below 1, refuses every
+// client.
 func CheckProto(p, lo, hi int, serverVersion string) *Error {
 	switch {
 	case lo < 1 || hi < lo:
@@ -146,11 +148,16 @@ func cmpInt(a, b int) int {
 	return 0
 }
 
+// semver is a parsed version: major, minor and patch, and the prerelease
+// identifiers. Build metadata is dropped, since it does not affect
+// precedence.
 type semver struct {
 	n   [3]int
 	pre []string
 }
 
+// parseVersion parses s, reporting false unless it is a version as
+// ValidVersion defines one.
 func parseVersion(s string) (semver, bool) {
 	var v semver
 	if len(s) > maxVersion {

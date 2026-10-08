@@ -30,6 +30,7 @@ type adminEnv struct {
 	getenv         func(string) string
 }
 
+// osEnv is the adminEnv of this process.
 func osEnv() adminEnv {
 	return adminEnv{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv}
 }
@@ -47,8 +48,7 @@ func openAdminStore(ctx context.Context, env adminEnv, fl server.Settings, cfgPa
 	// No background committer: Close makes the one Dolt commit.
 	st, err := store.Open(ctx, s.DSN, store.Options{Prefix: s.Prefix, CommitInterval: -1, AllowUnsafeAccount: s.AllowUnsafeDolt,
 		Limits: s.Limits.Limits})
-	var unsafe *store.UnsafeAccountError
-	if errors.As(err, &unsafe) {
+	if _, ok := errors.AsType[*store.UnsafeAccountError](err); ok {
 		return nil, fmt.Errorf("open store: %w", err) // it names its own fix
 	}
 	if err != nil {
@@ -57,6 +57,10 @@ func openAdminStore(ctx context.Context, env adminEnv, fl server.Settings, cfgPa
 	return st, nil
 }
 
+// adminFlags parses an admin command's flags: --config, --dsn, --dev,
+// --allow-unsafe-dolt, and those extra registers. It returns the FlagSet,
+// for the positional arguments, and refuses --allow-unsafe-dolt without
+// --dev.
 func adminFlags(name string, args []string, fl *server.Settings, cfgPath *string, extra func(*flag.FlagSet)) (*flag.FlagSet, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -81,7 +85,7 @@ func devFlags(fs *flag.FlagSet, dev, unsafe *bool) {
 // unsafe Dolt account is for a developer's own machine only.
 func checkDev(dev, unsafe bool) error {
 	if unsafe && !dev {
-		return usageError("--allow-unsafe-dolt is for development only and needs --dev; on a server, give starfixd a least-privileged Dolt account (README, quick start)")
+		return usageError("--allow-unsafe-dolt is for development only and needs --dev; on a server, give starfixd a least-privileged Dolt account (docs/server.md, steps 2 and 4)")
 	}
 	return nil
 }

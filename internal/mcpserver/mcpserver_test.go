@@ -115,7 +115,7 @@ func connectServer(t *testing.T, conns ...*fakeConn) (*mcp.ClientSession, *diale
 	d := &dialer{conns: conns}
 	s := New(Options{Version: "v0.2.0", Dial: d.dial})
 	t.Cleanup(func() { _ = s.Close() })
-	ctx := context.Background()
+	ctx := t.Context()
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := s.MCP().Connect(ctx, st, nil); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func connectServer(t *testing.T, conns ...*fakeConn) (*mcp.ClientSession, *diale
 
 func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -161,7 +161,7 @@ func okReply(string, any) (any, error) { return proto.Empty{}, nil }
 
 func TestTools(t *testing.T) {
 	cs, _ := connect(t)
-	res, err := cs.ListTools(context.Background(), nil)
+	res, err := cs.ListTools(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,7 +534,7 @@ func TestPrime(t *testing.T) {
 				}
 				return proto.ListResult{Issues: summaries(tc.n, tc.title), Next: "more"}, nil
 			}}
-			p, err := BuildPrime(context.Background(), f, "v0.2.0")
+			p, err := BuildPrime(t.Context(), f, "v0.2.0")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -576,8 +576,8 @@ func TestStart(t *testing.T) {
 		return proto.StartResult{
 			Issue: proto.Issue{ID: "sf-a1b2", Rev: 3, Title: "Fix the login redirect", Type: "bug", Priority: 1,
 				Status: "in_progress", Body: strings.Repeat("b", 20000), Acceptance: "redirects to /home"},
-			Handoff: &proto.Handoff{Comment: proto.Comment{Author: "bob", Kind: "handoff", Body: "tried the cookie path", CreatedAt: at},
-				HandoffFields: proto.HandoffFields{State: "partial", Next: "try the header", Branch: "fix/sf-a1b2-x", To: "alice"}},
+			Handoff: &proto.Handoff{Author: "bob", Kind: "handoff", Body: "tried the cookie path", CreatedAt: at,
+				State: "partial", Next: "try the header", Branch: "fix/sf-a1b2-x", To: "alice"},
 		}, nil
 	}}
 	cs, _ := connect(t, f)

@@ -14,4 +14,6 @@ func CheckPeer(net.Conn) error { return nil }
 // PeerChecked reports whether CheckPeer verifies the connecting user.
 const PeerChecked = false
 
+// ownedByMe checks nothing off Linux, where serve needs --dev
+// (RequirePeerCheck).
 func ownedByMe(fs.FileInfo) error { return nil }

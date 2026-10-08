@@ -17,6 +17,7 @@ const ProbePrincipal = "starfixd-upgrade"
 // bridge does, completes the handshake for project and returns the
 // daemon's version. It is the health check after an upgrade: a daemon that
 // answers a welcome has opened its store and applied its migrations.
+// Probe gives up after 10 seconds.
 func Probe(ctx context.Context, socket, project, clientVersion string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

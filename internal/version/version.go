@@ -1,4 +1,9 @@
-// Package version holds the build version of both binaries.
+// Package version holds the build version of both binaries, and the Dolt
+// release they are tested with.
+//
+// [Version] is what sfx and starfixd print, send in the handshake and
+// compare with releases. [Dolt] is the pin that tests keep equal to CI's
+// Dolt and to the dolt on PATH.
 package version
 
 // Version is set at build time:

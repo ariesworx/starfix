@@ -7,7 +7,9 @@ import (
 	"time"
 )
 
-// AddLabel adds a label to an issue. Adding a present label is a no-op.
+// AddLabel adds a label to an issue. Adding a present label is a no-op. A
+// label that is not valid, or past the Labels limit, is refused with
+// ErrInvalid, and a missing issue with ErrNotFound.
 func (s *Store) AddLabel(ctx context.Context, actor Actor, id IssueID, label string) error {
 	if err := labelArgs(id, label); err != nil {
 		return err
@@ -54,6 +56,7 @@ func (s *Store) RemoveLabel(ctx context.Context, actor Actor, id IssueID, label 
 	})
 }
 
+// labelArgs validates the issue id and label of AddLabel and RemoveLabel.
 func labelArgs(id IssueID, label string) error {
 	if err := id.Validate(); err != nil {
 		return err
@@ -63,7 +66,10 @@ func labelArgs(id IssueID, label string) error {
 
 // AddComment appends a comment, authored by the actor, and tells the
 // principals it mentions (@name). With an idempotency key (idem), a repeat
-// returns the first comment and writes nothing.
+// returns the first comment and writes nothing, and the key reused for
+// another request is refused with an [*IdemError]. An empty or invalid
+// body is refused with ErrInvalid, and a missing issue with ErrNotFound.
+// Comments need no hold: anyone may comment on any issue.
 func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, idem string) (Comment, error) {
 	if err := id.Validate(); err != nil {
 		return Comment{}, err
@@ -100,6 +106,8 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, i
 	return c, nil
 }
 
+// validBody checks a comment or handoff note: required, and at most
+// maxText bytes of safe text, newlines and tabs allowed.
 func validBody(body string) error {
 	return checkText("comment", body, maxText, true)
 }
@@ -164,6 +172,8 @@ func (s *Store) comments(ctx context.Context, rest string, args ...any) ([]Comme
 	return queryComments(ctx, s.r, rest, args...)
 }
 
+// queryComments reads the comments that rest, a constant WHERE or ORDER
+// BY clause with placeholders for args, selects.
 func queryComments(ctx context.Context, qr querier, rest string, args ...any) ([]Comment, error) {
 	q := `SELECT id, issue_id, author, session, kind, body, created_at FROM comments ` + rest //nolint:gosec // rest is a constant from the callers
 	rows, err := qr.QueryContext(ctx, q, args...)

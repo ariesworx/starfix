@@ -11,21 +11,24 @@ import (
 // Taking work: StartIssue leases an issue to the actor (claims.go) and
 // marks it in_progress, assigned to the actor's principal, in one
 // transaction, so of two principals racing for one issue exactly one gets
-// it. FinishIssue and a releasing HandoffIssue refuse an issue another
-// principal holds, or a stale epoch, and end the claim.
+// it. FinishIssue and a releasing HandoffIssue end the claim; they refuse
+// a stale epoch, and an issue another principal holds unless the actor is
+// an admin.
 
 // MaxDiscovered bounds the issues one FinishIssue may file.
 const MaxDiscovered = 20
 
 // StartIssue takes an issue for the actor for lease (DefaultLease when
-// zero, at most MaxClaimLease): it claims it and sets it in_progress,
-// assigned to the actor's principal. With an empty id it takes the first
-// issue Ready would list, or returns ErrNothingReady. Taking an issue the
-// actor's own session holds extends the lease and changes nothing else.
-// One another session of the same principal holds under a live claim is
-// refused with a *HeldError (Own), unless take is set, which takes it
-// over under a new epoch; one another principal holds is refused with a
-// *HeldError, and a closed one with ErrInvalid.
+// zero, MinLease to MaxClaimLease otherwise): it claims the issue and sets
+// it in_progress, assigned to the actor's principal, and returns both.
+// With an empty id it takes the first issue [Store.Ready] would list, or
+// returns [ErrNothingReady]. Taking an issue the actor's own session
+// holds extends the lease and changes nothing else. StartIssue refuses:
+//   - an issue another session of the actor's principal holds under a
+//     live claim, with a [*HeldError] whose Own is set, unless take is
+//     set, which takes the claim over under a new epoch;
+//   - an issue another principal holds, with a [*HeldError];
+//   - a closed issue, or a lease out of range, with ErrInvalid.
 func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease time.Duration, take bool) (Issue, Claim, error) {
 	if id != "" {
 		if err := id.Validate(); err != nil {
@@ -106,7 +109,8 @@ type Finish struct {
 	IdempotencyKey string
 }
 
-// finished is FinishIssue's result, as an idempotent replay returns it.
+// finished is FinishIssue's result, as its idempotency stamp stores it
+// and a replay returns it.
 type finished struct {
 	Issue Issue     `json:"issue"`
 	IDs   []IssueID `json:"ids"`
@@ -115,10 +119,16 @@ type finished struct {
 // FinishIssue closes an issue, ends its claim, records its handoff note
 // and files the work discovered while doing it, all in one transaction:
 // either everything is written or nothing is. It returns the closed issue
-// and the new IDs, in the order given. An issue another principal holds
-// is refused with a *ForbiddenError unless the actor is an admin (guard);
-// a non-zero epoch that is not the claim's current one with a
-// *StaleEpochError; a closed issue with ErrInvalid.
+// and the new IDs, in the order given. FinishIssue refuses:
+//   - an issue another principal holds, with a [*ForbiddenError], unless
+//     the actor is an admin;
+//   - a non-zero epoch that is not the claim's current one, with a
+//     [*StaleEpochError];
+//   - acceptance items left neither ticked nor waived once f.Accept is
+//     applied, with an [*AcceptanceError];
+//   - an idempotency key reused for another request, with an
+//     [*IdemError];
+//   - a closed issue, or invalid input, with ErrInvalid.
 func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, f Finish) (Issue, []IssueID, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, nil, err
@@ -217,14 +227,17 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 
 // HandoffIssue records a handoff note, with its fields, on an issue
 // without closing it, telling the principal it is handed to and those its
-// note mentions. With
-// release it also lets the issue go, so another can start it: the claim
-// ends, in_progress becomes open and the assignee is cleared. A handoff
-// on an issue another principal holds is refused with a *ForbiddenError
-// unless the actor is an admin (guard; a comment needs no hold); a
-// release naming a stale epoch with a *StaleEpochError, and a release of
-// a closed issue with ErrInvalid. With an idempotency key (idem), a
-// repeat returns the first result and writes nothing.
+// note mentions. With release it also lets the issue go, so another can
+// start it: the claim ends, in_progress becomes open and the assignee is
+// cleared. With an idempotency key (idem), a repeat returns the first
+// result and writes nothing. HandoffIssue refuses:
+//   - a handoff on an issue another principal holds, with a
+//     [*ForbiddenError], unless the actor is an admin ([Store.AddComment]
+//     needs no hold);
+//   - a release naming a stale epoch, with a [*StaleEpochError];
+//   - an idempotency key reused for another request, with an
+//     [*IdemError];
+//   - a release of a closed issue, or invalid input, with ErrInvalid.
 func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool, idem string) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err

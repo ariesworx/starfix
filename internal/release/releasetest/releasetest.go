@@ -1,4 +1,14 @@
-// Package releasetest serves fake GitHub releases for tests.
+// Package releasetest serves fake GitHub releases for tests of
+// internal/release and the upgrade commands built on it.
+//
+// A [Server] is an httptest server that answers the GitHub API's
+// release requests for one release and serves its assets: archives added
+// with [Server.AddBinary], plus a checksums.txt and checksums.txt.sig it
+// generates and signs with a per-Server key, unless a test overrides
+// them. Its handler reads the Server's fields on another goroutine, so a
+// test sets them before the code under test makes requests. [Verifier]
+// is a [release.Verifier] double that records its last call, and is safe
+// for concurrent use.
 package releasetest
 
 import (
@@ -12,9 +22,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +39,7 @@ const Repo = "example/starfix"
 // Server is a fake GitHub API serving one release. Change its fields
 // before the code under test makes requests.
 type Server struct {
+	// URL is the fake API's root, for [release.Client.BaseURL].
 	URL string
 	// Tag is the release served as latest and by tag.
 	Tag string
@@ -83,8 +95,9 @@ func (s *Server) Signature() string {
 	return string(release.EncodeSignature(ed25519.Sign(s.Key, []byte(s.Checksums()))))
 }
 
-// AddBinary adds the archive holding bin for goos/goarch with the given
-// contents and returns its name.
+// AddBinary adds the archive of binary bin, holding body, for goos/goarch
+// and returns the archive's name. A Windows archive is a zip holding
+// bin.exe.
 func (s *Server) AddBinary(t testing.TB, bin, goos, goarch string, body []byte) string {
 	t.Helper()
 	name := release.ArchiveName(bin, s.Tag, goos, goarch)
@@ -101,18 +114,16 @@ func (s *Server) Checksums() string {
 	if s.Sums != nil {
 		return *s.Sums
 	}
-	names := make([]string, 0, len(s.Assets))
-	for n := range s.Assets {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var b strings.Builder
-	for _, n := range names {
+	for _, n := range slices.Sorted(maps.Keys(s.Assets)) {
 		fmt.Fprintf(&b, "%x  %s\n", sha256.Sum256(s.Assets[n]), n)
 	}
 	return b.String()
 }
 
+// serve answers requests for the latest release and for the release by
+// its tag, listing checksums.txt, its signature and every asset, each
+// under /dl/ unless omitted, and serves those files.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	base := "/repos/" + Repo + "/releases/"
 	switch {
@@ -152,7 +163,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 type Verifier struct {
 	Err error
 
-	mu        sync.Mutex
+	mu        sync.Mutex // guards the last call's arguments below
 	checksums []byte
 	sig       []byte
 	tag       string

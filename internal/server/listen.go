@@ -13,10 +13,11 @@ import (
 // DefaultSocket is where starfixd listens unless configured otherwise.
 const DefaultSocket = "/run/starfix/starfixd.sock"
 
-// Listen opens the daemon's unix socket at path. The directory is created
-// 0700 if missing and refused if anyone but its owner can enter it; the
-// socket itself is 0600. A stale socket is removed; a live one (another
-// daemon) is an error.
+// Listen opens the daemon's unix socket at path, mode 0600. The directory
+// is created 0700 if missing, and refused if its group or others have any
+// access to it or, on Linux, if another user owns it. A stale socket is
+// removed; a live one (another daemon), or a file that is not a socket,
+// is an error.
 func Listen(path string) (net.Listener, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

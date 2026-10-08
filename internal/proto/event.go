@@ -3,13 +3,18 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 )
 
-// Changed summarizes an event in a few words: the fields an update
-// touched, the label, the edge, or the new issue's title.
+// Changed summarizes an event in a few words: the fields an update, close
+// or reopen touched, the label, the edge, the acceptance item, the claim's
+// epoch and holder, or the new issue's title. It returns "" for any other
+// op.
 func (e Event) Changed() string {
+	// The summary is best effort: a state that is absent or not an object
+	// leaves its map nil, and it contributes nothing.
 	var before, after map[string]any
 	_ = json.Unmarshal(e.Before, &before)
 	_ = json.Unmarshal(e.After, &after)
@@ -26,12 +31,7 @@ func (e Event) Changed() string {
 		for k := range after {
 			keys[k] = true
 		}
-		names := make([]string, 0, len(keys))
-		for k := range keys {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		return strings.Join(names, ", ")
+		return strings.Join(slices.Sorted(maps.Keys(keys)), ", ")
 	case "label.add", "label.remove":
 		return fmt.Sprint(pick["label"])
 	case "dep.add", "dep.remove":

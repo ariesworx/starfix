@@ -20,7 +20,8 @@ import (
 // DefaultConfigFile is read when it exists and no --config is given.
 const DefaultConfigFile = "/etc/starfix/starfixd.yaml"
 
-// Settings configure `starfixd serve` and `starfixd stdio`.
+// Settings configure the starfixd commands: serve, stdio, upgrade, and the
+// admin commands import-bd and export-bd.
 type Settings struct {
 	// DSN is the Dolt database (go-sql-driver/mysql form). It may hold a
 	// password, so it never comes from a command-line flag with one.
@@ -53,8 +54,8 @@ type Settings struct {
 	// flag sets it, and only with --dev (decision D3); no config file or
 	// environment variable can.
 	AllowUnsafeDolt bool `yaml:"-"`
-	// Limits bound what one principal can make the server do (limits.go).
-	// Zero fields take the defaults.
+	// Limits bound what one principal can make the server do; see
+	// [Limits]. Zero fields take the defaults.
 	Limits Limits `yaml:"limits"`
 }
 
@@ -77,7 +78,13 @@ const (
 
 // ResolveSettings merges, highest precedence first: flags, the environment,
 // the config file, and defaults. configPath "" means STARFIXD_CONFIG, else
-// DefaultConfigFile if it exists; a named file must exist.
+// DefaultConfigFile if it exists; a named file must exist. Limits come from
+// the file only, Admins from the file unless STARFIXD_ADMINS replaces
+// them, and AllowUnsafeDolt from flags only. It refuses a password in
+// flags.DSN, which the process list would show; a config file with an
+// unknown key, or with a password and any access for group or others; an
+// admin name that is invalid or reserved; an invalid limit; a systemd
+// unit that is not a unit name; and an unknown log level or format.
 func ResolveSettings(flags Settings, configPath string, getenv func(string) string) (Settings, error) {
 	if flags.DSN != "" {
 		cfg, err := mysql.ParseDSN(flags.DSN)
@@ -162,6 +169,9 @@ func NewLogger(w io.Writer, level, format string) (*slog.Logger, error) {
 	return nil, fmt.Errorf("log format %q is not text or json; fix: set log_format: or %s to text or json", format, EnvLogFormat)
 }
 
+// loadSettings reads the config file at path, refusing unknown keys. A
+// missing file is not an error unless required. A file whose DSN holds a
+// password is refused if its group or others have any access to it.
 func loadSettings(path string, required bool) (Settings, error) {
 	var s Settings
 	b, err := os.ReadFile(path) //nolint:gosec // the admin names the config file

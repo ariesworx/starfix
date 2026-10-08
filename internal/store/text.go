@@ -13,8 +13,9 @@ import (
 // notes, a comment or handoff note) allows newlines and tabs only. Text
 // already stored is not rewritten: clients escape what they print.
 
-// checkLine refuses a single-line field that is empty when required,
-// longer than limit bytes, not UTF-8, or holds an unsafe character.
+// checkLine refuses, with ErrInvalid, a single-line field that is empty
+// when required, longer than limit bytes, not UTF-8, or holds an unsafe
+// character.
 func checkLine(field, v string, limit int, required bool) error {
 	switch {
 	case v == "" && !required:

@@ -14,6 +14,7 @@ import (
 // Prime is a new session's orientation, held under MaxPrimeTokens.
 type Prime struct {
 	untrusted
+	// Project names the project: its repository directory's name.
 	Project string `json:"project"`
 	// You is the principal the server knows this key as.
 	You     string `json:"you,omitempty"`
@@ -23,7 +24,8 @@ type Prime struct {
 	// Ready is the top of the ready queue.
 	Ready []proto.Summary `json:"ready"`
 	// More: an issue list was cut to fit the budget.
-	More    bool     `json:"more,omitempty"`
+	More bool `json:"more,omitempty"`
+	// Notices are one-line version warnings.
 	Notices []string `json:"notices,omitempty"`
 	// Lost are issues whose claim this session lost, lapsed or taken
 	// over, from its unread claim.lost inbox items: stop work on them.
@@ -45,8 +47,11 @@ const (
 )
 
 // BuildPrime reads the caller's in-progress issues, the top ready ones and
-// the inbox. Titles are cut, and issues dropped from the end, until it
-// fits MaxPrimeTokens. A server without the inbox leaves it out.
+// the unread inbox. Long text is cut, then inbox items, ready issues,
+// in-progress issues and notices are dropped from the end, in that order,
+// until it fits MaxPrimeTokens. An inbox read that fails while the
+// connection holds leaves the inbox out, since an older server has none;
+// any other failure is an error.
 func BuildPrime(ctx context.Context, c Conn, clientVersion string) (*Prime, error) {
 	p := &Prime{Project: c.Project(), You: c.Principal(), Session: c.Session(),
 		Working: []proto.Summary{}, Ready: []proto.Summary{}, Notices: c.Notices(clientVersion)}
@@ -80,7 +85,8 @@ func BuildPrime(ctx context.Context, c Conn, clientVersion string) (*Prime, erro
 	return p, nil
 }
 
-// fit holds p under MaxPrimeTokens.
+// fit holds p under MaxPrimeTokens, counting the larger of its JSON and
+// its Text, since the SessionStart hook delivers the text.
 func (p *Prime) fit() {
 	for _, list := range [][]proto.Summary{p.Working, p.Ready} {
 		for i := range list {

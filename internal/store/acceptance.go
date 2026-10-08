@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -57,18 +58,22 @@ type AcceptanceItem struct {
 	At     *time.Time `json:"at,omitempty"`
 }
 
-// Acceptance changes items by number: Untick reopens them, Tick ticks
-// them, Waive waives them with a reason.
+// Acceptance changes items by number, counting from 1: Untick reopens
+// them, Tick ticks them, Waive waives them with a reason. An item may
+// appear only once across the three.
 type Acceptance struct {
 	Tick   []int
 	Untick []int
 	Waive  map[int]string
 }
 
+// empty reports whether a changes no item.
 func (a Acceptance) empty() bool { return len(a.Tick) == 0 && len(a.Untick) == 0 && len(a.Waive) == 0 }
 
-// validate checks the numbers and reasons; each item may appear once, and
-// no number may pass most, the most items an issue may have.
+// validate refuses, with ErrInvalid, numbers below 1 or past most (the
+// most items an issue may have), an item given twice, more than most
+// numbers in all, and a waiver without a one-line reason of up to 500
+// bytes.
 func (a Acceptance) validate(most int) error {
 	if len(a.Tick)+len(a.Untick)+len(a.Waive) > most {
 		return fmt.Errorf("%w: an issue has at most %d acceptance items, so name at most that many", ErrInvalid, most)
@@ -123,6 +128,7 @@ func (e *AcceptanceError) Error() string {
 // Unwrap makes errors.Is(err, ErrInvalid) hold.
 func (e *AcceptanceError) Unwrap() error { return ErrInvalid }
 
+// joinInts formats ns as a comma-separated list.
 func joinInts(ns []int) string {
 	s := make([]string, len(ns))
 	for i, n := range ns {
@@ -179,15 +185,19 @@ func parseAcceptance(text string) []parsedItem {
 	return nil
 }
 
+// collapse turns every run of whitespace in s into one space, and trims
+// the ends.
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// itemKey is an item's key in acceptance_state: the SHA-256 of its text,
+// in hex, so its state follows the text and not the item's number.
 func itemKey(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(h[:])
 }
 
 // AcceptanceItems returns an issue's acceptance items and their state, in
-// order; nil when it has no criteria.
+// order; nil when it has no criteria. A missing issue is ErrNotFound.
 func (s *Store) AcceptanceItems(ctx context.Context, id IssueID) ([]AcceptanceItem, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
@@ -232,6 +242,7 @@ func acceptanceItems(ctx context.Context, q querier, is Issue) ([]AcceptanceItem
 		it := AcceptanceItem{N: i + 1, Text: p.text}
 		if r, ok := set[itemKey(p.text)]; ok {
 			it.State, it.Reason, it.By = ItemState(r.state), r.reason, r.by
+			// A stored "open" is an untick: ItemOpen, with who and when.
 			if it.State == "open" {
 				it.State = ItemOpen
 			}
@@ -301,10 +312,12 @@ func openItems(items []AcceptanceItem) []int {
 	return open
 }
 
-// Accept ticks, unticks and waives an issue's acceptance items and
-// returns them all. Changing an item to the state it has is a no-op. A
-// closed issue is refused: reopen it first; one another principal holds
-// with a *ForbiddenError unless the actor is an admin (guard).
+// Accept ticks, unticks and waives an issue's acceptance items, with an
+// event for each item it changes, and returns them all. Changing an item
+// to the state it has is a no-op. An empty a, a number past the issue's
+// items, and a closed issue (reopen it first) are refused with
+// ErrInvalid; an issue another principal holds with a [*ForbiddenError]
+// unless the actor is an admin.
 func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptance) ([]AcceptanceItem, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
@@ -373,6 +386,8 @@ func applyAcceptance(ctx context.Context, w *wtx, is Issue, a Acceptance) ([]Acc
 		if it.State == c.state && it.Reason == c.reason {
 			continue
 		}
+		// ItemOpen is the empty string, but acceptance_state spells the
+		// state "open" (migration 0009).
 		stored := string(c.state)
 		if c.state == ItemOpen {
 			stored = "open"
@@ -393,7 +408,7 @@ func applyAcceptance(ctx context.Context, w *wtx, is Issue, a Acceptance) ([]Acc
 	return items, nil
 }
 
-// setItemState writes one item's state row.
+// setItemState writes one item's state row, as set by w's actor now.
 func setItemState(ctx context.Context, w *wtx, id IssueID, it AcceptanceItem, state, reason string) error {
 	wid, err := randomInt63()
 	if err != nil {
@@ -418,12 +433,7 @@ func setItemState(ctx context.Context, w *wtx, id IssueID, it AcceptanceItem, st
 
 // mapKeys returns m's keys in order.
 func mapKeys(m map[int]string) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }
 
 // checkItems refuses acceptance text with more than most items.

@@ -35,7 +35,7 @@ const (
 // DigestFilter selects what Digest summarizes.
 type DigestFilter struct {
 	// Since starts the window. If zero, the window is Window back from the
-	// server's now.
+	// server's now, and Window must be positive.
 	Since  time.Time
 	Window time.Duration
 	// By keeps only what this principal did: the events they made, and the
@@ -58,7 +58,7 @@ type DigestItem struct {
 	Note string
 	// From is the issue the work was discovered from (discovered only).
 	From IssueID
-	// BlockedBy lists the open blockers (blocked only).
+	// BlockedBy lists the unclosed blockers (blocked only).
 	BlockedBy []IssueID
 }
 
@@ -72,34 +72,42 @@ type DigestSection struct {
 // flight at its end. Event sections list each issue once, newest event
 // first, with By the principal who made the event and At its time.
 type Digest struct {
+	// Since and Now bound the window, on the server's clock.
 	Since, Now time.Time
 	// Events counts the events in the window that match the filter.
 	Events int
-	// Closed: closed in the window and still closed.
+	// Closed lists issues closed in the window and still closed.
 	Closed DigestSection
-	// Started: set in_progress in the window.
+	// Started lists issues set in_progress in the window.
 	Started DigestSection
-	// InProgress: in progress now; By holds it, At is when it was taken.
-	// Highest priority first, then longest running.
+	// InProgress lists issues in progress now; By is the assignee, and At
+	// when the issue was last set in_progress. Highest priority first,
+	// then longest running.
 	InProgress DigestSection
-	// Stalled: in progress with no event for StalledAfter; At is the last
-	// event. Longest idle first.
+	// Stalled lists issues in progress with no event for StalledAfter; At
+	// is the last event. Longest idle first.
 	Stalled DigestSection
-	// Blocked: open with open blockers now; By is the assignee, At is zero.
+	// Blocked lists unclosed issues held back by unclosed blockers now; By
+	// is the assignee, and At is zero.
 	Blocked DigestSection
-	// HandedOff: a handoff note in the window, the latest one quoted.
+	// HandedOff lists issues with a handoff note in the window, quoting
+	// the latest.
 	HandedOff DigestSection
-	// Created: created in the window, highest priority first.
+	// Created lists issues created in the window, highest priority first.
 	Created DigestSection
-	// Discovered: discovered-from links made in the window.
+	// Discovered lists issues linked discovered-from in the window; From
+	// is the issue each came from.
 	Discovered DigestSection
-	// Capped: a section had more rows than a digest reads, so its total
-	// is a lower bound.
+	// Capped reports that a section had more rows than a digest reads,
+	// so its total is a lower bound.
 	Capped bool
 }
 
 // Digest summarizes the events since f's window start and the issues in
-// flight now, in one read-only snapshot.
+// flight now, in one read-only snapshot. A zero Since with a Window that
+// is not positive, a start in the future or more than MaxDigestWindow
+// back, a By that is not one line of safe text, and a Label that is not
+// valid are refused with ErrInvalid.
 func (s *Store) Digest(ctx context.Context, f DigestFilter) (Digest, error) {
 	now := s.now()
 	d := Digest{Now: now, Since: f.Since.UTC()}
@@ -137,6 +145,8 @@ func (s *Store) Digest(ctx context.Context, f DigestFilter) (Digest, error) {
 	return d, nil
 }
 
+// digestQuery runs a digest's queries in one read-only transaction, as
+// of now. capped is set once a section reads more than digestRows rows.
 type digestQuery struct {
 	tx     *sql.Tx
 	f      DigestFilter
@@ -150,9 +160,12 @@ const (
 	afterKind   = `JSON_UNQUOTE(JSON_EXTRACT(e.after_state, '$.kind'))`
 	afterType   = `JSON_UNQUOTE(JSON_EXTRACT(e.after_state, '$.type'))`
 	afterTo     = `JSON_UNQUOTE(JSON_EXTRACT(e.after_state, '$.to'))`
-	hasLabel    = `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = %s AND l.label = ?)`
+	// hasLabel tests that the issue whose id the %s column holds has the
+	// filter's label.
+	hasLabel = `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = %s AND l.label = ?)`
 )
 
+// run fills in d: Events, every section and Capped.
 func (q *digestQuery) run(ctx context.Context, d *Digest) error {
 	if err := q.events(ctx, d); err != nil {
 		return err
@@ -210,6 +223,7 @@ func (q *digestQuery) filters(by string, labelOn ...string) (string, []any) {
 	return b.String(), args
 }
 
+// events counts the events in the window that match the filter.
 func (q *digestQuery) events(ctx context.Context, d *Digest) error {
 	cond, args := q.filters("e.principal", "e.target")
 	err := q.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events e WHERE e.at >= ?`+cond, //nolint:gosec // constant clauses; values are placeholders
@@ -331,7 +345,8 @@ WHERE i.status = 'in_progress'`
 	return nil
 }
 
-// blocked lists open issues held back by open blockers, as Blocked does.
+// blocked lists unclosed issues held back by unclosed blockers, as
+// Blocked does.
 func (q *digestQuery) blocked(ctx context.Context, d *Digest) error {
 	fcond, fargs := q.filters("i.assignee", "i.id")
 	rows, err := q.tx.QueryContext(ctx, blockedCTE+`SELECT i.id, i.title, i.priority, COALESCE(i.assignee, ''), b.via
@@ -381,6 +396,7 @@ LIMIT ?`, append(append([]any{q.now}, fargs...), digestRows+1)...) //nolint:gose
 	return nil
 }
 
+// orTime returns t, or def when t is NULL, in UTC.
 func orTime(t sql.NullTime, def time.Time) time.Time {
 	if t.Valid {
 		return t.Time.UTC()

@@ -44,6 +44,9 @@ func checkPeerUID(c net.Conn, uid int) error {
 	return nil
 }
 
+// ownedByMe refuses a file another user owns, such as a socket directory
+// whose owner could replace the socket. A FileInfo without a Stat_t is
+// accepted.
 func ownedByMe(fi fs.FileInfo) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {

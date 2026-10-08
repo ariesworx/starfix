@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -74,16 +75,17 @@ func serveAgent(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = l.Close() })
-	go func() {
+	var wg sync.WaitGroup
+	t.Cleanup(func() { _ = l.Close(); wg.Wait() })
+	wg.Go(func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
-			go func() { _ = agent.ServeAgent(kr, c); _ = c.Close() }()
+			wg.Go(func() { _ = agent.ServeAgent(kr, c); _ = c.Close() })
 		}
-	}()
+	})
 	return sock
 }
 

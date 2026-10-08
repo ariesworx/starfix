@@ -38,9 +38,10 @@ const (
 // terminal escape that a caller must not print raw.
 const DenyMessage = "ERROR: (gcloud.compute.start-iap-tunnel) Error while connecting [4033: 'not authorized'].\x1b]0;pwned\x07"
 
+// Install passes these to the fake through its environment.
 const (
-	modeEnv   = "STARFIX_IAPTEST_MODE"
-	recordEnv = "STARFIX_IAPTEST_RECORD"
+	modeEnv   = "STARFIX_IAPTEST_MODE"   // the Mode
+	recordEnv = "STARFIX_IAPTEST_RECORD" // the file Last reads
 )
 
 // Fake is an installed fake gcloud.
@@ -101,6 +102,9 @@ func Main() {
 	os.Exit(fake(mode, os.Args[1:]))
 }
 
+// fake acts as gcloud, in mode, with args, and returns its exit code. It
+// uses the process's own streams, which internal code otherwise never
+// touches, because this process is the gcloud the client started.
 func fake(mode Mode, args []string) int {
 	if err := record(args); err != nil {
 		fmt.Fprintf(os.Stderr, "iaptest: %v\n", err)

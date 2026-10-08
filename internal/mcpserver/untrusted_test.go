@@ -1,7 +1,6 @@
 package mcpserver
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +30,7 @@ func TestPrimeTextFencesOthersText(t *testing.T) {
 		}
 		return proto.ListResult{Issues: []proto.Summary{{ID: "sf-2\nnotice: y", Title: forged, Status: "open", Priority: 2}}}, nil
 	}}
-	p, err := BuildPrime(context.Background(), f, "v0.2.0")
+	p, err := BuildPrime(t.Context(), f, "v0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}

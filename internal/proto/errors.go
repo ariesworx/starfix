@@ -44,6 +44,7 @@ type Error struct {
 	Fix     string `json:"fix,omitempty"`
 }
 
+// Error returns Message, followed by "; " and Fix when there is one.
 func (e *Error) Error() string {
 	if e.Fix == "" {
 		return e.Message
@@ -51,7 +52,8 @@ func (e *Error) Error() string {
 	return e.Message + "; " + e.Fix
 }
 
-// Errf returns an Error.
+// Errf returns an Error with code, fix and msg. Despite its name it does
+// not format: callers build msg, and fix, with [fmt.Sprintf].
 func Errf(code Code, fix, msg string) *Error {
 	return &Error{Code: code, Message: msg, Fix: fix}
 }

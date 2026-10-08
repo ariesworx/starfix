@@ -17,6 +17,9 @@ type member struct {
 // object is a JSON object that keeps its key order.
 type object []member
 
+// parseObject reads a JSON object, keeping its key order and each value
+// as written. Empty input is an empty object, and a duplicate key is an
+// error.
 func parseObject(b []byte) (object, error) {
 	if len(bytes.TrimSpace(b)) == 0 {
 		return object{}, nil
@@ -60,6 +63,7 @@ func parseObject(b []byte) (object, error) {
 	return o, nil
 }
 
+// get returns key's value and whether o has key.
 func (o object) get(key string) (json.RawMessage, bool) {
 	for _, m := range o {
 		if m.key == key {
@@ -69,7 +73,8 @@ func (o object) get(key string) (json.RawMessage, bool) {
 	return nil, false
 }
 
-// set replaces key's value in place, or appends it.
+// set replaces key's value in place, or appends it. It changes o's
+// array, so use the result in place of o.
 func (o object) set(key string, v json.RawMessage) object {
 	for i := range o {
 		if o[i].key == key {
@@ -80,6 +85,7 @@ func (o object) set(key string, v json.RawMessage) object {
 	return append(o, member{key, v})
 }
 
+// del removes key. It reuses o's array, so use the result in place of o.
 func (o object) del(key string) object {
 	out := o[:0]
 	for _, m := range o {
@@ -107,6 +113,8 @@ func (o object) marshal() json.RawMessage {
 	return b.Bytes()
 }
 
+// indent formats a document as setup writes JSON files: indented two
+// spaces, with a final newline.
 func indent(raw json.RawMessage) ([]byte, error) {
 	var b bytes.Buffer
 	if err := json.Indent(&b, raw, "", "  "); err != nil {
@@ -116,10 +124,12 @@ func indent(raw json.RawMessage) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// mustJSON marshals a value that cannot fail to: a string, a string
+// slice or an int.
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
-		panic(fmt.Sprintf("agentsetup: %v", err)) // strings and string slices always marshal
+		panic(fmt.Sprintf("agentsetup: %v", err)) // only on a programming error
 	}
 	return b
 }
@@ -142,6 +152,9 @@ func serversKey(f format) string {
 	return "mcpServers"
 }
 
+// applyJSON registers e under its server name, replacing any entry of
+// that name in its place among the servers, and returns the formatted
+// document.
 func applyJSON(content []byte, f format, e Entry, harness string) ([]byte, error) {
 	root, err := parseObject(content)
 	if err != nil {
@@ -240,6 +253,7 @@ func jsonRegistered(content []byte, f format, e Entry, harness string) bool {
 	return ok && sameJSON(got, mustJSON(harness))
 }
 
+// sameJSON reports whether a and b decode to the same value.
 func sameJSON(a, b json.RawMessage) bool {
 	var x, y any
 	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {

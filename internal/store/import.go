@@ -18,14 +18,16 @@ type ImportOutcome string
 
 // Import outcomes.
 const (
-	// ImportCreated: the row did not exist and was written.
+	// ImportCreated means the row did not exist and was written.
 	ImportCreated ImportOutcome = "created"
-	// ImportUpdated: the row existed, differed, and the source was newer.
+	// ImportUpdated means the issue existed and was changed: it differed
+	// and the source was newer, or it gained labels.
 	ImportUpdated ImportOutcome = "updated"
-	// ImportUnchanged: the row already held exactly this.
+	// ImportUnchanged means the row already held exactly this.
 	ImportUnchanged ImportOutcome = "unchanged"
-	// ImportStale: the row differs but is as new as the source or newer, or
-	// is append-only; the stored row is kept.
+	// ImportStale means the row differs but is as new as the source or
+	// newer, or is append-only, so the stored row is kept. An issue's
+	// labels are still merged.
 	ImportStale ImportOutcome = "stale"
 )
 
@@ -194,7 +196,10 @@ func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, er
 // otherwise the stored issue is kept (ImportStale), so edits made here
 // after an earlier import survive a re-import. Labels are merged either
 // way. Importing the same issue twice changes nothing the second time.
-// The parent, when set, must exist and must not make a cycle.
+// The parent, when set, must exist (ErrNotFound) and must not make a
+// cycle (ErrCycle). ImportIssue is for the server's operator, not for
+// clients: it skips the hold check, so it writes an issue whoever holds
+// it, and it does not end a claim on an issue it closes.
 func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)
 	if err != nil {
@@ -307,6 +312,8 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 	return res, nil
 }
 
+// normalizeDep validates an imported edge and brings its time to UTC at
+// microsecond precision, and JSON null metadata to none.
 func normalizeDep(d Dep) (Dep, error) {
 	if err := validEdge(d.From, d.To, d.Type); err != nil {
 		return Dep{}, err
@@ -373,6 +380,7 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
 				return err
 			}
 		}
+		var err error
 		if out, err = planDep(ctx, w.tx, d); err != nil || out != ImportCreated {
 			return err
 		}
@@ -397,6 +405,8 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
 	return out, nil
 }
 
+// normalizeComment validates an imported comment and brings its time to
+// UTC at microsecond precision.
 func normalizeComment(c Comment) (Comment, error) {
 	if !commentIDPattern.MatchString(c.ID) {
 		return Comment{}, fmt.Errorf("%w: comment id %q must be 1-32 lowercase letters and digits", ErrInvalid, c.ID)
@@ -413,14 +423,14 @@ func normalizeComment(c Comment) (Comment, error) {
 			return Comment{}, fmt.Errorf("comment %s: %w", c.ID, err)
 		}
 	}
-	switch {
-	case c.CreatedAt.IsZero():
+	if c.CreatedAt.IsZero() {
 		return Comment{}, fmt.Errorf("%w: comment %s: created_at is required", ErrInvalid, c.ID)
 	}
 	c.CreatedAt = c.CreatedAt.UTC().Truncate(time.Microsecond)
 	return c, nil
 }
 
+// planComment compares c with the stored comment of the same ID, if any.
 func planComment(ctx context.Context, q querier, c Comment) (ImportOutcome, error) {
 	var got Comment
 	err := q.QueryRowContext(ctx, `SELECT id, issue_id, author, session, body, created_at FROM comments WHERE id = ?`,
@@ -460,6 +470,7 @@ func (s *Store) ImportComment(ctx context.Context, actor Actor, c Comment) (Impo
 		if err := mustExist(ctx, w.tx, c.Issue); err != nil {
 			return err
 		}
+		var err error
 		if out, err = planComment(ctx, w.tx, c); err != nil || out != ImportCreated {
 			return err
 		}

@@ -17,7 +17,7 @@ import (
 
 // clock is a test clock for the store, moved by hand.
 type clock struct {
-	mu sync.Mutex
+	mu sync.Mutex // guards t
 	t  time.Time
 }
 
@@ -35,7 +35,7 @@ func (c *clock) add(d time.Duration) {
 
 // lines is a buffer safe to read while the CLI writes to it.
 type lines struct {
-	mu sync.Mutex
+	mu sync.Mutex // guards b
 	b  bytes.Buffer
 }
 

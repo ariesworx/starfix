@@ -55,7 +55,8 @@ func (s Swap) windows() bool {
 }
 
 // Install writes bin beside Exe, checks it, copies Exe to Prev and renames
-// the new file over Exe. A failure before the final rename leaves Exe
+// the new file over Exe. The new file takes Exe's permissions, plus
+// execute for its owner. A failure before the final rename leaves Exe
 // untouched.
 func (s Swap) Install(ctx context.Context, bin []byte) (err error) {
 	fi, err := os.Stat(s.Exe)
@@ -162,8 +163,8 @@ func (s Swap) replace(src string) error {
 }
 
 // VersionCheck returns a Swap.Check that runs `<path> version` and wants
-// the second word of its output (starfix's and starfixd's version lines
-// both read "<name> <version> (protocol …)") to be want.
+// the second word of its output to be want: sfx and starfixd both print
+// "<name> <version> (protocol …)". The check gives up after 30 seconds.
 func VersionCheck(want string) func(context.Context, string) error {
 	return func(ctx context.Context, path string) error {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

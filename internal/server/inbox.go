@@ -10,7 +10,8 @@ import (
 	"github.com/ariesworx/starfix/internal/store"
 )
 
-// The inbox, and pushing it (design §7, "Everything polls"). A connection
+// The inbox, and pushing it (design §7: the "Everything polls" row, and
+// the "As built (stage 3, inbox and handoffs)" note). A connection
 // that sends watch is pushed, as evt frames, each new item for its
 // principal and session. The store hands committed items to the
 // connection's watch without blocking; a goroutine per watching
@@ -29,7 +30,9 @@ type pusher struct {
 }
 
 // watch starts pushing sess's items, or keeps the pushes already running.
-// After a resync it starts afresh.
+// After a resync it starts afresh. The pusher goroutine ends when unwatch
+// stops it, a write fails or the resync is sent, and handle's deferred
+// unwatch waits for it, so it never outlives the connection.
 func (s *Server) watch(ctx context.Context, sess *session, raw json.RawMessage) (any, *proto.Error) {
 	var in proto.WatchArgs
 	if len(raw) > 0 {
@@ -68,6 +71,7 @@ func (s *Server) watch(ctx context.Context, sess *session, raw json.RawMessage) 
 	return s.unread(ctx, sess.actor)
 }
 
+// unread answers watch with a's unread count.
 func (s *Server) unread(ctx context.Context, a store.Actor) (any, *proto.Error) {
 	page, err := s.cfg.Store.Inbox(ctx, a, false, 1)
 	if err != nil {

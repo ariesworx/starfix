@@ -16,6 +16,8 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
+// migration is one migrations/NNNN_name.sql file: its version (NNNN),
+// its file name without .sql, and its statements.
 type migration struct {
 	version int
 	name    string

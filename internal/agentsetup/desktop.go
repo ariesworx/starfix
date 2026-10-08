@@ -21,7 +21,8 @@ var ErrNoDesktop = errors.New("no desktop app on this platform")
 
 // ConfigPath is the desktop app's config file on goos, given the home
 // directory and, on Windows, %APPDATA%. The result uses goos's
-// separator. Claude Desktop runs only on macOS and Windows.
+// separator. Claude Desktop runs only on macOS and Windows; on any other
+// goos the error is ErrNoDesktop.
 func (a Agent) ConfigPath(goos, home, appdata string) (string, error) {
 	if !a.Desktop {
 		return "", errors.New(a.Title + " is not a desktop app")
@@ -45,9 +46,11 @@ func (a Agent) ConfigPath(goos, home, appdata string) (string, error) {
 const maxKeyName = 40
 
 // ServerKey is the name a project's desktop entry is registered under:
-// ServerName, a hyphen and the project directory's name, lowercased,
-// with each run of characters other than a-z and 0-9 made one hyphen.
-// root may use either separator.
+// ServerName, a hyphen and the project directory's name. The name is
+// lowercased, each run of characters other than a-z and 0-9 becomes one
+// hyphen inside it and is dropped at its ends, and it is cut to 40
+// characters, or is "project" when nothing is left. root may use either
+// separator.
 func ServerKey(root string) string {
 	base := strings.TrimRight(root, `/\`)
 	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
@@ -77,7 +80,8 @@ func ServerKey(root string) string {
 }
 
 // DesktopEntry starts `command -C root mcp` under root's ServerKey.
-// command and root are absolute.
+// command and root must be absolute: the app starts servers with no
+// working directory and without the shell's PATH.
 func DesktopEntry(command, root string) Entry {
 	return Entry{Command: command, Args: []string{"-C", root, "mcp"}, Server: ServerKey(root)}
 }

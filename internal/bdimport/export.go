@@ -77,6 +77,7 @@ func Export(ctx context.Context, st *store.Store, w io.Writer) (int, error) {
 	return n, nil
 }
 
+// compact returns m without insignificant space, or nil when m is empty.
 func compact(m json.RawMessage) (json.RawMessage, error) {
 	if len(m) == 0 {
 		return nil, nil
@@ -88,6 +89,8 @@ func compact(m json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(buf.Bytes()), nil
 }
 
+// toBD converts is, with its outgoing deps and its comments, to one bd
+// line, as Export describes.
 func toBD(is store.Issue, deps []store.Dep, comments []store.Comment) (exportIssue, error) {
 	p := int(is.Priority)
 	b := bdIssue{
@@ -120,9 +123,11 @@ func toBD(is store.Issue, deps []store.Dep, comments []store.Comment) (exportIss
 	for _, d := range deps {
 		bd := bdDep{IssueID: string(d.From), DependsOnID: string(d.To), Type: string(d.Type),
 			CreatedAt: d.CreatedAt, CreatedBy: d.CreatedBy}
-		if m, err := compact(d.Metadata); err != nil {
+		m, err := compact(d.Metadata)
+		if err != nil {
 			return exportIssue{}, fmt.Errorf("dep %s → %s: %w", d.From, d.To, err)
-		} else if m != nil {
+		}
+		if m != nil {
 			// bd writes edge metadata as a JSON string.
 			s, err := json.Marshal(string(m))
 			if err != nil {

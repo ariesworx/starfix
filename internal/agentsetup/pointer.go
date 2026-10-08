@@ -13,12 +13,15 @@ const (
 	endMarker   = "<!-- starfix:end -->"
 )
 
+// pointerBody is the block's text between the markers. Every agent reads
+// it in every session, so it stays a few lines (TestPointerBlockIsShort).
 var pointerBody = []string{
 	"## Issue tracking: starfix",
 	"Track work with the `starfix` MCP tools; never shell out to `sfx` for it.",
 	"Call `prime` when a session starts, unless its output is already in context; then `start` takes an issue and `finish` closes it with a handoff note.",
 }
 
+// pointerStyle is where an agent's pointer goes.
 type pointerStyle int
 
 const (
@@ -36,6 +39,8 @@ var frontmatter = map[pointerStyle]string{
 	jetbrainsRule: "---\napply: always\n---\n\n",
 }
 
+// pointerLines is the block, markers included, each line ending in eol:
+// "" or, in a CRLF file, "\r", since lines are split on "\n".
 func pointerLines(eol string) []string {
 	out := make([]string, 0, len(pointerBody)+2)
 	for _, l := range append(append([]string{beginMarker}, pointerBody...), endMarker) {
@@ -44,11 +49,13 @@ func pointerLines(eol string) []string {
 	return out
 }
 
+// ruleContent is the whole rule file for a style that owns its file.
 func ruleContent(style pointerStyle) []byte {
 	return []byte(frontmatter[style] + strings.Join(pointerLines(""), "\n") + "\n")
 }
 
 // pointerBlock finds the block: the indexes of its begin and end lines.
+// ok is false when there is none; a marker without its pair is an error.
 func pointerBlock(lines []string) (start, end int, ok bool, err error) {
 	start = -1
 	for i, l := range lines {
@@ -79,6 +86,9 @@ func eolOf(lines []string) string {
 	return ""
 }
 
+// applyPointer puts the block in content. A style that owns its file
+// replaces the whole file; a markdown block replaces the block in place
+// or, when there is none, goes at the end after a blank line.
 func applyPointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 	if style != markdownBlock {
 		want := ruleContent(style)
@@ -109,6 +119,9 @@ func applyPointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 	return joinLines(append(append(lines, eolOf(lines)), block...)), Added, nil
 }
 
+// removePointer takes the block out of content, with the blank line
+// applyPointer put before a block at the end. A file the style owns, or
+// one left with nothing else, comes back nil.
 func removePointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 	lines := splitLines(content)
 	start, end, ok, err := pointerBlock(lines)
@@ -133,6 +146,8 @@ func removePointer(content []byte, style pointerStyle) ([]byte, Result, error) {
 	return joinLines(out), Removed, nil
 }
 
+// pointerRegistered reports whether content holds the block exactly as
+// applyPointer writes it.
 func pointerRegistered(content []byte, style pointerStyle) bool {
 	if style != markdownBlock {
 		return string(content) == string(ruleContent(style))
@@ -142,6 +157,7 @@ func pointerRegistered(content []byte, style pointerStyle) bool {
 	return err == nil && ok && strings.Join(lines[start:end+1], "\n") == strings.Join(pointerLines(eolOf(lines)), "\n")
 }
 
+// pointerSnippet is the block, or the whole rule file, to paste by hand.
 func pointerSnippet(style pointerStyle) string {
 	if style != markdownBlock {
 		return string(ruleContent(style))
@@ -159,6 +175,8 @@ func splitLines(content []byte) []string {
 	return strings.Split(s, "\n")
 }
 
+// joinLines undoes splitLines: the lines joined by newlines, with a final
+// newline, or nil for none.
 func joinLines(lines []string) []byte {
 	if len(lines) == 0 {
 		return nil

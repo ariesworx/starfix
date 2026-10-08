@@ -122,6 +122,8 @@ func cmdWatch(ctx context.Context, r *runner, args []string) error {
 		return usagef(usage, "watch takes no arguments")
 	}
 	events := make(chan proto.Push, watchBuffer)
+	// onPush runs on the connection's reader goroutine. It must not block,
+	// or the replies the loop below waits for would never be read.
 	r.onPush = func(p proto.Push) {
 		select {
 		case events <- p:

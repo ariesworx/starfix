@@ -45,9 +45,11 @@ func ValidHarness(h string) bool { return h == "" || harnessPattern.MatchString(
 
 // TouchAgent records that actor's session is present, running under
 // harness. It writes only when the row is new, the machine or harness
-// changed, or last_seen is AgentTouchEvery old. An empty harness keeps
-// the one already recorded, so a client that does not send one does not
-// erase it.
+// changed, or last_seen is at least AgentTouchEvery old, and records no
+// event. An empty harness keeps the one already recorded, so a client
+// that does not send one does not erase it; a harness that is not valid
+// is refused with ErrInvalid. A new session past the Sessions limit drops
+// the principal's least recently seen rows.
 func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) error {
 	if !ValidHarness(harness) {
 		return fmt.Errorf("%w: harness %q must be 1-32 lowercase letters, digits or hyphens", ErrInvalid, harness)
@@ -100,7 +102,8 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 
 // Who returns the sessions seen within since of the server's now (0
 // means AgentActiveFor), most recently seen first, each with the issues
-// it holds under an active claim.
+// it holds under an active claim, from one snapshot. A window below 0 or
+// past MaxAgentWindow is refused with ErrInvalid.
 func (s *Store) Who(ctx context.Context, since time.Duration) ([]Agent, error) {
 	if since == 0 {
 		since = AgentActiveFor
@@ -178,7 +181,7 @@ func capSessions(ctx context.Context, w *wtx, principal string) error {
 		}
 		old = append(old, sess)
 	}
-	if err := rows.Close(); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("oldest sessions of %s: %w", principal, err)
 	}
 	for _, sess := range old {

@@ -87,7 +87,8 @@ func (l Limits) WithDefaults() Limits {
 	return l
 }
 
-// Validate refuses a negative limit or a rate that is not a number.
+// Validate refuses a negative limit, or a write rate that is NaN or
+// infinite. Zero is valid: it takes the default.
 func (l Limits) Validate() error {
 	if err := l.Limits.Validate(); err != nil {
 		return fmt.Errorf("%w; fix: correct limits: in the config file", err)
@@ -121,9 +122,10 @@ type buckets struct {
 	mu    sync.Mutex
 	rate  float64
 	burst float64
-	m     map[string]*bucket
+	m     map[string]*bucket // by principal, guarded by mu
 }
 
+// bucket is one principal's tokens, as of at.
 type bucket struct {
 	tokens float64
 	at     time.Time
@@ -155,7 +157,7 @@ func (b *buckets) take(key string, now time.Time) (bool, time.Duration) {
 
 // conns counts connections past the handshake, in all and per principal.
 type conns struct {
-	mu    sync.Mutex
+	mu    sync.Mutex // guards total and by
 	total int
 	by    map[string]int
 }
@@ -178,6 +180,7 @@ func (c *conns) acquire(principal string, total, per int) (bool, string) {
 	return true, ""
 }
 
+// release frees a slot acquire took for principal.
 func (c *conns) release(principal string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -193,9 +196,10 @@ func (c *conns) release(principal string) {
 type sampler struct {
 	mu sync.Mutex
 	n  int
-	m  map[string]*window
+	m  map[string]*window // by principal ("" before one is known), guarded by mu
 }
 
+// window counts one principal's refusal lines in the minute from start.
 type window struct {
 	start      time.Time
 	logged     int
