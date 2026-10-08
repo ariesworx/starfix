@@ -139,18 +139,23 @@ func TestImportIssueNewerOlder(t *testing.T) {
 }
 
 // Import is the operator's, so it writes an issue whoever holds it. An
-// import that closes a held issue ends the claim and tells the holder's
-// session, as any other close does; one that leaves it open leaves the
-// claim alone.
+// import that leaves a held issue anything but in progress with its
+// holder (closed, open, blocked, or assigned to someone else) ends the
+// claim and tells the holder's session, as close and a releasing handoff
+// do, and the holder's time on it stops there. One that leaves it in
+// progress with the holder leaves the claim alone.
 func TestImportIssueHeld(t *testing.T) {
 	tests := []struct {
-		name   string
-		mod    func(*Issue)
-		closes bool
+		name string
+		mod  func(*Issue)
+		ends bool
 	}{
 		{"closes it", func(is *Issue) {
 			is.Status, is.ClosedAt, is.CloseReason = StatusClosed, ptr(is.UpdatedAt), "done in bd"
 		}, true},
+		{"reopens it", func(is *Issue) { is.Status, is.Assignee = StatusOpen, "" }, true},
+		{"blocks it", func(is *Issue) { is.Status, is.Assignee = StatusBlocked, "alice" }, true},
+		{"reassigns it", func(is *Issue) { is.Status, is.Assignee = StatusInProgress, "bob" }, true},
 		{"edits it", func(is *Issue) {
 			is.Status, is.Assignee, is.Title = StatusInProgress, "alice", "retitled in bd"
 		}, false},
@@ -174,15 +179,23 @@ func TestImportIssueHeld(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if held := c != nil; held == tc.closes {
-				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.closes)
+			if held := c != nil; held == tc.ends {
+				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.ends)
 			}
 			var want []item
-			if tc.closes {
+			if tc.ends {
 				want = []item{{"alice", "sess-a", InboxClaimLost, in.ID, importer.Principal}}
 			}
 			if got := items(t, s, alice); !slices.Equal(got, want) {
 				t.Errorf("Inbox(alice) = %+v, want %+v", got, want)
+			}
+			clk.add(10 * time.Minute)
+			wantHeld := 11 * time.Minute
+			if tc.ends {
+				wantHeld = time.Minute
+			}
+			if u := mustUsage(t, s, in.ID); u.Held != wantHeld {
+				t.Errorf("IssueUsage(%s).Held = %s, want %s", in.ID, u.Held, wantHeld)
 			}
 			assertGapless(t, s)
 		})

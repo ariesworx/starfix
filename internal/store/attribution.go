@@ -25,7 +25,10 @@ import (
 //   - issue.update or issue.import that moves the issue out of
 //     in_progress. A releasing handoff does that: a claimed issue is
 //     always in_progress, because start sets it and update cannot change
-//     it while the claim is live.
+//     it while the claim is live;
+//   - issue.import whose after state has claim_released: an import that
+//     reassigned the issue, or moved it out of in_progress, ended the
+//     claim, at its lease's expiry if that came first.
 //
 // A hold still open ends now, or when its lease ran out if the reaper has
 // not yet noticed. Renewals are not in the log, so a hold that lapsed
@@ -226,21 +229,27 @@ func loadHoldsOf(ctx context.Context, q querier, issues []IssueID, now time.Time
 			end(id, e.At)
 			open[id] = &hold{issue: id, key: sessionKey{e.Actor.Principal, e.Actor.Session}, start: e.At}
 		case OpClaimExpire:
-			at := e.At
 			var b struct {
 				ExpiresAt time.Time `json:"expires_at"`
 			}
-			if json.Unmarshal(e.Before, &b) == nil && !b.ExpiresAt.IsZero() && b.ExpiresAt.Before(at) {
-				at = b.ExpiresAt.UTC()
-			}
-			end(id, at)
+			_ = json.Unmarshal(e.Before, &b) // a malformed state ends the hold at the event
+			end(id, lapsedAt(e.At, b.ExpiresAt))
 		case OpIssueClose:
 			end(id, e.At)
 		default: // issue.update, issue.import
 			var a struct {
-				Status *Status `json:"status"`
+				Status   *Status `json:"status"`
+				Released *struct {
+					ExpiresAt time.Time `json:"expires_at"`
+				} `json:"claim_released"`
 			}
-			if json.Unmarshal(e.After, &a) == nil && a.Status != nil && *a.Status != StatusInProgress {
+			if json.Unmarshal(e.After, &a) != nil {
+				break
+			}
+			switch {
+			case a.Released != nil:
+				end(id, lapsedAt(e.At, a.Released.ExpiresAt))
+			case a.Status != nil && *a.Status != StatusInProgress:
 				end(id, e.At)
 			}
 		}
@@ -254,6 +263,16 @@ func loadHoldsOf(ctx context.Context, q querier, issues []IssueID, now time.Time
 		out = append(out, *h)
 	}
 	return out, nil
+}
+
+// lapsedAt is when a hold ended by an event at at really ended: at, or
+// the lease's expiry if that came first. A zero expiry, from an event
+// that does not record one, is at.
+func lapsedAt(at, expires time.Time) time.Time {
+	if !expires.IsZero() && expires.Before(at) {
+		return expires.UTC()
+	}
+	return at
 }
 
 // sessionHolds returns every hold of the sessions keys, on any issue, by
