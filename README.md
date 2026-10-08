@@ -47,12 +47,13 @@ what. starfix makes that safe:
 | Get mentions, handoffs, assignments and lost claims in an inbox the server pushes | `inbox`, `watch` | [The inbox](docs/concepts.md#the-inbox) |
 | See every session at work and what it holds | `who` | [Who is at work](docs/concepts.md#who-is-at-work) |
 | Summarize a day or a week for a standup | `digest` | [The digest](docs/concepts.md#the-digest) |
+| See the time and tokens each issue took, by account (tokens from Claude Code so far) | `show`, `digest`, `usage --hook` | [Accounts, time and tokens](docs/concepts.md#accounts-time-and-tokens) |
 | Set up Claude Code, Codex, Gemini CLI, Cursor, VS Code, Junie, JetBrains AI Assistant or Claude Desktop | `setup` | [Agents](docs/agents.md) |
 | Move a bd (beads) backlog over, keeping its IDs | `starfixd import-bd` | [Moving from bd](docs/migrate-from-bd.md) |
 | Reach a server that has no public address, through Google Cloud IAP | `iap:` in `.starfix.yaml` | [Using sfx](docs/cli.md#servers-without-a-public-ip-google-cloud-iap) |
 | Upgrade clients and the server from signed releases | `upgrade` | [Installing starfix](docs/install.md#upgrade-and-roll-back) |
 
-Planned: team and personal memory, token cost tracking, an offline cache,
+Planned: team and personal memory, token prices and cost reports, an offline cache,
 and **Bearings**, an orchestrator that runs and supervises many agents on
 top of starfix ([design](docs/design/bearings.md)).
 

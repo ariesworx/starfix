@@ -23,11 +23,12 @@ writes:
 
 Setup writes three things for each agent: the MCP config that starts
 `sfx mcp`, a short pointer in the agent's instruction file, and a
-session-start hook:
+session-start hook. For Claude Code the hook file also gets the
+[token usage hooks](#token-usage-hooks-claude-code):
 
-| Agent | MCP config | Pointer | Session-start hook | You still |
+| Agent | MCP config | Pointer | Hooks | You still |
 |---|---|---|---|---|
-| `claude-code` | `.mcp.json` | `CLAUDE.md` | `.claude/settings.json` | approve the project's MCP server when Claude Code asks |
+| `claude-code` | `.mcp.json` | `CLAUDE.md` | `.claude/settings.json`: session start, and usage on Stop, SubagentStop and SessionEnd | approve the project's MCP server when Claude Code asks |
 | `codex` | `.codex/config.toml` | `AGENTS.md` | `.codex/hooks.json` | trust the project, and the hooks with `/hooks` |
 | `gemini` | `.gemini/settings.json` | `GEMINI.md` | `.gemini/settings.json` | trust the folder when Gemini CLI asks |
 | `cursor` | `.cursor/mcp.json` | `.cursor/rules/starfix.mdc` | `.cursor/hooks.json` | turn starfix on in Cursor Settings › MCP |
@@ -78,8 +79,9 @@ AI Assistant keep their user settings elsewhere, so `--global` is refused
 for `vscode` and `jetbrains`, and `--all --global` skips them.
 
 A global hook runs in every repository with a `.starfix.yaml` that you
-open with the agent, and connects to the server that file names. Prefer
-per-project setup, or turn the global hook off before you open a
+open with the agent, and connects to the server that file names; Claude
+Code's usage hooks send that server the session's token counts. Prefer
+per-project setup, or turn the global hooks off before you open a
 repository you do not trust.
 
 ### Claude Desktop
@@ -117,9 +119,73 @@ starfix repository. On any error it adds a one-line note instead of
 failing the session.
 
 A hook belongs to starfix only when its whole command is the one setup
-writes, `sfx prime --hook[=AGENT]` through `sfx` or the `--command`
-program. Other hooks, including your own commands that end in
-`sfx prime --hook`, are never touched.
+writes, `sfx prime --hook[=AGENT]` or `sfx usage --hook[=AGENT]` through
+`sfx` or the `--command` program. Other hooks, including your own
+commands that end in `sfx prime --hook`, are never touched.
+
+## Token usage hooks (Claude Code)
+
+starfix reports the tokens each issue took
+([Accounts, time and tokens](concepts.md#accounts-time-and-tokens)).
+Only Claude Code's are captured so far; Codex, Gemini CLI and the others
+follow once their formats are checked against real files. Every harness
+still gets the time each issue was held.
+
+Setup adds `sfx usage --hook` to Claude Code's Stop, SubagentStop and
+SessionEnd hooks. Stop and SubagentStop run with `"async": true`, so the
+turn never waits on the server, and a 30-second timeout. SessionEnd runs
+synchronously with a 10-second timeout: it sends the session's last
+response, and Claude Code waits for it as it exits, where an async hook
+might not finish. Each run:
+
+- reads the session's transcript, named by the hook's `transcript_path`,
+  and its subagents' transcripts beside it
+  (`<session id>/subagents/agent-*.jsonl`);
+- reads each file from where the last run stopped, up to its last
+  complete line. The offsets are kept in `starfix/usage-offsets.json`
+  under your user cache directory (`~/.cache` on Linux,
+  `~/Library/Caches` on macOS, `%LocalAppData%` on Windows), mode 0600 in
+  a 0700 directory. A file that was truncated or replaced is read from
+  its start;
+- sends one record per API request: the harness, the message id, the
+  model, the time, and the input, output, cache-write (with its one-hour
+  part) and cache-read counts. A count the transcript lacks is sent as
+  unknown, not 0. The offsets move only once the server has accepted the
+  records, so a failed send is retried by the next hook, and the server
+  keeps one record per request, so nothing is counted twice;
+- waits for a response to finish. Claude Code writes a response one line
+  per content block, its output count growing to the last line's, and
+  tools run while it streams, so tool results can fall among its lines.
+  A response is sent only once a line of the next response follows it,
+  since the next request starts only after it ends. A file's last
+  response waits for the next hook; SubagentStop sends the stopped
+  subagent's, and SessionEnd whatever is left;
+- drops a record the server refuses as invalid, such as one dated more
+  than an hour past the server's clock, so it cannot hold back the
+  records after it, and says so. A server that is busy or unreachable
+  drops nothing: the next hook sends the records again.
+
+**Only counts leave your machine.** The transcripts hold your whole
+conversation, but `sfx` reads them locally and keeps only the fields
+above; no prompt, reply, tool input or file content is sent, stored or
+printed. The connection is the same SSH connection every `sfx` command
+uses.
+
+The hook exits 0 whatever happens and prints nothing outside a starfix
+repository or when there is nothing new. Otherwise it writes one line to
+stderr with a fix. Claude Code keeps hook output out of the
+conversation, so the line may go unseen; `claude --debug` shows it.
+
+If Claude Code changes its transcript format, `sfx` never guesses
+counts. When none of the response lines new in a file can be read, the
+hook sends nothing for it, says the format was not recognized, names the
+Claude Code version, and keeps the file's offset, so an upgraded `sfx`
+reads those lines. Lines it cannot read among lines it can are skipped,
+and the offset moves past them: an upgrade does not recover those.
+
+An older setup upgrades with `sfx setup claude-code --write`. One from
+before these hooks has the session-start hook alone, and one from their
+first release runs SessionEnd async; `--check` names the hooks to fix.
 
 ## Tools
 
@@ -170,6 +236,12 @@ from the agent's environment:
 The harness name comes from `STARFIX_HARNESS`, which setup writes into the
 MCP entry; failing that, `claude-code` when `CLAUDECODE=1` and `gemini`
 when `GEMINI_CLI=1`.
+
+The hooks take the session id from their input, unless `STARFIX_SESSION`
+is set. In Claude Code that id is `CLAUDE_CODE_SESSION_ID`, the session
+`sfx mcp` claims issues under, so the usage hooks' tokens go to the
+issues that session held. If you set `STARFIX_SESSION` for `sfx mcp`, set
+it for the hooks too.
 
 One limitation affects every harness except Claude Code. The session-start
 hook learns the harness's session id from its input, but `sfx mcp` cannot,

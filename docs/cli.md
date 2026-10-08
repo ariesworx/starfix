@@ -148,6 +148,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 |---|---|
 | `mcp` | Serve the MCP tools for an agent on stdin and stdout ([agent guide](agents.md)) |
 | `setup AGENT` | Set an agent up for this repository; see [Set up an agent](agents.md#set-up-an-agent) |
+| `usage --hook[=AGENT]` | Send the token counts in the session's transcripts that earlier runs have not sent. Run by Claude Code's Stop, SubagentStop and SessionEnd hooks, which `setup claude-code` installs, with the hook's JSON on stdin; bare `--hook` is Claude Code's, the only agent captured so far. It always exits 0 and sends only counts ([Token usage hooks](agents.md#token-usage-hooks-claude-code)) |
 | `upgrade` | Replace `sfx` with the latest release after checking its signature and checksum. `--check` reports and changes nothing; `--rollback` restores the binary the last upgrade replaced. It never runs on its own |
 | `version` | Print the version and protocol |
 

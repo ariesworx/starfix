@@ -3,9 +3,10 @@ package store
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Token usage (design §12.1). A harness reports what each request cost,
@@ -85,17 +86,6 @@ type UsageAdded struct {
 	Duplicates int `json:"duplicates"`
 }
 
-var (
-	// requestIDPattern is a harness's request or message id, or several
-	// joined: ASCII letters, digits and _.:/+=@-, starting with a letter
-	// or digit. Being printable ASCII, it admits no control or bidi
-	// character (safetext).
-	requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/+=@-]{0,254}$`)
-	// modelPattern is a model name as providers spell them, with the
-	// prefixes and suffixes gateways add.
-	modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/+@-]{0,127}$`)
-)
-
 // validate refuses, with ErrInvalid, a record with a field out of
 // pattern or range, at the server time now. n numbers it in the message,
 // from 1.
@@ -106,9 +96,9 @@ func (r UsageRecord) validate(n int, now time.Time) error {
 	switch {
 	case !harnessPattern.MatchString(r.Harness):
 		return bad("harness", "must be 1-32 lowercase letters, digits or hyphens")
-	case !requestIDPattern.MatchString(r.RequestID):
+	case !proto.UsageRequestID.MatchString(r.RequestID):
 		return bad("request_id", "must be 1-255 ASCII letters, digits or _.:/+=@-, starting with a letter or digit")
-	case !modelPattern.MatchString(r.Model):
+	case !proto.UsageModel.MatchString(r.Model):
 		return bad("model", "must be 1-128 ASCII letters, digits or _.:/+@-, starting with a letter or digit")
 	case r.At.Before(usageEpoch):
 		return bad("at", "must be the request's time, after 2020")

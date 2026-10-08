@@ -1,6 +1,7 @@
 package agentsetup
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,7 +26,8 @@ func TestHook(t *testing.T) {
           }
         ]
       }
-    ]
+    ],
+` + usageHooks("sfx") + `
   }
 }
 `},
@@ -68,7 +70,8 @@ func TestHook(t *testing.T) {
           }
         ]
       }
-    ]
+    ],
+` + usageHooks("sfx") + `
   },
   "model": "x"
 }
@@ -124,7 +127,8 @@ func TestHook(t *testing.T) {
           }
         ]
       }
-    ]
+    ],
+` + usageHooks("'/opt/star fix/sfx'") + `
   }
 }
 `,
@@ -169,6 +173,112 @@ func TestHook(t *testing.T) {
 				t.Fatalf("second remove: %s", res)
 			}
 		})
+	}
+}
+
+// usageHooks is the Stop, SubagentStop and SessionEnd entries setup
+// writes in Claude Code's settings for program, as they sit inside
+// "hooks", with no trailing newline. Stop and SubagentStop run in the
+// background; SessionEnd runs before Claude Code exits, which waits for
+// it up to its timeout.
+func usageHooks(program string) string {
+	var parts []string
+	for _, event := range []string{"Stop", "SubagentStop"} {
+		parts = append(parts, `    "`+event+`": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "`+program+` usage --hook",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ]`)
+	}
+	parts = append(parts, `    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "`+program+` usage --hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]`)
+	return strings.Join(parts, ",\n")
+}
+
+// The first release of the usage hooks ran SessionEnd async, which
+// Claude Code may not wait for as it exits. That install is not
+// registered: --check names the SessionEnd hook, and Apply makes it
+// synchronous with its timeout, then changes nothing. A person's own
+// timeout on a synchronous hook is kept.
+func TestHookUpgradeSyncSessionEnd(t *testing.T) {
+	h := hookOf(t, "claude-code", false)
+	current, _, err := h.Apply(nil, DefaultEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	async := strings.Replace(string(current), `"command": "sfx usage --hook",
+            "timeout": 10`, `"command": "sfx usage --hook",
+            "async": true,
+            "timeout": 30`, 1)
+	if async == string(current) {
+		t.Fatal("test setup: SessionEnd hook not found")
+	}
+	if got := h.MissingHooks([]byte(async), DefaultEntry); !slices.Equal(got, []string{"SessionEnd"}) {
+		t.Errorf("MissingHooks(async SessionEnd) = %v, want [SessionEnd]", got)
+	}
+	out, res, err := h.Apply([]byte(async), DefaultEntry)
+	if err != nil || res != Updated || string(out) != string(current) {
+		t.Fatalf("Apply(async SessionEnd) = %s, %v\n%s\nwant updated to\n%s", res, err, out, current)
+	}
+	if again, res, err := h.Apply(out, DefaultEntry); err != nil || res != Unchanged || string(again) != string(out) {
+		t.Fatalf("second Apply = %s, %v", res, err)
+	}
+	own := strings.Replace(string(current), `"timeout": 10`, `"timeout": 20`, 1)
+	if !h.Registered([]byte(own), DefaultEntry) {
+		t.Errorf("a synchronous SessionEnd hook with the person's timeout is not registered:\n%s", own)
+	}
+}
+
+// An install from before usage capture has only the prime hook: it is
+// not registered, says which hooks are missing, and a second Apply adds
+// them, keeping the prime hook as the person left it.
+func TestHookUpgradeAddsUsageHooks(t *testing.T) {
+	old := `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "sfx prime --hook", "timeout": 20}]}]}}`
+	h := hookOf(t, "claude-code", false)
+	if h.Registered([]byte(old), DefaultEntry) {
+		t.Fatal("Registered with only the prime hook")
+	}
+	if got, want := h.MissingHooks([]byte(old), DefaultEntry), []string{"Stop", "SubagentStop", "SessionEnd"}; !slices.Equal(got, want) {
+		t.Errorf("MissingHooks(prime only) = %v, want %v", got, want)
+	}
+	out, res, err := h.Apply([]byte(old), DefaultEntry)
+	if err != nil || res != Updated || !h.Registered(out, DefaultEntry) || !strings.Contains(string(out), `"timeout": 20`) ||
+		strings.Count(string(out), "sfx usage --hook") != 3 {
+		t.Fatalf("Apply(prime only) = %s, %v\n%s\nwant updated, the usage hooks added and the prime hook kept", res, err, out)
+	}
+	if got := h.MissingHooks(out, DefaultEntry); len(got) != 0 {
+		t.Errorf("MissingHooks after Apply = %v, want none", got)
+	}
+	if got := h.MissingHooks(nil, DefaultEntry); len(got) != 4 {
+		t.Errorf("MissingHooks(new file) = %v, want all four", got)
+	}
+}
+
+// Only Claude Code's usage is captured so far: Junie shares its hook
+// format but gets the prime hook alone.
+func TestUsageHooksAreClaudeCodes(t *testing.T) {
+	out, _, err := hookOf(t, "junie", true).Apply(nil, DefaultEntry)
+	if err != nil || strings.Contains(string(out), "usage") {
+		t.Fatalf("junie hooks = %v\n%s\nwant no usage hook", err, out)
+	}
+	if got := strings.Join(UsageHooks(), " "); got != "claude-code" {
+		t.Errorf("UsageHooks() = %s, want claude-code", got)
 	}
 }
 

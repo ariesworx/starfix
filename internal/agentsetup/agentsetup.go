@@ -31,8 +31,9 @@ type Agent struct {
 	// that gets the starfix block; GlobalPointer is the home one, or "".
 	Pointer, GlobalPointer string
 	// Hook is the settings file, relative to the repository root, that
-	// gets the SessionStart hook; GlobalHook is the home one. "" when
-	// the harness has no hook setup writes.
+	// gets the SessionStart hook, and Claude Code's usage hooks;
+	// GlobalHook is the home one. "" when the harness has no hook setup
+	// writes.
 	Hook, GlobalHook string
 	// SessionEnv is the variable the harness sets to its session id for
 	// the processes it starts, or "" when it sets none.
@@ -52,7 +53,7 @@ type Agent struct {
 
 	format  format       // the MCP config's shape
 	pointer pointerStyle // where the pointer goes
-	hook    hookStyle    // how the hook is written, if there is one
+	hooks   []hookStyle  // how each hook is written; SessionStart's first
 }
 
 // ManualMCP reports whether the person registers the MCP server by hand,
@@ -86,33 +87,33 @@ var Agents = map[string]Agent{
 	"claude-code": {Name: "claude-code", Title: "Claude Code", Project: ".mcp.json", Global: ".claude.json",
 		Pointer: "CLAUDE.md", GlobalPointer: ".claude/CLAUDE.md",
 		Hook: ".claude/settings.json", GlobalHook: ".claude/settings.json",
-		SessionEnv: "CLAUDE_CODE_SESSION_ID", format: jsonClaude, hook: claudeHook,
+		SessionEnv: "CLAUDE_CODE_SESSION_ID", format: jsonClaude, hooks: claudeHooks,
 		Note: "Claude Code asks each person to approve a project's .mcp.json servers the first time it opens the project."},
 	"codex": {Name: "codex", Title: "Codex", Project: ".codex/config.toml", Global: ".codex/config.toml",
 		Pointer: "AGENTS.md", GlobalPointer: ".codex/AGENTS.md",
 		Hook: ".codex/hooks.json", GlobalHook: ".codex/hooks.json",
-		format: tomlCodex, hook: codexHook,
+		format: tomlCodex, hooks: []hookStyle{codexHook},
 		Note: "Codex reads a project's .codex/config.toml only once the project is trusted, and runs its .codex/hooks.json only once you trust the hooks with /hooks."},
 	"gemini": {Name: "gemini", Title: "Gemini CLI", Project: ".gemini/settings.json", Global: ".gemini/settings.json",
 		Pointer: "GEMINI.md", GlobalPointer: ".gemini/GEMINI.md",
 		Hook: ".gemini/settings.json", GlobalHook: ".gemini/settings.json",
-		format: jsonGemini, hook: geminiHook,
+		format: jsonGemini, hooks: []hookStyle{geminiHook},
 		Note: "Gemini CLI loads a project's .gemini/settings.json, its MCP server and hooks included, only in a trusted folder: trust the folder when Gemini CLI asks."},
 	"cursor": {Name: "cursor", Title: "Cursor", Project: ".cursor/mcp.json", Global: ".cursor/mcp.json",
 		Pointer: ".cursor/rules/starfix.mdc", // user rules live in Cursor's settings, not a file
 		Hook:    ".cursor/hooks.json", GlobalHook: ".cursor/hooks.json",
-		format: jsonGemini, pointer: cursorRule, hook: cursorHook,
+		format: jsonGemini, pointer: cursorRule, hooks: []hookStyle{cursorHook},
 		Note: "Cursor starts a project's .cursor/mcp.json servers only once enabled: turn starfix on in Cursor Settings › MCP."},
 	"vscode": {Name: "vscode", Title: "VS Code", Project: ".vscode/mcp.json",
 		NoGlobal: "drop --global and commit .vscode/mcp.json, or run `MCP: Add Server` in VS Code and choose Global",
 		Pointer:  ".github/copilot-instructions.md",
 		Hook:     ".github/hooks/starfix.json",
-		format:   jsonVSCode, hook: vscodeHook,
+		format:   jsonVSCode, hooks: []hookStyle{vscodeHook},
 		Note: "VS Code asks you to trust the starfix server in .vscode/mcp.json before it starts it. Agent hooks are a Preview feature: .github/hooks/starfix.json runs only where VS Code has them enabled."},
 	"junie": {Name: "junie", Title: "Junie", Project: ".junie/mcp/mcp.json", Global: ".junie/mcp/mcp.json",
 		Pointer: "AGENTS.md", GlobalPointer: ".junie/AGENTS.md",
 		GlobalHook: ".junie/config.json", // Junie ignores hooks in a project's config
-		format:     jsonGemini, hook: claudeHook,
+		format:     jsonGemini, hooks: []hookStyle{claudeHook},
 		Note: "Junie runs hooks only from ~/.junie/config.json, never a project's: run `sfx setup junie --global --write` for the SessionStart hook."},
 	"jetbrains": {Name: "jetbrains", Title: "JetBrains AI Assistant",
 		NoGlobal: "drop --global: AI Assistant keeps its MCP servers in the IDE's settings, so add starfix there with scope Global",
@@ -259,7 +260,7 @@ type Kind int
 const (
 	KindMCP     Kind = iota // the MCP server registration
 	KindPointer             // the block in the agent's instruction file
-	KindHook                // the SessionStart hook
+	KindHook                // the hooks: SessionStart, and Claude Code's usage hooks
 )
 
 func (k Kind) String() string {
@@ -301,7 +302,7 @@ func (t Target) Apply(content []byte, e Entry) ([]byte, Result, error) {
 	case KindPointer:
 		return applyPointer(content, t.agent.pointer)
 	case KindHook:
-		return t.agent.hook.apply(content, e, t.agent.Name)
+		return applyHooks(t.agent.hooks, content, e, t.agent.Name)
 	}
 	return t.agent.Apply(content, e)
 }
@@ -314,7 +315,7 @@ func (t Target) Remove(content []byte, e Entry) ([]byte, Result, error) {
 	case KindPointer:
 		return removePointer(content, t.agent.pointer)
 	case KindHook:
-		return t.agent.hook.remove(content, e, t.agent.Name)
+		return removeHooks(t.agent.hooks, content, e, t.agent.Name)
 	}
 	return t.agent.remove(content, e)
 }
@@ -326,7 +327,7 @@ func (t Target) Registered(content []byte, e Entry) bool {
 	case KindPointer:
 		return pointerRegistered(content, t.agent.pointer)
 	case KindHook:
-		return t.agent.hook.registered(content, e, t.agent.Name)
+		return len(missingHooks(t.agent.hooks, content, e, t.agent.Name)) == 0
 	}
 	return t.agent.Registered(content, e)
 }
@@ -337,7 +338,16 @@ func (t Target) Snippet(e Entry) string {
 	case KindPointer:
 		return pointerSnippet(t.agent.pointer)
 	case KindHook:
-		return t.agent.hook.snippet(e, t.agent.Name)
+		return hooksSnippet(t.agent.hooks, e, t.agent.Name)
 	}
 	return t.agent.Snippet(e)
+}
+
+// MissingHooks lists the events whose starfix hook content lacks, as
+// Apply would write it, for a hook target; nil for any other kind.
+func (t Target) MissingHooks(content []byte, e Entry) []string {
+	if t.Kind != KindHook {
+		return nil
+	}
+	return missingHooks(t.agent.hooks, content, e, t.agent.Name)
 }

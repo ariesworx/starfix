@@ -174,8 +174,10 @@ them: the client sends what the harness recorded for each request (model,
 input, output, cache write and cache read), keyed by the harness's own
 request id, so sending a record twice stores it once. A count the harness
 did not report stays unknown, which `show` leaves out rather than printing
-0. (The client side that reads harness transcripts and hooks is not built
-yet; the server accepts records through the `usage` operation.)
+0. So far `sfx` captures Claude Code's tokens, from its local transcripts
+through hooks that `sfx setup claude-code` installs, and sends only the
+counts ([Token usage hooks](agents.md#token-usage-hooks-claude-code)).
+Other harnesses report time only until their capture is built.
 
 **Attribution** is worked out when you read it, from the claim history,
 and never stored. A request goes to the issue its session held at that

@@ -1,6 +1,7 @@
 // Package cli is sfx, the starfix client: the commands people run in a
 // terminal, `sfx mcp` for agents, `sfx prime` and its SessionStart hook,
-// `sfx setup` and `sfx upgrade`. cmd/sfx only wires the process to
+// `sfx usage --hook`, which sends Claude Code's token counts, `sfx setup`
+// and `sfx upgrade`. cmd/sfx only wires the process to
 // [Run].
 //
 // [Run] executes one command line in an [Env], which holds everything the
