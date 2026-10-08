@@ -47,26 +47,26 @@ func explain(err error) toolErr {
 }
 
 // nextStep is the agent's next step after a server refusal. It tells
-// refusals apart by the opening words of the server's fix (written in
-// internal/server), so rewording a fix there means updating its match
-// here. The unit tests use copies of that wording; only the end-to-end
-// tests, which reach a few of the pairs, would catch a drift.
+// refusals apart by their code and the proto.Fix phrase their fix opens
+// with (FixNothing is a whole fix, FixEditText an ending). internal/server
+// writes those fixes with the same phrases, and its TestFixPhrases fails
+// if a fix loses its phrase.
 func nextStep(pe *proto.Error) string {
 	switch pe.Code {
 	case proto.CodeNotFound:
-		if strings.HasPrefix(pe.Fix, "see what holds work back") {
+		if strings.HasPrefix(pe.Fix, proto.FixSeeBlocked) {
 			return "nothing is ready: call blocked to see why, or create an issue"
 		}
 		return "find the id with list or ready"
 	case proto.CodeConflict:
 		switch {
-		case strings.HasPrefix(pe.Fix, "take that one"):
+		case strings.HasPrefix(pe.Fix, proto.FixTakeNext):
 			return "call start with the next ready id named above"
-		case strings.HasPrefix(pe.Fix, "take it over"):
+		case strings.HasPrefix(pe.Fix, proto.FixTakeOver):
 			return "another session of yours holds it: call start with take: true only if the user says that session has stopped; otherwise pick other work"
-		case strings.HasPrefix(pe.Fix, "leave it to"):
+		case strings.HasPrefix(pe.Fix, proto.FixLeaveIt):
 			return "someone else holds this issue: pick other work with start, or tell the user if it must move"
-		case strings.HasPrefix(pe.Fix, "re-read"):
+		case strings.HasPrefix(pe.Fix, proto.FixReread):
 			return "call show for the current rev, then retry with that rev if your change still applies"
 		}
 		return "retry"
@@ -76,25 +76,25 @@ func nextStep(pe *proto.Error) string {
 		return "remove an edge with dep (action rm), or choose another parent"
 	case proto.CodeInvalid:
 		switch {
-		case strings.HasPrefix(pe.Fix, "reopen"):
+		case strings.HasPrefix(pe.Fix, proto.FixReopen):
 			return "call reopen first"
-		case strings.HasPrefix(pe.Fix, "take it with"):
+		case strings.HasPrefix(pe.Fix, proto.FixStart):
 			return "call start to take it; update cannot set in_progress"
-		case strings.HasPrefix(pe.Fix, "finish it, or let it go"):
+		case strings.HasPrefix(pe.Fix, proto.FixRelease):
 			return "it is claimed: call finish or handoff with release: true first if it is yours; otherwise leave it"
-		case pe.Fix == "nothing to do":
+		case pe.Fix == proto.FixNothing:
 			return "nothing to do"
-		case strings.HasPrefix(pe.Fix, "upgrade"):
+		case strings.HasPrefix(pe.Fix, proto.FixUpgrade):
 			return "tell the user" + personFix(pe)
 		}
 		return "correct the arguments and retry"
 	case proto.CodeAcceptance:
-		if strings.HasSuffix(pe.Fix, "then edit the text") {
+		if strings.HasSuffix(pe.Fix, proto.FixEditText) {
 			return "the edit drops open acceptance items: keep them in the text, or tell the user they must be ticked or waived first"
 		}
 		return "call finish with ticked: [numbers met] and waived: {number: reason} for the rest; show lists the items"
 	case proto.CodeForbidden:
-		if strings.HasPrefix(pe.Fix, "ask ") {
+		if strings.HasPrefix(pe.Fix, proto.FixAsk) {
 			return "someone else holds this issue: do not change it; leave a comment, pick other work with start, or tell the user"
 		}
 		return "this is for a starfix admin: tell the user"

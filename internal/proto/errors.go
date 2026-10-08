@@ -57,3 +57,43 @@ func (e *Error) Error() string {
 func Errf(code Code, fix, msg string) *Error {
 	return &Error{Code: code, Message: msg, Fix: fix}
 }
+
+// Fix phrases. sfx mcp tells some refusals apart by their code and the
+// phrase their fix opens with, and turns each into an agent's next step
+// (internal/mcpserver). The server writes those fixes with these phrases,
+// so the two cannot drift apart. They are wire text that released clients
+// match too, so keep each as it is. FixNothing is a whole fix, and
+// FixEditText the end of one.
+const (
+	// FixSeeBlocked: not_found, nothing is ready to start.
+	FixSeeBlocked = "see what holds work back"
+	// FixTakeNext: conflict, another principal holds the issue; the next
+	// ready one is named.
+	FixTakeNext = "take that one"
+	// FixTakeOver: conflict, another session of the caller's principal
+	// holds the issue.
+	FixTakeOver = "take it over"
+	// FixLeaveIt: conflict, another principal holds the issue, and nothing
+	// else is ready.
+	FixLeaveIt = "leave it to"
+	// FixReread: conflict, the issue changed since the caller's rev.
+	FixReread = "re-read"
+	// FixReopen: invalid, the issue is closed.
+	FixReopen = "reopen"
+	// FixStart: invalid, update cannot set in_progress; start does.
+	FixStart = "take it with"
+	// FixRelease: invalid, a status or assignee change to a claimed issue.
+	FixRelease = "finish it, or let it go"
+	// FixNothing: invalid, the whole fix when the issue is already as
+	// asked.
+	FixNothing = "nothing to do"
+	// FixUpgrade: invalid, the request does not fit this server's
+	// protocol, such as an unknown operation or argument.
+	FixUpgrade = "upgrade"
+	// FixEditText: acceptance, the end of the fix when an edit drops
+	// acceptance items still open.
+	FixEditText = "then edit the text"
+	// FixAsk: forbidden, another principal holds the issue, whom the fix
+	// asks.
+	FixAsk = "ask "
+)

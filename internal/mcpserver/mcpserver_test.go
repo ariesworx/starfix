@@ -329,6 +329,9 @@ func TestWritesAreCompact(t *testing.T) {
 	}
 }
 
+// Each fix below is written out as servers send it, not built from
+// proto's Fix phrases, so that changing a phrase, which released servers
+// and clients still use, fails here.
 func TestErrorsNameTheNextStep(t *testing.T) {
 	tests := []struct {
 		name string
@@ -360,6 +363,8 @@ func TestErrorsNameTheNextStep(t *testing.T) {
 			"invalid: status in_progress is set only by start\nfix: call start to take it; update cannot set in_progress"},
 		{"claimed fields", proto.Errf(proto.CodeInvalid, "finish it, or let it go with `sfx handoff sf-x --release` first", "issue sf-x is claimed by bob/s-b"),
 			"invalid: issue sf-x is claimed by bob/s-b\nfix: it is claimed: call finish or handoff with release: true first if it is yours; otherwise leave it"},
+		{"nothing to do", proto.Errf(proto.CodeInvalid, "nothing to do", "invalid input: issue sf-x is already closed"),
+			"invalid: invalid input: issue sf-x is already closed\nfix: nothing to do"},
 		{"acceptance dropped", proto.Errf(proto.CodeAcceptance, "tick them with `sfx accept sf-x 2`, or waive each with `sfx accept sf-x N --waive REASON`, then edit the text",
 			"the new acceptance text of sf-x drops items neither ticked nor waived: 2"),
 			"acceptance: the new acceptance text of sf-x drops items neither ticked nor waived: 2\nfix: the edit drops open acceptance items: keep them in the text, or tell the user they must be ticked or waived first"},

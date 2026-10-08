@@ -39,7 +39,7 @@ func (s *Server) watch(ctx context.Context, sess *session, raw json.RawMessage) 
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&in); err != nil {
-			return nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server", fmt.Sprintf("bad arguments: %v", err))
+			return nil, proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server", fmt.Sprintf("bad arguments: %v", err))
 		}
 	}
 	if p := sess.push; p != nil {

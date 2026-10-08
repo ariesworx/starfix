@@ -374,7 +374,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 			return
 		}
 		if f.T != proto.FrameReq {
-			_ = s.send(sess, f.ID, nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+			_ = s.send(sess, f.ID, nil, proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server",
 				fmt.Sprintf("unexpected %q frame after the handshake", f.T)))
 			return
 		}
@@ -476,7 +476,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 		return sess, errors.Join(e, sess.enc.Encode(w))
 	}
 	if f.T != proto.FrameHello {
-		return refuse(proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+		return refuse(proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server",
 			fmt.Sprintf("expected a hello, got a %q frame", f.T)))
 	}
 	if e := proto.CheckProto(f.Proto, s.cfg.ProtoMin, s.cfg.ProtoMax, s.cfg.Version); e != nil {

@@ -70,7 +70,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 			strings.TrimSuffix(text, ": "+store.ErrCycle.Error())+", so this would make a cycle")
 
 	case errors.Is(err, store.ErrStatusInProgress):
-		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("take it with `sfx start %s`, which claims it", id),
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf(proto.FixStart+" `sfx start %s`, which claims it", id),
 			"status in_progress is set only by start")
 
 	case errors.Is(err, store.ErrInvalid):
@@ -79,13 +79,13 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 			switch state.Reason {
 			case store.StateClaimed:
 				return proto.Errf(proto.CodeInvalid,
-					fmt.Sprintf("finish it, or let it go with `sfx handoff %s --release` first; only the holder or an admin can", id),
+					fmt.Sprintf(proto.FixRelease+" with `sfx handoff %s --release` first; only the holder or an admin can", id),
 					strings.TrimPrefix(msg, store.ErrInvalid.Error()+": "))
 			case store.StateClosed:
-				return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `sfx reopen %s`", id),
+				return proto.Errf(proto.CodeInvalid, fmt.Sprintf(proto.FixReopen+" it with `sfx reopen %s`", id),
 					strings.TrimSuffix(msg, "; reopen it first"))
 			case store.StateAlreadyClosed, store.StateNotClosed:
-				return proto.Errf(proto.CodeInvalid, "nothing to do", msg)
+				return proto.Errf(proto.CodeInvalid, proto.FixNothing, msg)
 			}
 		}
 		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("correct it and retry; `sfx %s -h` lists the options", command(op)), text)
@@ -114,7 +114,7 @@ func unmetErr(op string, e *store.AcceptanceError) *proto.Error {
 	}
 	if e.Dropped {
 		return proto.Errf(proto.CodeAcceptance,
-			fmt.Sprintf("tick them with `sfx accept %s %s`, or waive each with `sfx accept %s N --waive REASON`, then edit the text",
+			fmt.Sprintf("tick them with `sfx accept %s %s`, or waive each with `sfx accept %s N --waive REASON`, "+proto.FixEditText,
 				e.ID, strings.Join(nums, " "), e.ID), e.Error())
 	}
 	fix := fmt.Sprintf("tick what is met with `sfx accept %s %s`, or waive an item with `sfx accept %s N --waive REASON`",
@@ -135,7 +135,7 @@ func forbiddenErr(e *store.ForbiddenError) *proto.Error {
 	}
 	h := e.Holder
 	return proto.Errf(proto.CodeForbidden,
-		fmt.Sprintf("ask %s to hand it off (`sfx handoff %s --release`), wait for the lease to run out, or ask a starfix admin; `sfx comment %s` works on any issue",
+		fmt.Sprintf(proto.FixAsk+"%s to hand it off (`sfx handoff %s --release`), wait for the lease to run out, or ask a starfix admin; `sfx comment %s` works on any issue",
 			h.Principal, e.ID, e.ID),
 		fmt.Sprintf("%s is held by %s (session %s) until %s; only the holder or an admin may change it",
 			e.ID, h.Principal, h.Session, e.Until.UTC().Format(time.RFC3339)))
@@ -144,7 +144,7 @@ func forbiddenErr(e *store.ForbiddenError) *proto.Error {
 // conflict explains a failed compare-and-swap: who moved the issue to
 // which revision, or that concurrent writers kept winning.
 func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Error {
-	reread := fmt.Sprintf("re-read with `sfx show %s`", id)
+	reread := fmt.Sprintf(proto.FixReread+" with `sfx show %s`", id)
 	if id == "" || rev < 1 {
 		return proto.Errf(proto.CodeConflict, "retry", "the change lost to concurrent writes")
 	}
@@ -172,15 +172,15 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 func (s *Server) held(ctx context.Context, h *store.HeldError) *proto.Error {
 	if h.Own {
 		return proto.Errf(proto.CodeConflict,
-			fmt.Sprintf("take it over with `sfx start %s --take` only if that session has stopped; it loses the claim", h.ID),
+			fmt.Sprintf(proto.FixTakeOver+" with `sfx start %s --take` only if that session has stopped; it loses the claim", h.ID),
 			fmt.Sprintf("%s is held by your session %s", h.ID, h.Session))
 	}
 	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
 	next, err := s.cfg.Store.Ready(ctx, 1)
 	if err != nil || len(next) == 0 {
-		return proto.Errf(proto.CodeConflict, fmt.Sprintf("leave it to %s; nothing else is ready, so see `sfx blocked`", h.By),
+		return proto.Errf(proto.CodeConflict, fmt.Sprintf(proto.FixLeaveIt+" %s; nothing else is ready, so see `sfx blocked`", h.By),
 			msg+"; nothing else is ready")
 	}
-	return proto.Errf(proto.CodeConflict, fmt.Sprintf("take that one with `sfx start %s`", next[0].ID),
+	return proto.Errf(proto.CodeConflict, fmt.Sprintf(proto.FixTakeNext+" with `sfx start %s`", next[0].ID),
 		fmt.Sprintf("%s; next ready: %s", msg, next[0].ID))
 }

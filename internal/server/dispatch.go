@@ -23,7 +23,7 @@ import (
 func (s *Server) Dispatch(ctx context.Context, actor store.Actor, op string, args json.RawMessage) (any, *proto.Error) {
 	h, ok := handlers[op]
 	if !ok {
-		return nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server, or check the operation name",
+		return nil, proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server, or check the operation name",
 			fmt.Sprintf("unknown operation %q", op))
 	}
 	return h(ctx, s, actor, args)
@@ -69,7 +69,7 @@ func typed[A any](fn func(ctx context.Context, s *Server, a store.Actor, args A)
 			dec := json.NewDecoder(bytes.NewReader(raw))
 			dec.DisallowUnknownFields()
 			if err := dec.Decode(&args); err != nil {
-				return nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+				return nil, proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server",
 					fmt.Sprintf("bad arguments: %v", err))
 			}
 		}
@@ -388,7 +388,7 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 	}
 	is, claim, err := s.cfg.Store.StartIssue(ctx, a, store.IssueID(in.ID), d, in.Take)
 	if errors.Is(err, store.ErrNothingReady) {
-		return nil, proto.Errf(proto.CodeNotFound, "see what holds work back with `sfx blocked`, or create an issue",
+		return nil, proto.Errf(proto.CodeNotFound, proto.FixSeeBlocked+" with `sfx blocked`, or create an issue",
 			"nothing is ready to start")
 	}
 	if err != nil {
