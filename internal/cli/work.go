@@ -271,10 +271,10 @@ func cmdAway(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	d, err := one(usage, pos, "away")
-	if err != nil {
-		return err
+	if len(pos) != 1 {
+		return usagef(usage, "away needs exactly one duration")
 	}
+	d := pos[0]
 	if _, err := proto.ParseDuration(d); err != nil {
 		return usagef(usage, "%q: %v", d, err)
 	}
