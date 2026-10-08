@@ -1,2 +1,11 @@
 # Worktrees that Claude Code subagents create for isolated work.
 .claude/worktrees/
+
+# Editor and IDE settings are personal; keep them out of the repository.
+.idea/
+*.iml
+.vscode/
+.fleet/
+.zed/
+*.code-workspace
+.DS_Store
