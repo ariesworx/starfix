@@ -144,12 +144,17 @@ server, and a 30-second timeout. Each run:
   `~/Library/Caches` on macOS, `%LocalAppData%` on Windows), mode 0600 in
   a 0700 directory. A file that was truncated or replaced is read from
   its start;
-- sends one record per API request: the harness, the request id, the
+- sends one record per API request: the harness, the message id, the
   model, the time, and the input, output, cache-write (with its one-hour
   part) and cache-read counts. A count the transcript lacks is sent as
   unknown, not 0. The offsets move only once the server has accepted the
   records, so a failed send is retried by the next hook, and the server
-  keeps one record per request, so nothing is counted twice.
+  keeps one record per request, so nothing is counted twice;
+- waits for a response to finish. Claude Code writes a response one line
+  per content block, its output count growing to the last line's, so a
+  response is sent only once a later line follows it. A file's last
+  response waits for the next hook, and SessionEnd sends whatever is
+  left.
 
 **Only counts leave your machine.** The transcripts hold your whole
 conversation, but `sfx` reads them locally and keeps only the fields
