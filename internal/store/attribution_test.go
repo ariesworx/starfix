@@ -111,7 +111,9 @@ func TestIssueUsageAcrossHandoffAndTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.add(5 * time.Minute) // nobody holds it
-	if _, _, err := s.StartIssue(ctx, bob, is.ID, 0, false); err != nil {
+	// bob's lease outlasts his 20m, as if he renewed: a lapsed lease
+	// would end his hold early (TestIssueUsageReleaseThenTake).
+	if _, _, err := s.StartIssue(ctx, bob, is.ID, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 	clk.add(20 * time.Minute)
