@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -374,6 +376,117 @@ func TestServeRefusesPeer(t *testing.T) {
 		if a.Session == "s-refused" {
 			t.Errorf("refused peer registered an agent: %+v", a)
 		}
+	}
+}
+
+// acceptResult is one answer to a fakeListener's Accept.
+type acceptResult struct {
+	c   net.Conn
+	err error
+}
+
+// fakeListener answers each Accept with the next result sent on next,
+// and with net.ErrClosed once it is closed.
+type fakeListener struct {
+	next      chan acceptResult
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newFakeListener() *fakeListener {
+	return &fakeListener{next: make(chan acceptResult), closed: make(chan struct{})}
+}
+
+func (l *fakeListener) Accept() (net.Conn, error) {
+	select {
+	case r := <-l.next:
+		return r.c, r.err
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *fakeListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *fakeListener) Addr() net.Addr { return &net.UnixAddr{Name: "fake.sock", Net: "unix"} }
+
+// An Accept error that may pass is logged and retried. Any other ends
+// Serve promptly, though the reaper runs and a client is connected: it
+// closes the listener and the connections, stops the reaper, and returns
+// the error.
+func TestServeAcceptErrors(t *testing.T) {
+	emfile := &net.OpError{Op: "accept", Net: "unix", Err: os.NewSyscallError("accept", syscall.EMFILE)}
+	broken := errors.New("listener broke")
+	tests := []struct {
+		name  string
+		steps []error // each Accept's answer in turn; nil is a client that completes its handshake
+		warns int     // retries logged
+	}{
+		{name: "a lasting error ends Serve", steps: []error{broken}},
+		{name: "running out of descriptors is retried", steps: []error{emfile, emfile, broken}, warns: 2},
+		{name: "a lasting error closes the connections", steps: []error{nil, broken}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newServer(t)
+			var logs bytes.Buffer // read only once Serve has returned
+			s.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			l := newFakeListener()
+			ctx, cancel := context.WithCancel(t.Context())
+			served := make(chan error, 1)
+			var wg sync.WaitGroup
+			wg.Go(func() { served <- s.Serve(ctx, l) })
+			// A Serve that hangs is ended through ctx, so that it returns
+			// before the test does.
+			t.Cleanup(func() { cancel(); wg.Wait() })
+			timeout := time.After(10 * time.Second)
+			for i, step := range tc.steps {
+				r := acceptResult{err: step}
+				var cli net.Conn
+				if step == nil {
+					r.c, cli = net.Pipe()
+					_ = cli.SetDeadline(time.Now().Add(10 * time.Second))
+				}
+				select {
+				case l.next <- r:
+				case <-timeout:
+					t.Fatalf("Serve stopped accepting before step %d (%v)", i, step)
+				}
+				if cli == nil {
+					continue
+				}
+				enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
+				if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: alice.Principal}); err != nil {
+					t.Fatal(err)
+				}
+				if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: alice.Session,
+					Machine: alice.Machine}); err != nil {
+					t.Fatal(err)
+				}
+				if w, err := dec.Decode(); err != nil || w.Err != nil {
+					t.Fatalf("welcome = %+v, %v", w, err)
+				}
+			}
+			select {
+			case err := <-served:
+				if !errors.Is(err, broken) {
+					t.Errorf("Serve = %v, want %v", err, broken)
+				}
+			case <-timeout:
+				t.Fatal("Serve did not return after a lasting Accept error")
+			}
+			select {
+			case <-l.closed:
+			default:
+				t.Error("Serve returned with the listener open")
+			}
+			if got := strings.Count(logs.String(), "level=WARN"); got != tc.warns {
+				t.Errorf("%d warnings, want %d:\n%s", got, tc.warns, logs.String())
+			}
+		})
 	}
 }
 
