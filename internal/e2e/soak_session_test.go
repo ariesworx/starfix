@@ -108,7 +108,7 @@ func (ln *line) push(p proto.Push) {
 			ln.log.got = map[int64]proto.InboxItem{}
 		}
 		ln.log.got[p.Item.ID] = *p.Item
-		if ln.cur == nil || ln.cur.start.IsZero() {
+		if ln.cur == nil {
 			ln.mon.fail("", "%s was pushed inbox item %d on connection %d before any watch", ln.key, p.Item.ID, ln.conn)
 		}
 		if p.Item.Session != "" && p.Item.Session != ln.key.session {
@@ -117,7 +117,7 @@ func (ln *line) push(p proto.Push) {
 	case p.Event != nil:
 		w := ln.cur
 		switch {
-		case w == nil || w.start.IsZero() || !w.events:
+		case w == nil || !w.events:
 			ln.mon.fail(p.Event.Issue, "%s was pushed event %d on connection %d, which did not watch for events", ln.key, p.Event.Seq, ln.conn)
 		case w.resync:
 			ln.mon.fail(p.Event.Issue, "%s was pushed event %d on connection %d after a resync", ln.key, p.Event.Seq, ln.conn)
@@ -130,16 +130,31 @@ func (ln *line) push(p proto.Push) {
 	}
 }
 
-// watched opens a window at start, the time the watch was acknowledged;
-// events says the watch asked for issue events.
-func (ln *line) watched(start time.Time, events bool) {
+// watching opens a window as a watch is sent: the server may push before
+// it answers, so pushes are accepted from now, and owed once the answer
+// arrives. events says the watch asks for issue events.
+func (ln *line) watching(events bool) {
 	ln.log.mu.Lock()
 	defer ln.log.mu.Unlock()
-	if ln.cur != nil && !ln.cur.start.IsZero() && !ln.cur.resync {
+	switch w := ln.cur; {
+	case w != nil && !w.start.IsZero() && !w.resync:
 		return // watching again while watched changes nothing
+	case w != nil && w.start.IsZero():
+		w.events = w.events || events // an unanswered watch, sent again
+		return
 	}
-	ln.cur = &window{key: ln.key, conn: ln.conn, start: start, events: events, got: map[int64]proto.Event{}}
+	ln.cur = &window{key: ln.key, conn: ln.conn, events: events, got: map[int64]proto.Event{}}
 	ln.log.windows = append(ln.log.windows, ln.cur)
+}
+
+// watched starts what the window opened by watching is owed: from start,
+// the time the watch was acknowledged.
+func (ln *line) watched(start time.Time) {
+	ln.log.mu.Lock()
+	defer ln.log.mu.Unlock()
+	if w := ln.cur; w != nil && w.start.IsZero() {
+		w.start = start
+	}
 }
 
 // broke marks the line's window as ended by a failed connection.
@@ -363,8 +378,9 @@ func (ls *libSession) connect(ctx context.Context) bool {
 			continue
 		}
 		var wr proto.WatchResult
+		ln.watching(ls.events)
 		if out, _ := ls.s.do(ls.session, c, proto.OpWatch, proto.WatchArgs{Events: ls.events}, &wr); out == acked {
-			ln.watched(ls.s.clock.now(), ls.events)
+			ln.watched(ls.s.clock.now())
 		}
 		if c.Err() != nil {
 			_ = c.Close()
@@ -577,8 +593,9 @@ func (ls *libSession) start(ctx context.Context, id string, take bool) {
 func (ls *libSession) rewatch(ctx context.Context) {
 	ls.s.stats.rewatches.Add(1)
 	var wr proto.WatchResult
+	ls.ln.watching(ls.events)
 	if out, _ := ls.call(ctx, proto.OpWatch, proto.WatchArgs{Events: ls.events}, &wr, false); out == acked && ls.ln != nil {
-		ls.ln.watched(ls.s.clock.now(), ls.events)
+		ls.ln.watched(ls.s.clock.now())
 	}
 }
 
@@ -910,11 +927,15 @@ type tracedConn struct {
 }
 
 func (c *tracedConn) Call(_ context.Context, op string, args, res any) error {
+	a, watch := args.(proto.WatchArgs)
+	if watch {
+		c.ln.watching(a.Events)
+	}
 	out, perr := c.ss.s.do(c.ss, c.RepoConn, op, args, res)
 	switch out {
 	case acked:
-		if a, ok := args.(proto.WatchArgs); ok {
-			c.ln.watched(c.ss.s.clock.now(), a.Events)
+		if watch {
+			c.ln.watched(c.ss.s.clock.now())
 		}
 		return nil
 	case refused:
