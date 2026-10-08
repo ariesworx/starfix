@@ -16,7 +16,8 @@ The [CLI reference](cli.md) and the [agent guide](agents.md) build on it.
   ([Sessions](agents.md#sessions)).
 
 The names `starfixd` (the server's own actions, such as ending expired
-claims) and `import` (the bd importer) are reserved.
+claims), `import` (the bd importer) and `starfixd-upgrade` (the health
+check `starfixd upgrade` runs) are reserved.
 
 ## Issues
 
