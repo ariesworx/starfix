@@ -757,7 +757,7 @@ func (r *replay) override(e sevent) {
 // an admin.override in the same transaction, or once the lease lapsed,
 // which is checked when the claim's end is known.
 func (r *replay) guard(e sevent, f txFacts) {
-	c := r.claim(e.target)
+	c := r.claimAtChange(e.target)
 	if c.holder == (sessKey{}) || c.holder.principal == e.actor.principal || e.actor == reaper {
 		return
 	}

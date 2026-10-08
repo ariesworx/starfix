@@ -231,6 +231,15 @@ func TestReplayCatches(t *testing.T) {
 			guards: 1,
 		},
 		{
+			name: "a close by another principal under a claim, after its release",
+			log: func(b *logBuilder) *logBuilder {
+				b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "")
+				b.add(time.Minute, bob, "claim.release", "sf-1", b.claimOf(alice, 1, 17*time.Minute), "")
+				return b.add(0, bob, "issue.close", "sf-1", `{"status": "in_progress"}`, `{"status": "closed", "close_reason": "closed bob-1"}`)
+			},
+			guards: 1, // the close, made under alice's claim, which its release ended
+		},
+		{
 			name: "a change by an admin under a claim, with its override",
 			log: func(b *logBuilder) *logBuilder {
 				b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "")
