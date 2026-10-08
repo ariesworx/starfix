@@ -1,0 +1,16 @@
+^[[1mstarfix demo^[[0m                                                                                    ^[[32mlive^[[0m
+^[[1mReady 2^[[0m                                            ^[[1mHeld 1^[[0m
+^[[7m> ^[[0m^[[7msf-r1 P1 ^[[0m^[[7mWrite the parser^[[0m                          sf-h1 P0 alice/cc-1234 ^[[2m42m^[[0m Fix the lexer
+  sf-r2 P2 ^[[33m[overlaps sf-h1]^[[0m Tidy the logs
+
+^[[1mBlocked 1^[[0m
+  sf-b1 P2 ^[[2m[by sf-r1 +1]^[[0m Ship it
+^[[1mEvents^[[0m
+  ^[[2m12:00:01^[[0m bob/cli claim.take sf-h1
+  ^[[2m12:00:02^[[0m bob/cli issue.close sf-x9
+
+
+
+
+
+^[[2mj/k move  enter open  r refresh  ? help  q quit^[[0m
