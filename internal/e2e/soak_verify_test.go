@@ -211,10 +211,6 @@ func (r *replay) compare(tb tables) {
 		case t.epoch != c.epoch:
 			r.fail(id, "claim on %s: epoch %d in the table, %d from the event log", id, t.epoch, c.epoch)
 		case t.holder == c.holder:
-			c.maybeReleased = false // the handoff did not release it
-		case c.maybeReleased && t.holder == (sessKey{}):
-			c.holder, c.maybeReleased = sessKey{}, false // the handoff did release it
-			r.unlogged++
 		default:
 			r.fail(id, "claim on %s: held by %q in the table, by %q from the event log", id, t.holder, c.holder)
 		}

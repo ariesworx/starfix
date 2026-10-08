@@ -250,14 +250,11 @@ type rIssue struct {
 	rev                                                   int64
 }
 
-// rClaim is an issue's claim as the replay rebuilds it. A releasing
-// handoff of an issue not in progress and unassigned clears the holder
-// with no event of its own, which the replay cannot tell from a handoff
-// that did not release: maybeReleased marks the holder as possibly gone.
+// rClaim is an issue's claim as the replay rebuilds it. Only claim
+// events change it: claim.take, claim.expire and claim.release.
 type rClaim struct {
-	holder        sessKey
-	epoch         int64
-	maybeReleased bool
+	holder sessKey
+	epoch  int64
 }
 
 // depKey is one edge.
@@ -345,9 +342,10 @@ type replay struct {
 	tx       []sevent             // events of the transaction being read
 	txs      int
 
-	// ambiguous counts releasing-or-not handoffs of a held issue not in
-	// progress; unlogged, the claims later found released by one.
-	ambiguous, unlogged int
+	// released holds, for the transaction being applied, the claims a
+	// claim.release in it ended, as they were: the change that caused the
+	// release was made under them.
+	released map[string]rClaim
 
 	mu        sync.Mutex // guards the replay between snapshots
 	openCount int        // issues not closed, as of the last snapshot
@@ -399,11 +397,11 @@ func (r *replay) flush() {
 // txFacts are what a transaction does to each issue, for rules that look
 // at the whole transaction.
 type txFacts struct {
-	create, update, handoff, override map[string]bool
+	create, update, override map[string]bool
 }
 
 func factsOf(tx []sevent) txFacts {
-	f := txFacts{create: map[string]bool{}, update: map[string]bool{}, handoff: map[string]bool{}, override: map[string]bool{}}
+	f := txFacts{create: map[string]bool{}, update: map[string]bool{}, override: map[string]bool{}}
 	for _, e := range tx {
 		switch e.op {
 		case "issue.create":
@@ -412,13 +410,6 @@ func factsOf(tx []sevent) txFacts {
 			f.update[e.target] = true
 		case "admin.override":
 			f.override[e.target] = true
-		case "comment.add":
-			var c struct {
-				Kind string `json:"kind"`
-			}
-			if json.Unmarshal(e.after, &c) == nil && c.Kind == "handoff" {
-				f.handoff[e.target] = true
-			}
 		}
 	}
 	return f
@@ -426,6 +417,7 @@ func factsOf(tx []sevent) txFacts {
 
 func (r *replay) apply(tx []sevent) {
 	f := factsOf(tx)
+	r.released = map[string]rClaim{}
 	for _, e := range tx {
 		if e.op != "usage.add" {
 			r.causes[causeKey(e.target, e.at)] = true
@@ -441,7 +433,7 @@ func (r *replay) apply(tx []sevent) {
 			if e.actor != reaper {
 				r.guard(e, f)
 			}
-			r.update(e, f)
+			r.update(e)
 		case "issue.close":
 			r.guard(e, f)
 			r.close(e)
@@ -499,6 +491,8 @@ func (r *replay) apply(tx []sevent) {
 			r.take(e)
 		case "claim.expire":
 			r.expire(e)
+		case "claim.release":
+			r.release(e)
 		case "admin.override":
 			r.override(e)
 		case "usage.add":
@@ -567,7 +561,7 @@ func (r *replay) patch(e sevent) {
 	}
 }
 
-func (r *replay) update(e sevent, f txFacts) {
+func (r *replay) update(e sevent) {
 	is := r.issues[e.target]
 	var s issueState
 	_ = json.Unmarshal(e.after, &s)
@@ -578,12 +572,6 @@ func (r *replay) update(e sevent, f txFacts) {
 	is.rev++
 	if s.Status != nil && *s.Status != "in_progress" {
 		r.endHold(e.target, e.at, time.Time{})
-	}
-	c := r.claim(e.target)
-	if f.handoff[e.target] && c.holder != (sessKey{}) {
-		// A releasing handoff: the claim ended before its note.
-		r.ends[issueEpoch{e.target, c.epoch}] = ended{at: e.at, op: "release"}
-		c.holder, c.maybeReleased = sessKey{}, false
 	}
 }
 
@@ -596,12 +584,11 @@ func (r *replay) close(e sevent) {
 	_ = json.Unmarshal(e.after, &s)
 	reason := deref(s.CloseReason)
 	r.markers[reason]++
-	c := r.claim(e.target)
+	c := r.claimAtChange(e.target)
 	r.closedAt[reason] = atEpoch{issue: e.target, epoch: c.epoch, holder: c.holder, actor: e.actor, seq: e.seq}
-	if c.holder != (sessKey{}) {
-		r.ends[issueEpoch{e.target, c.epoch}] = ended{at: e.at, op: "close"}
+	if now := r.claim(e.target); now.holder != (sessKey{}) {
+		r.fail(e.target, "event %d closes %s while %s holds epoch %d, with no claim.release", e.seq, e.target, now.holder, now.epoch)
 	}
-	c.holder, c.maybeReleased = sessKey{}, false
 	r.endHold(e.target, e.at, time.Time{})
 	r.patch(e)
 	is.rev++
@@ -618,12 +605,17 @@ func (r *replay) comment(e sevent, f txFacts) {
 		return
 	}
 	r.guard(e, f)
-	cl := r.claim(e.target)
+	cl := r.claimAtChange(e.target)
 	r.handedAt[c.Body] = atEpoch{issue: e.target, epoch: cl.epoch, holder: cl.holder, actor: e.actor, seq: e.seq}
-	if !f.update[e.target] && cl.holder != (sessKey{}) && r.issues[e.target].status != "in_progress" {
-		cl.maybeReleased = true
-		r.ambiguous++
+}
+
+// claimAtChange is the claim a change to issue was made under: the one a
+// claim.release earlier in its transaction ended, or the current one.
+func (r *replay) claimAtChange(issue string) rClaim {
+	if c, ok := r.released[issue]; ok {
+		return c
 	}
+	return *r.claim(issue)
 }
 
 func (r *replay) claim(id string) *rClaim {
@@ -635,7 +627,8 @@ func (r *replay) claim(id string) *rClaim {
 	return c
 }
 
-// claimState is a claim.take's before state, or a claim.expire's.
+// claimState is the before state of a claim.take, claim.expire or
+// claim.release: the claim it ends.
 type claimState struct {
 	Holder    struct{ Principal, Session string }
 	Epoch     int64
@@ -658,10 +651,8 @@ func (r *replay) take(e sevent) {
 		_ = json.Unmarshal(e.before, before)
 	}
 	switch {
-	case before == nil && c.holder != (sessKey{}) && !c.maybeReleased:
-		r.fail(e.target, "event %d takes epoch %d without naming %s, who held epoch %d", e.seq, after.Epoch, c.holder, c.epoch)
 	case before == nil && c.holder != (sessKey{}):
-		r.unlogged++ // the handoff did release it
+		r.fail(e.target, "event %d takes epoch %d without naming %s, who held epoch %d", e.seq, after.Epoch, c.holder, c.epoch)
 	case before != nil && c.holder == (sessKey{}):
 		r.fail(e.target, "event %d replaces a claim by %s/%s, but no claim was held", e.seq, before.Holder.Principal, before.Holder.Session)
 	case before != nil && (before.Holder.Principal != c.holder.principal || before.Holder.Session != c.holder.session || before.Epoch != c.epoch):
@@ -688,7 +679,7 @@ func (r *replay) take(e sevent) {
 		}
 	}
 	r.endHold(e.target, e.at, end)
-	c.holder, c.epoch, c.maybeReleased = e.actor, after.Epoch, false
+	c.holder, c.epoch = e.actor, after.Epoch
 	r.takers[issueEpoch{e.target, after.Epoch}] = e.actor
 	r.holds[e.target] = append(r.holds[e.target], &hold{issue: e.target, who: e.actor, start: e.at, open: true})
 }
@@ -701,7 +692,7 @@ func (r *replay) expire(e sevent) {
 	if e.actor != reaper {
 		r.fail(e.target, "event %d: claim.expire by %s, not the reaper", e.seq, e.actor)
 	}
-	if (who != c.holder && !c.maybeReleased) || b.Epoch != c.epoch {
+	if who != c.holder || b.Epoch != c.epoch {
 		r.fail(e.target, "event %d expires %s at epoch %d, but %s held epoch %d", e.seq, who, b.Epoch, c.holder, c.epoch)
 	}
 	if b.ExpiresAt.After(e.at) {
@@ -714,7 +705,35 @@ func (r *replay) expire(e sevent) {
 		end = b.ExpiresAt
 	}
 	r.endHold(e.target, e.at, end)
-	c.holder, c.maybeReleased = sessKey{}, false
+	c.holder = sessKey{}
+}
+
+// release applies a claim.release: a releasing handoff, a close or a
+// finish ended the claim its before state names, which must be the one
+// held. The holder is told unless it released its own claim, or the
+// claim had lapsed.
+func (r *replay) release(e sevent) {
+	c := r.claim(e.target)
+	var b claimState
+	_ = json.Unmarshal(e.before, &b)
+	who := sessKey{b.Holder.Principal, b.Holder.Session}
+	switch {
+	case c.holder == (sessKey{}):
+		r.fail(e.target, "event %d releases %s at epoch %d, but no one held epoch %d", e.seq, who, b.Epoch, b.Epoch)
+	case who != c.holder || b.Epoch != c.epoch:
+		r.fail(e.target, "event %d releases %s at epoch %d, but %s held epoch %d", e.seq, who, b.Epoch, c.holder, c.epoch)
+	}
+	r.released[e.target] = *c
+	r.ends[issueEpoch{e.target, b.Epoch}] = ended{at: e.at, exp: b.ExpiresAt, op: "release"}
+	if who != e.actor && b.ExpiresAt.After(e.at) {
+		r.notices = append(r.notices, notice{issue: e.target, to: who, at: e.at, seq: e.seq})
+	}
+	end := e.at
+	if b.ExpiresAt.Before(end) {
+		end = b.ExpiresAt
+	}
+	r.endHold(e.target, e.at, end)
+	c.holder = sessKey{}
 }
 
 func (r *replay) override(e sevent) {
@@ -727,7 +746,7 @@ func (r *replay) override(e sevent) {
 	if !r.admins[e.actor.principal] {
 		r.fail(e.target, "event %d: admin.override by %s, who is not an admin", e.seq, e.actor)
 	}
-	if (sessKey{a.Holder.Principal, a.Holder.Session} != c.holder && !c.maybeReleased) || a.Epoch != c.epoch {
+	if (sessKey{a.Holder.Principal, a.Holder.Session} != c.holder) || a.Epoch != c.epoch {
 		r.fail(e.target, "event %d overrides %s/%s at epoch %d, but %s held epoch %d", e.seq,
 			a.Holder.Principal, a.Holder.Session, a.Epoch, c.holder, c.epoch)
 	}

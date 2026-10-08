@@ -444,8 +444,8 @@ func (s *soak) report() {
 	b.WriteString("\n")
 	r := s.rep
 	r.mu.Lock()
-	fmt.Fprintf(&b, "  events %d in %d transactions; issues %d; claims taken %d, reaped %d; takeovers of a live claim %d; handoffs that may have released a claim unlogged %d, did %d\n",
-		r.seq, r.txs, len(r.issues), r.ops["claim.take"], r.ops["claim.expire"], len(r.overs), r.ambiguous, r.unlogged)
+	fmt.Fprintf(&b, "  events %d in %d transactions; issues %d; claims taken %d, reaped %d, released %d; takeovers of a live claim %d\n",
+		r.seq, r.txs, len(r.issues), r.ops["claim.take"], r.ops["claim.expire"], r.ops["claim.release"], len(r.overs))
 	r.mu.Unlock()
 	m := s.mon
 	m.mu.Lock()

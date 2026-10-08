@@ -74,8 +74,42 @@ func TestReplayCatches(t *testing.T) {
 					take(alice, "sf-1", 1, 15*time.Minute, "").
 					add(0, alice, "issue.update", "sf-1", `{"status": "open"}`, `{"status": "in_progress", "assignee": "alice"}`).
 					add(time.Minute, bob, "comment.add", "sf-1", "", `{"body": "note bob-1", "kind": "note"}`).
+					add(time.Minute, alice, "claim.release", "sf-1", b.claimOf(alice, 1, 17*time.Minute), "").
+					add(0, alice, "issue.close", "sf-1", `{"status": "in_progress"}`, `{"status": "closed", "close_reason": "done alice-2"}`)
+			},
+		},
+		{
+			name: "a close of an issue still held",
+			log: func(b *logBuilder) *logBuilder {
+				return b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "").
 					add(time.Minute, alice, "issue.close", "sf-1", `{"status": "in_progress"}`, `{"status": "closed", "close_reason": "done alice-2"}`)
 			},
+			want: "closes sf-1 while alice/s1 holds epoch 1",
+		},
+		{
+			name: "a release, then another principal's take",
+			log: func(b *logBuilder) *logBuilder {
+				b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "")
+				b.add(time.Minute, alice, "claim.release", "sf-1", b.claimOf(alice, 1, 17*time.Minute), "").
+					add(0, alice, "comment.add", "sf-1", "", `{"body": "handoff alice-2", "kind": "handoff"}`)
+				return b.take(bob, "sf-1", 2, 15*time.Minute, "")
+			},
+		},
+		{
+			name: "a release of a claim no one held",
+			log: func(b *logBuilder) *logBuilder {
+				b.create(alice, "sf-1")
+				return b.add(time.Minute, alice, "claim.release", "sf-1", b.claimOf(alice, 1, 17*time.Minute), "")
+			},
+			want: "releases alice/s1 at epoch 1, but no one held epoch 1",
+		},
+		{
+			name: "a release naming the wrong claim",
+			log: func(b *logBuilder) *logBuilder {
+				b.create(alice, "sf-1").take(alice, "sf-1", 1, 15*time.Minute, "")
+				return b.add(time.Minute, alice2, "claim.release", "sf-1", b.claimOf(alice2, 1, 17*time.Minute), "")
+			},
+			want: "releases alice/s2 at epoch 1, but alice/s1 held epoch 1",
 		},
 		{
 			name: "a gap in seq",
@@ -396,22 +430,22 @@ func TestCheckFencing(t *testing.T) {
 	}
 }
 
-// A releasing handoff of an issue that is not in progress clears the
-// claim without an event of its own, so the replay cannot tell it from a
-// handoff that kept the claim until the next take, or the table, says.
-func TestReplayAmbiguousRelease(t *testing.T) {
+// A claim that ends with no event of its own, as a releasing handoff of
+// an issue not in progress once did, fails the replay: the next take
+// replaces a holder the log says is still there.
+func TestReplaySilentRelease(t *testing.T) {
 	alice, bob := sessKey{"alice", "s1"}, sessKey{"bob", "s1"}
 	b := newLog().create(alice, "sf-1").take(alice, "sf-1", 1, time.Minute, "")
 	b.add(0, alice, "issue.update", "sf-1", `{"status": "open"}`, `{"status": "in_progress", "assignee": "alice"}`)
 	b.at += 5 * time.Minute // the lease lapsed; the reaper has not run
 	b.add(time.Minute, bob, "issue.update", "sf-1", `{"status": "in_progress", "assignee": "alice"}`, `{"status": "blocked", "assignee": null}`)
-	b.add(time.Minute, alice, "comment.add", "sf-1", "", `{"body": "handoff alice-2", "kind": "handoff"}`)
+	b.add(time.Minute, alice, "comment.add", "sf-1", "", `{"body": "handoff alice-2", "kind": "handoff"}`) // no claim.release
 	b.take(bob, "sf-1", 2, time.Minute, "")
 	var got []string
 	r := newReplay(func(_, format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) }, nil)
 	r.feed(b.evs)
 	r.flush()
-	if len(got) > 0 || r.ambiguous != 1 || r.unlogged != 1 {
-		t.Errorf("replay found %q, %d ambiguous and %d unlogged releases; want none, 1 and 1", got, r.ambiguous, r.unlogged)
+	if want := "without naming alice/s1"; len(got) != 1 || !strings.Contains(got[0], want) {
+		t.Errorf("replay of a silent release found %q, want one violation containing %q", got, want)
 	}
 }
