@@ -176,17 +176,27 @@ func wireHandoff(h store.Handoff, viewer store.Actor) proto.Handoff {
 
 // eventState is an event's before or after state as viewer reads it: a
 // handoff's worktree in a comment.add event goes only to the author's own
-// principal, as in wireHandoff.
+// principal, as in wireHandoff. A state that does not parse, or whose
+// handoff does not, is withheld from everyone else: only a corrupt or
+// planted row has one, and it may hold the worktree where it cannot be
+// taken out.
 func eventState(e store.Event, state json.RawMessage, viewer store.Actor) json.RawMessage {
 	if e.Op != store.OpCommentAdd || e.Actor.Principal == viewer.Principal || len(state) == 0 {
 		return state
 	}
 	var m map[string]json.RawMessage
 	if json.Unmarshal(state, &m) != nil {
-		return state
+		return nil
 	}
-	var h map[string]json.RawMessage
-	if json.Unmarshal(m["handoff"], &h) != nil || h["worktree"] == nil {
+	raw, ok := m["handoff"]
+	if !ok {
+		return state // a plain comment
+	}
+	var h map[string]json.RawMessage // nil for a null handoff
+	if json.Unmarshal(raw, &h) != nil {
+		return nil
+	}
+	if h["worktree"] == nil {
 		return state
 	}
 	delete(h, "worktree")

@@ -68,6 +68,14 @@ func newServer(t *testing.T) *Server {
 // newServerWith is newServer with limits, the store's included.
 func newServerWith(t *testing.T, lim Limits) *Server {
 	t.Helper()
+	s, _ := newServerDSN(t, lim)
+	return s
+}
+
+// newServerDSN is newServerWith that also returns the store's DSN, for
+// tests that plant rows the store would not write.
+func newServerDSN(t *testing.T, lim Limits) (*Server, string) {
+	t.Helper()
 	if errors.Is(doltErr, dolttest.ErrNoDolt) {
 		t.Skip("dolt is not on PATH: install dolt to run the server tests")
 	}
@@ -89,7 +97,7 @@ func newServerWith(t *testing.T, lim Limits) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s, dsn
 }
 
 var (
