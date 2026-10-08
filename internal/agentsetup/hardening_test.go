@@ -232,8 +232,8 @@ func TestTOMLString(t *testing.T) {
 }
 
 // A hook is starfix's only when its whole command is one program token
-// running prime --hook: a person's compound command that ends the same
-// way is theirs (C-10).
+// running prime --hook, or usage --hook: a person's compound command that
+// ends the same way is theirs (C-10).
 func TestOurHookExact(t *testing.T) {
 	tests := []struct {
 		cmd  string
@@ -256,8 +256,33 @@ func TestOurHookExact(t *testing.T) {
 	}
 	for _, tc := range tests {
 		h := object{{"type", mustJSON("command")}, {"command", mustJSON(tc.cmd)}}
-		if got := ourHook(h, DefaultEntry, "claude-code"); got != tc.want {
-			t.Errorf("ourHook(%q) = %v, want %v", tc.cmd, got, tc.want)
+		if got := claudeHook.ours(h, DefaultEntry, "claude-code"); got != tc.want {
+			t.Errorf("prime hook ours(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+	// The usage hooks are owned the same way, and each verb owns only its
+	// own command.
+	usage := []struct {
+		cmd         string
+		prime, want bool
+	}{
+		{cmd: "sfx usage --hook", want: true},
+		{cmd: "sfx usage --hook=claude-code", want: true},
+		{cmd: "/usr/local/bin/sfx usage --hook", want: true},
+		{cmd: "'/opt/star fix/sfx' usage --hook", want: true},
+		{cmd: "sfx prime --hook", prime: true},
+		{cmd: "bd usage --hook"},
+		{cmd: "cd x && sfx usage --hook"},
+		{cmd: "sfx usage --hook --x"},
+		{cmd: "sfx usage"},
+	}
+	for _, tc := range usage {
+		h := object{{"type", mustJSON("command")}, {"command", mustJSON(tc.cmd)}}
+		if got := claudeUsage("Stop").ours(h, DefaultEntry, "claude-code"); got != tc.want {
+			t.Errorf("usage hook ours(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+		if got := claudeHook.ours(h, DefaultEntry, "claude-code"); got != tc.prime {
+			t.Errorf("prime hook ours(%q) = %v, want %v", tc.cmd, got, tc.prime)
 		}
 	}
 	in := `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "make env; ./bin/sfx prime --hook"}]}]}}`

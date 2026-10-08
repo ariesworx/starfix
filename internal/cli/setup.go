@@ -16,7 +16,8 @@ import (
 
 // cmdSetup prints, or with --write makes, an agent's starfix setup: the
 // MCP registration, the pointer block in its instruction file and, where
-// the harness has one, the SessionStart hook. With --all it does so for
+// the harness has them, the SessionStart hook and Claude Code's usage
+// hooks. With --all it does so for
 // every agent. It edits the project's own files unless --global says the
 // person's home ones may be touched.
 func cmdSetup(_ context.Context, r *runner, args []string) error {
@@ -143,9 +144,14 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 		for _, p := range plans {
 			var m []string
 			for _, f := range p.files {
-				if !f.Registered(f.disk.orig, entry) {
-					m = append(m, f.rel)
+				if f.Registered(f.disk.orig, entry) {
+					continue
 				}
+				if hooks := f.MissingHooks(f.disk.orig, entry); f.Kind == agentsetup.KindHook && len(hooks) > 0 {
+					m = append(m, f.rel+" ("+andList(hooks)+" hooks)")
+					continue
+				}
+				m = append(m, f.rel)
 			}
 			if len(m) > 0 {
 				missing = append(missing, p.Title+" in "+strings.Join(m, ", "))
@@ -215,13 +221,21 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 	return nil
 }
 
-// globalHookNote is said after setup adds or prints a hook in the home
-// directory. The hook runs prime, which dials the server named by the
+// andList joins xs as "a, b and c".
+func andList(xs []string) string {
+	if len(xs) < 2 {
+		return strings.Join(xs, "")
+	}
+	return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
+}
+
+// globalHookNote is said after setup adds or prints hooks in the home
+// directory. They run prime and usage, which dial the server named by the
 // .starfix.yaml of whatever repository the agent opens (C-14 in the
 // security review): a cloned repository chooses the host. Per-project
 // hooks have the same reach but are part of the repository the person
 // chose to set up.
-const globalHookNote = "This hook runs in every repository with a .starfix.yaml that you open with the agent, and connects to the server that file names. Turn it off before opening a repository you do not trust, or drop --global and set the hook up per project."
+const globalHookNote = "These hooks run in every repository with a .starfix.yaml that you open with the agent, and connect to the server that file names; Claude Code's usage hooks send it the session's token counts. Turn them off before opening a repository you do not trust, or drop --global and set the hooks up per project."
 
 // noGlobal is the message refusing --global for a, whose fix is
 // a.NoGlobal.
@@ -435,7 +449,7 @@ func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, glob
 		case agentsetup.KindPointer:
 			p("\n# pointer: add to %s\n%s", f.rel, f.Snippet(entry))
 		case agentsetup.KindHook:
-			p("\n# SessionStart hook: merge into %s\n%s", f.rel, f.Snippet(entry))
+			p("\n# %s hooks: merge into %s\n%s", andList(f.MissingHooks(nil, entry)), f.rel, f.Snippet(entry))
 			if global {
 				p("# %s\n", globalHookNote)
 			}

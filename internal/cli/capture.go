@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/agentsetup"
 	"github.com/ariesworx/starfix/internal/capture"
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/proto"
@@ -19,7 +20,7 @@ const usageTimeout = 25 * time.Second
 func cmdUsage(ctx context.Context, r *runner, args []string) error {
 	const usage = "usage --hook[=AGENT]"
 	fs := r.newFlags("usage")
-	hook := hookFlag{agents: []string{capture.Harness}}
+	hook := hookFlag{agents: agentsetup.UsageHooks()}
 	fs.Var(&hook, "hook", "run as AGENT's hook (bare: claude-code): send the session's new token counts, and never fail")
 	pos, err := parse(fs, args, usage)
 	if err != nil {

@@ -11,6 +11,9 @@ import (
 
 // The SessionStart hook runs `sfx prime --hook=AGENT` (bare --hook for
 // Claude Code) when a session starts, so the agent begins oriented.
+// Claude Code also gets usage hooks: `sfx usage --hook` on Stop,
+// SubagentStop and SessionEnd sends the turn's token counts from its
+// transcript. They run async, so a slow server never holds up the agent.
 // Claude Code's form, which Codex and Junie share, nests the hook in a
 // group:
 //
@@ -22,14 +25,17 @@ import (
 //
 // A hook is starfix's when its whole command is one that setup writes:
 // a single program word, bare or single-quoted as shellQuote writes it,
-// naming sfx or the program setup was given, then prime --hook with or
-// without =AGENT. Any other hook, a person's compound command that ends
-// in `sfx prime --hook` included, is left alone.
+// naming sfx or the program setup was given, then the hook's verb (prime
+// or usage) and --hook, with or without =AGENT. Any other hook, a
+// person's compound command that ends in `sfx prime --hook` included, is
+// left alone.
 
-// hookStyle is how one harness writes its SessionStart hook.
+// hookStyle is how one harness writes one of starfix's hooks.
 type hookStyle struct {
-	// event is the key under "hooks" that lists SessionStart hooks.
+	// event is the key under "hooks" that lists the event's hooks.
 	event string
+	// verb is the sfx command the hook runs with --hook: prime or usage.
+	verb string
 	// flat puts hooks straight in the event's list, not in groups.
 	flat bool
 	// matchers are the groups' matchers, one group each; "" writes a
@@ -39,6 +45,8 @@ type hookStyle struct {
 	matchers []string
 	// untyped hooks have no "type": "command".
 	untyped bool
+	// async runs the hook in the background (Claude Code's "async").
+	async bool
 	// timeout is written in a new hook, in the harness's unit; 0 for none.
 	timeout int
 	// version is written as the file's "version" when it has none.
@@ -49,27 +57,40 @@ type hookStyle struct {
 
 var (
 	// claudeHook is Claude Code's, Junie's, and with a matcher Codex's.
-	claudeHook = hookStyle{event: "SessionStart", matchers: []string{""}}
+	claudeHook = hookStyle{event: "SessionStart", verb: "prime", matchers: []string{""}}
 	// codexHook: Codex's matcher is a regex on the session's source.
-	codexHook = hookStyle{event: "SessionStart", matchers: []string{"startup|resume|clear|compact"}}
+	codexHook = hookStyle{event: "SessionStart", verb: "prime", matchers: []string{"startup|resume|clear|compact"}}
 	// geminiHook: Gemini's matcher is an exact source, and its timeout is
 	// in milliseconds.
-	geminiHook = hookStyle{event: "SessionStart", matchers: []string{"startup", "resume", "clear"}, timeout: 15000}
+	geminiHook = hookStyle{event: "SessionStart", verb: "prime", matchers: []string{"startup", "resume", "clear"}, timeout: 15000}
 	// cursorHook: Cursor's hooks are flat and untyped, under
 	// sessionStart, in a file with a version.
-	cursorHook = hookStyle{event: "sessionStart", flat: true, matchers: []string{""}, untyped: true, timeout: 30, version: 1}
+	cursorHook = hookStyle{event: "sessionStart", verb: "prime", flat: true, matchers: []string{""}, untyped: true, timeout: 30, version: 1}
 	// vscodeHook: VS Code's hooks are flat, in a file of starfix's own
 	// (.github/hooks/starfix.json).
-	vscodeHook = hookStyle{event: "SessionStart", flat: true, matchers: []string{""}, timeout: 15, own: true}
+	vscodeHook = hookStyle{event: "SessionStart", verb: "prime", flat: true, matchers: []string{""}, timeout: 15, own: true}
 )
+
+// claudeUsage is Claude Code's usage hook on event. Claude Code runs an
+// async hook in the background, so the turn does not wait on the server;
+// the timeout, in seconds, bounds a hung run, and `sfx usage` gives up
+// before it. A group without a matcher runs for every subagent type and
+// session end reason.
+func claudeUsage(event string) hookStyle {
+	return hookStyle{event: event, verb: "usage", matchers: []string{""}, async: true, timeout: 30}
+}
+
+// claudeHooks are Claude Code's: prime at session start, and usage at
+// the end of each turn, each subagent and the session.
+var claudeHooks = []hookStyle{claudeHook, claudeUsage("Stop"), claudeUsage("SubagentStop"), claudeUsage("SessionEnd")}
 
 var (
 	// shellSafe matches a word the shell reads as itself, which
 	// shellQuote leaves bare.
 	shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+=,-]+$`)
-	// hookCmd splits a prime hook's command into its program, one word
-	// as shellQuote writes it, and the rest.
-	hookCmd = regexp.MustCompile(`^([A-Za-z0-9_./:@%+=,-]+|'(?:[^']|'\\'')*') prime --hook(?:=[a-z][a-z-]*)?$`)
+	// hookCmd splits a hook's command into its program, one word as
+	// shellQuote writes it, and its verb.
+	hookCmd = regexp.MustCompile(`^([A-Za-z0-9_./:@%+=,-]+|'(?:[^']|'\\'')*') (prime|usage) --hook(?:=[a-z][a-z-]*)?$`)
 )
 
 // shellQuote quotes s for the POSIX shell the harness runs hooks with.
@@ -80,20 +101,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// HookCommand is the command the harness's hook runs: e's program,
-// quoted for the shell, then prime --hook=harness, or bare --hook for
-// Claude Code, which sfx prime reads as claude-code.
+// HookCommand is the command the harness's SessionStart hook runs: e's
+// program, quoted for the shell, then prime --hook=harness, or bare
+// --hook for Claude Code, which sfx prime reads as claude-code.
 func HookCommand(e Entry, harness string) string {
-	if harness == "claude-code" {
-		return shellQuote(e.Command) + " prime --hook"
-	}
-	return shellQuote(e.Command) + " prime --hook=" + harness
+	return hookStyle{verb: "prime"}.command(e, harness)
 }
 
-// HookOutput is the hook's stdout document, carrying context for the
-// session: Cursor's own shape, else Claude Code's, which the others share.
+// command is the command the hook runs: e's program, quoted for the
+// shell, then the style's verb and --hook=harness, or bare --hook for
+// Claude Code.
+func (s hookStyle) command(e Entry, harness string) string {
+	cmd := shellQuote(e.Command) + " " + s.verb + " --hook"
+	if harness != "claude-code" {
+		cmd += "=" + harness
+	}
+	return cmd
+}
+
+// HookOutput is the SessionStart hook's stdout document, carrying
+// context for the session: Cursor's own shape, else Claude Code's, which
+// the others share.
 func (a Agent) HookOutput(context string) any {
-	if a.hook.event == "sessionStart" {
+	if len(a.hooks) > 0 && a.hooks[0].event == "sessionStart" {
 		return map[string]string{"additional_context": context}
 	}
 	return map[string]any{"hookSpecificOutput": map[string]string{
@@ -106,6 +136,18 @@ func Hooks() []string {
 	var out []string
 	for _, n := range Names() {
 		if a := Agents[n]; a.Hook != "" || a.GlobalHook != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// UsageHooks lists the agents setup writes usage hooks for, sorted: the
+// values `sfx usage --hook=` takes.
+func UsageHooks() []string {
+	var out []string
+	for _, n := range Names() {
+		if slices.ContainsFunc(Agents[n].hooks, func(s hookStyle) bool { return s.verb == "usage" }) {
 			out = append(out, n)
 		}
 	}
@@ -139,25 +181,25 @@ func hookParts(h object) (cmd string, ok bool) {
 	return cmd, true
 }
 
-// ourHook reports whether h is starfix's: it runs exactly HookCommand(e,
-// harness), or one program word as shellQuote writes it, naming sfx or
-// e's program, then prime --hook with or without =AGENT.
-func ourHook(h object, e Entry, harness string) bool {
+// ours reports whether h is this style's starfix hook: it runs exactly
+// s.command(e, harness), or one program word as shellQuote writes it,
+// naming sfx or e's program, then s.verb --hook with or without =AGENT.
+func (s hookStyle) ours(h object, e Entry, harness string) bool {
 	cmd, ok := hookParts(h)
 	if !ok {
 		return false
 	}
-	if cmd == HookCommand(e, harness) {
+	if cmd == s.command(e, harness) {
 		return true
 	}
 	m := hookCmd.FindStringSubmatch(cmd)
-	return m != nil && (program(m[1]) == "sfx" || program(m[1]) == program(e.Command))
+	return m != nil && m[2] == s.verb && (program(m[1]) == "sfx" || program(m[1]) == program(e.Command))
 }
 
-// exactHook reports whether h runs exactly the command setup writes.
-func exactHook(h object, e Entry, harness string) bool {
+// exact reports whether h runs exactly the command setup writes.
+func (s hookStyle) exact(h object, e Entry, harness string) bool {
 	cmd, ok := hookParts(h)
-	return ok && cmd == HookCommand(e, harness)
+	return ok && cmd == s.command(e, harness)
 }
 
 // parseArray reads a JSON array, keeping each element as written; empty
@@ -190,7 +232,7 @@ func marshalArray(a []json.RawMessage) json.RawMessage {
 	return b.Bytes()
 }
 
-// hookDoc is a settings file opened down to its SessionStart list: the
+// hookDoc is a settings file opened down to one event's list: the
 // groups, or for a flat style the hooks themselves.
 type hookDoc struct {
 	style       hookStyle
@@ -295,7 +337,10 @@ func (s hookStyle) entry(e Entry, harness string) json.RawMessage {
 	if !s.untyped {
 		o = o.set("type", mustJSON("command"))
 	}
-	o = o.set("command", mustJSON(HookCommand(e, harness)))
+	o = o.set("command", mustJSON(s.command(e, harness)))
+	if s.async {
+		o = o.set("async", mustJSON(true))
+	}
 	if s.timeout > 0 {
 		o = o.set("timeout", mustJSON(s.timeout))
 	}
@@ -328,14 +373,14 @@ func (s hookStyle) apply(content []byte, e Entry, harness string) ([]byte, Resul
 		out := make([]json.RawMessage, 0, len(hs))
 		for _, raw := range hs {
 			h, err := parseObject(raw)
-			if err != nil || !ourHook(h, e, harness) {
+			if err != nil || !s.ours(h, e, harness) {
 				out = append(out, raw)
 				continue
 			}
 			found = true
 			if i := s.slot(matcher); i >= 0 && !filled[i] {
 				filled[i] = true
-				out = append(out, h.set("command", mustJSON(HookCommand(e, harness))).marshal())
+				out = append(out, h.set("command", mustJSON(s.command(e, harness))).marshal())
 			}
 		}
 		return out, nil
@@ -374,7 +419,7 @@ func (s hookStyle) remove(content []byte, e Entry, harness string) ([]byte, Resu
 	err = d.edit(func(_ string, hs []json.RawMessage) ([]json.RawMessage, error) {
 		out := make([]json.RawMessage, 0, len(hs))
 		for _, raw := range hs {
-			if h, err := parseObject(raw); err == nil && ourHook(h, e, harness) {
+			if h, err := parseObject(raw); err == nil && s.ours(h, e, harness) {
 				found = true
 				continue
 			}
@@ -390,7 +435,7 @@ func (s hookStyle) remove(content []byte, e Entry, harness string) ([]byte, Resu
 }
 
 // registered reports whether every matcher's group has a hook running
-// exactly HookCommand(e, harness).
+// exactly s.command(e, harness).
 func (s hookStyle) registered(content []byte, e Entry, harness string) bool {
 	d, err := s.open(content)
 	if err != nil {
@@ -399,7 +444,7 @@ func (s hookStyle) registered(content []byte, e Entry, harness string) bool {
 	filled := make([]bool, len(s.matchers))
 	_ = d.edit(func(matcher string, hs []json.RawMessage) ([]json.RawMessage, error) {
 		for _, raw := range hs {
-			if h, err := parseObject(raw); err == nil && exactHook(h, e, harness) {
+			if h, err := parseObject(raw); err == nil && s.exact(h, e, harness) {
 				if i := s.slot(matcher); i >= 0 {
 					filled[i] = true
 				}
@@ -410,9 +455,66 @@ func (s hookStyle) registered(content []byte, e Entry, harness string) bool {
 	return !slices.Contains(filled, false)
 }
 
-// snippet is the hook alone, as a new file holding it, to paste by hand.
-func (s hookStyle) snippet(e Entry, harness string) string {
-	b, _, err := s.apply(nil, e, harness)
+// The functions below apply an agent's hook styles, each its own event
+// in one settings file, as one target.
+
+// applyHooks puts every style's hook in place. The result is Unchanged
+// when none changed, Added when each was added, and Updated otherwise,
+// as when an install from before the usage hooks gains them.
+func applyHooks(styles []hookStyle, content []byte, e Entry, harness string) ([]byte, Result, error) {
+	out, changed, added := content, false, true
+	for _, s := range styles {
+		var res Result
+		var err error
+		if out, res, err = s.apply(out, e, harness); err != nil {
+			return nil, Unchanged, err
+		}
+		changed = changed || res != Unchanged
+		added = added && res == Added
+	}
+	switch {
+	case !changed:
+		return content, Unchanged, nil
+	case added:
+		return out, Added, nil
+	}
+	return out, Updated, nil
+}
+
+// removeHooks takes every style's starfix hooks out; empty output means
+// the file was starfix's own and may be deleted.
+func removeHooks(styles []hookStyle, content []byte, e Entry, harness string) ([]byte, Result, error) {
+	out, removed := content, false
+	for _, s := range styles {
+		var res Result
+		var err error
+		if out, res, err = s.remove(out, e, harness); err != nil {
+			return nil, Unchanged, err
+		}
+		removed = removed || res == Removed
+	}
+	if !removed {
+		return content, Unchanged, nil
+	}
+	return out, Removed, nil
+}
+
+// missingHooks lists the events whose hooks are not registered as setup
+// writes them, in the styles' order.
+func missingHooks(styles []hookStyle, content []byte, e Entry, harness string) []string {
+	var out []string
+	for _, s := range styles {
+		if !s.registered(content, e, harness) {
+			out = append(out, s.event)
+		}
+	}
+	return out
+}
+
+// hooksSnippet is every style's hook, as a new file holding them, to
+// paste by hand.
+func hooksSnippet(styles []hookStyle, e Entry, harness string) string {
+	b, _, err := applyHooks(styles, nil, e, harness)
 	if err != nil {
 		panic(fmt.Sprintf("agentsetup: hook snippet: %v", err)) // only on a programming error
 	}

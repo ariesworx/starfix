@@ -169,6 +169,64 @@ func sameFiles(t *testing.T, a, b map[string]string) {
 	}
 }
 
+// A repository set up before usage capture has the SessionStart hook
+// alone. --check names the missing usage hooks and the fix; --write adds
+// them, reporting the hook file updated and nothing else changed, and is
+// then idempotent; --remove takes every starfix hook out.
+func TestSetupUpgradesPrimeOnlyHooks(t *testing.T) {
+	root, sub := repoWithConfig(t)
+	home := t.TempDir()
+	if code, out, errb := runIn(t, home, "-C", sub, "setup", "claude-code", "--write"); code != ExitOK {
+		t.Fatalf("write: exit %d\n%s%s", code, out, errb)
+	}
+	settings := filepath.Join(root, ".claude", "settings.json")
+	primeOnly := `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sfx prime --hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+	if err := os.WriteFile(settings, []byte(primeOnly), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errb := runIn(t, home, "-C", sub, "setup", "claude-code", "--check")
+	if want := "sfx: starfix is not set up for Claude Code in .claude/settings.json (Stop, SubagentStop and SessionEnd hooks)\n" +
+		"fix: run `sfx setup claude-code --write`\n"; code != ExitFailure || errb != want {
+		t.Fatalf("check of a prime-only install: exit %d\n%s\nwant %d\n%s", code, errb, ExitFailure, want)
+	}
+	code, out, errb := runIn(t, home, "-C", sub, "setup", "claude-code", "--write")
+	if want := ".mcp.json: unchanged\nCLAUDE.md: unchanged\n.claude/settings.json: updated\n"; code != ExitOK || out != want {
+		t.Fatalf("upgrade write: exit %d\n%s%s\nwant\n%s", code, out, errb, want)
+	}
+	first := snapshot(t, root)
+	if b := first[settings]; strings.Count(b, `"command": "sfx usage --hook"`) != 3 || !strings.Contains(b, `"command": "sfx prime --hook"`) {
+		t.Fatalf("settings after the upgrade:\n%s", b)
+	}
+	if code, out, _ := runIn(t, home, "-C", sub, "setup", "claude-code", "--write"); code != ExitOK || strings.Count(out, ": unchanged\n") != 3 {
+		t.Fatalf("second write: exit %d %s", code, out)
+	}
+	sameFiles(t, first, snapshot(t, root))
+	if code, _, errb := runIn(t, home, "-C", sub, "setup", "claude-code", "--check"); code != ExitOK {
+		t.Fatalf("check after the upgrade: exit %d %s", code, errb)
+	}
+	if code, _, errb := runIn(t, home, "-C", sub, "setup", "claude-code", "--remove"); code != ExitOK {
+		t.Fatalf("remove: exit %d %s", code, errb)
+	}
+	// Claude Code's settings file is the person's: emptied, it is kept.
+	if b, err := os.ReadFile(settings); err != nil || string(b) != "{}\n" { //nolint:gosec // the test's temp repository
+		t.Errorf("settings after remove = %q, %v; want {} with every starfix hook gone", b, err)
+	}
+}
+
 // Setup adds its parts to files that hold other things, and removing them
 // gives the files back as they were.
 func TestSetupKeepsOtherContent(t *testing.T) {
