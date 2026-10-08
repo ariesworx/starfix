@@ -12,7 +12,8 @@ command line. One small Go server keeps the data in
 history.
 
 > **Status: stage 3 of 7 in progress.** Issues, claims, handoffs, the
-> inbox, agent setup and importing from bd (beads) work today. Memory and
+> inbox, a live board, agent setup and importing from bd (beads) work
+> today. Memory and
 > an offline cache come next. Not ready for production use yet; see the
 > [roadmap](#roadmap).
 
@@ -46,6 +47,7 @@ what. starfix makes that safe:
 | Hand work between people and agents | `handoff --to` | [Handoffs](docs/concepts.md#handoffs) |
 | Get mentions, handoffs, assignments and lost claims in an inbox the server pushes | `inbox`, `watch` | [The inbox](docs/concepts.md#the-inbox) |
 | See every session at work and what it holds | `who` | [Who is at work](docs/concepts.md#who-is-at-work) |
+| Watch ready, held and blocked work, and every change as it happens, in a terminal | `tui` | [The live board](docs/cli.md#the-live-board) |
 | Summarize a day or a week for a standup | `digest` | [The digest](docs/concepts.md#the-digest) |
 | See the time and tokens each issue took, by account (tokens from Claude Code so far) | `show`, `digest`, `usage --hook` | [Accounts, time and tokens](docs/concepts.md#accounts-time-and-tokens) |
 | Set up Claude Code, Codex, Gemini CLI, Cursor, VS Code, Junie, JetBrains AI Assistant or Claude Desktop | `setup` | [Agents](docs/agents.md) |
@@ -159,7 +161,7 @@ binary, building from source and verifying a download by hand.
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
-| 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, token capture | In progress (claims, agents registry, inbox, push, structured handoffs, files to issues, and the server side of token capture built) |
+| 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, live board, token capture | In progress (claims, agents registry, inbox, push, structured handoffs, files to issues, the live board, and the server side of token capture built) |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |
