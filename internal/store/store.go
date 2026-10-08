@@ -308,9 +308,8 @@ type wtx struct {
 	touched bool
 	// inbox are the items this attempt wrote, pushed once it commits.
 	inbox []InboxItem
-	// issueEvents are the events flush wrote on issues, without their
-	// states, pushed once the attempt commits.
-	issueEvents []Event
+	// firstSeq is the seq flush gave the first pending event.
+	firstSeq int64
 	// pending are the events recorded, written by flush.
 	pending []pendingEvent
 	// idem is the operation's idempotency stamp, when it has a key.
@@ -418,12 +417,21 @@ func (w *wtx) flush(ctx context.Context) error {
 			}
 			return fmt.Errorf("insert event: %w", err)
 		}
+	}
+	w.firstSeq = seq - int64(len(w.pending)) + 1
+	return nil
+}
+
+// issueEvents returns the events flush wrote on issues, without their
+// states, for the event watches.
+func (w *wtx) issueEvents() []Event {
+	var evs []Event
+	for i, e := range w.pending {
 		if IssueID(e.target).Validate() == nil {
-			w.issueEvents = append(w.issueEvents, Event{Seq: seq, At: w.now, Actor: w.actor, Op: e.op, Target: e.target})
+			evs = append(evs, Event{Seq: w.firstSeq + int64(i), At: w.now, Actor: w.actor, Op: e.op, Target: e.target})
 		}
 	}
-	w.pending = nil
-	return nil
+	return evs
 }
 
 // lastEventSeq returns the highest event seq, or 0. It avoids MAX(): Dolt
@@ -589,8 +597,14 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if w.closedChanged {
 		s.similar.invalidate()
 	}
-	if len(w.inbox) > 0 || len(w.issueEvents) > 0 {
-		s.publish(w.inbox, w.issueEvents)
+	// Counted after the commit: every watch subscribed before it is
+	// counted, and one subscribed later is not owed this write's events.
+	var evs []Event
+	if s.watch.events.Load() > 0 {
+		evs = w.issueEvents()
+	}
+	if len(w.inbox) > 0 || len(evs) > 0 {
+		s.publish(w.inbox, evs)
 	}
 	return nil
 }

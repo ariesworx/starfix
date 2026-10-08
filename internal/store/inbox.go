@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -338,6 +339,31 @@ type watchers struct {
 	// mu guards set; it is taken before any Watch's mu.
 	mu  sync.Mutex
 	set map[*Watch]struct{}
+	// events counts the watches in set made with WatchEvents, so a write
+	// can skip building issue events nobody takes. It changes under mu.
+	events atomic.Int64
+}
+
+// add puts w in the set. The caller holds mu.
+func (ws *watchers) add(w *Watch) {
+	if ws.set == nil {
+		ws.set = map[*Watch]struct{}{}
+	}
+	ws.set[w] = struct{}{}
+	if w.events {
+		ws.events.Add(1)
+	}
+}
+
+// remove takes w out of the set, if it is there. The caller holds mu.
+func (ws *watchers) remove(w *Watch) {
+	if _, ok := ws.set[w]; !ok {
+		return
+	}
+	delete(ws.set, w)
+	if w.events {
+		ws.events.Add(-1)
+	}
 }
 
 // Watch subscribes to principal's items for session. Every item
@@ -361,10 +387,7 @@ func (s *Store) subscribe(w *Watch) *Watch {
 	w.s, w.ready = s, make(chan struct{}, 1)
 	s.watch.mu.Lock()
 	defer s.watch.mu.Unlock()
-	if s.watch.set == nil {
-		s.watch.set = map[*Watch]struct{}{}
-	}
-	s.watch.set[w] = struct{}{}
+	s.watch.add(w)
 	return w
 }
 
@@ -386,7 +409,7 @@ func (w *Watch) Take() (items []InboxItem, events []Event, overflowed bool) {
 // Close ends the subscription. It is safe to call more than once.
 func (w *Watch) Close() {
 	w.s.watch.mu.Lock()
-	delete(w.s.watch.set, w)
+	w.s.watch.remove(w)
 	w.s.watch.mu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -442,7 +465,7 @@ func (s *Store) publish(items []InboxItem, events []Event) {
 	defer s.watch.mu.Unlock()
 	for w := range s.watch.set {
 		if !w.offer(items, events) {
-			delete(s.watch.set, w)
+			s.watch.remove(w)
 		}
 	}
 }

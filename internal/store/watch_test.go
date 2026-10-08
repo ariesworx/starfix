@@ -42,7 +42,12 @@ func TestWatchEvents(t *testing.T) {
 		e.Before, e.After = nil, nil
 		want = append(want, e)
 	}
-	<-we.Ready()
+	// A write publishes before it returns, so there is nothing to wait for.
+	select {
+	case <-we.Ready():
+	default:
+		t.Fatal("the event watch was not signaled")
+	}
 	items, got, over := we.Take()
 	if over || len(items) != 0 || !reflect.DeepEqual(got, want) {
 		t.Errorf("Take() = %d items, events %+v, overflow %v; want no items and events %+v", len(items), got, over, want)
@@ -64,7 +69,11 @@ func TestWatchEventsOverflow(t *testing.T) {
 	for range WatchQueue + 1 {
 		mustCreate(t, s, NewIssue{Title: "work"})
 	}
-	<-we.Ready()
+	select {
+	case <-we.Ready():
+	default:
+		t.Fatal("the overflowed watch was not signaled")
+	}
 	if items, evs, over := we.Take(); !over || len(items)+len(evs) != 0 {
 		t.Fatalf("Take() after overflow = %d items, %d events, overflow %v; want none and true", len(items), len(evs), over)
 	}
@@ -75,6 +84,35 @@ func TestWatchEventsOverflow(t *testing.T) {
 		t.Fatalf("an overflowed watch got %d events", len(evs))
 	default:
 	}
+}
+
+// The store counts its open event watches, so a write builds and pushes
+// issue events only while someone takes them. A watch leaves the count
+// once, whether it closes, overflows, or both.
+func TestWatchEventsCount(t *testing.T) {
+	s := newStore(t)
+	count := func(when string, want int64) {
+		t.Helper()
+		if got := s.watch.events.Load(); got != want {
+			t.Errorf("event watches %s = %d, want %d", when, got, want)
+		}
+	}
+	count("at first", 0)
+	plain := s.Watch("bob", "sess-x")
+	defer plain.Close()
+	count("with a plain watch", 0)
+	a := s.WatchEvents("bob", "sess-a")
+	b := s.WatchEvents("bob", "sess-b")
+	count("with two", 2)
+	a.Close()
+	a.Close()
+	count("after closing one twice", 1)
+	for range WatchQueue + 1 {
+		mustCreate(t, s, NewIssue{Title: "work"})
+	}
+	count("after the other overflowed", 0)
+	b.Close()
+	count("after closing the overflowed one", 0)
 }
 
 // ActiveClaims lists every live claim, longest held first, up to a limit,
