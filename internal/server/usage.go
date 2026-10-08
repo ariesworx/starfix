@@ -1,7 +1,9 @@
 package server
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -43,12 +45,60 @@ func wireDigestUsage(u store.DigestUsage) *proto.DigestUsage {
 	return &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed)}
 }
 
+// wireModels converts the store's sums, in model order. Past
+// proto.MaxUsageModels, the models with the fewest tokens are summed into
+// one proto.OtherModels entry, last.
 func wireModels(ms []store.ModelUsage) []proto.ModelTokens {
+	keep := map[string]bool{}
+	if len(ms) > proto.MaxUsageModels {
+		ranked := slices.Clone(ms)
+		slices.SortStableFunc(ranked, func(a, b store.ModelUsage) int { return cmp.Compare(total(b.Tokens), total(a.Tokens)) })
+		for _, m := range ranked[:proto.MaxUsageModels] {
+			keep[m.Model] = true
+		}
+	}
 	var out []proto.ModelTokens
+	other := proto.ModelTokens{Model: proto.OtherModels}
 	for _, m := range ms {
-		out = append(out, proto.ModelTokens{Model: m.Model, Tokens: proto.Tokens(m.Tokens)})
+		if len(keep) == 0 || keep[m.Model] {
+			out = append(out, proto.ModelTokens{Model: m.Model, Tokens: proto.Tokens(m.Tokens)})
+			continue
+		}
+		o := &other.Tokens
+		o.Input = addCount(o.Input, m.Input)
+		o.Output = addCount(o.Output, m.Output)
+		o.CacheWrite = addCount(o.CacheWrite, m.CacheWrite)
+		o.CacheWrite1h = addCount(o.CacheWrite1h, m.CacheWrite1h)
+		o.CacheRead = addCount(o.CacheRead, m.CacheRead)
+	}
+	if len(keep) > 0 {
+		out = append(out, other)
 	}
 	return out
+}
+
+// addCount adds count v to sum; nil, unknown, adds nothing, and a sum
+// stays nil until a known count arrives.
+func addCount(sum, v *int64) *int64 {
+	if v == nil {
+		return sum
+	}
+	n := *v
+	if sum != nil {
+		n += *sum
+	}
+	return &n
+}
+
+// total is the tokens a model's known counts add up to.
+func total(t store.Tokens) int64 {
+	var n int64
+	for _, c := range []*int64{t.Input, t.Output, t.CacheWrite, t.CacheRead} {
+		if c != nil {
+			n += *c
+		}
+	}
+	return n
 }
 
 // seconds is d in whole seconds.

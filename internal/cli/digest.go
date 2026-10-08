@@ -48,6 +48,7 @@ func printDigest(w io.Writer, d proto.DigestResult) {
 		p(", some totals partial")
 	}
 	p("\n")
+	printDigestUsage(w, d.Usage)
 	ago := func(it proto.DigestItem) string {
 		return "\t" + esc(it.By) + "\t" + proto.Span(d.Until.Sub(it.At)) + " ago"
 	}

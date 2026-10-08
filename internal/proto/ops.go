@@ -3,6 +3,7 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -214,6 +215,14 @@ type ModelTokens struct {
 	Model string `json:"model"`
 	Tokens
 }
+
+// MaxUsageModels is the most models show and digest list; the rest are
+// summed into one entry named OtherModels, which no model can be named,
+// since model names hold no parentheses.
+const (
+	MaxUsageModels = 20
+	OtherModels    = "(other)"
+)
 
 // IssueUsage is what is attributed to one issue: HeldSeconds under
 // claims, and tokens by model. Split says part of the tokens came from
@@ -613,6 +622,20 @@ func Span(d time.Duration) string {
 		return fmt.Sprintf("%dd", days)
 	}
 	return fmt.Sprintf("%dd%dh", days, hours)
+}
+
+// TokenCount formats a token count compactly for people and agents: 950,
+// 12.3k, 1.5M, 2B, cut rather than rounded.
+func TokenCount(n int64) string {
+	for _, u := range []struct {
+		div    int64
+		suffix string
+	}{{1e9, "B"}, {1e6, "M"}, {1e3, "k"}} {
+		if n >= u.div {
+			return strconv.FormatFloat(float64(n/(u.div/10))/10, 'f', -1, 64) + u.suffix
+		}
+	}
+	return strconv.FormatInt(n, 10)
 }
 
 // Empty is the result of writes that have nothing to report.

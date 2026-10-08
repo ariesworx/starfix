@@ -335,3 +335,17 @@ func TestSpan(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenCount(t *testing.T) {
+	for _, tc := range []struct {
+		n    int64
+		want string
+	}{
+		{0, "0"}, {950, "950"}, {999, "999"}, {1000, "1k"}, {12_345, "12.3k"}, {999_999, "999.9k"},
+		{1_500_000, "1.5M"}, {2_000_000_000, "2B"}, {1_000_000_000_000, "1000B"},
+	} {
+		if got := TokenCount(tc.n); got != tc.want {
+			t.Errorf("TokenCount(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}

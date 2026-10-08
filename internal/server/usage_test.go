@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -182,3 +183,38 @@ func itoa(p *int64) string {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Model names are the client's, so a principal could report thousands;
+// show and digest keep the largest proto.MaxUsageModels and fold the rest
+// into one entry, so the result stays small and the sums whole.
+func TestUsageModelsCapped(t *testing.T) {
+	s := newServer(t)
+	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "many models"})
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: is.ID})
+	at := time.Now().UTC()
+	var recs []proto.UsageRecord
+	extra := 5
+	for i := range proto.MaxUsageModels + extra {
+		r := usageRec(fmt.Sprintf("r%d", i), at, int64(1000+i))
+		r.Model = fmt.Sprintf("m%02d", i)
+		recs = append(recs, r)
+	}
+	mustCall[proto.UsageResult](t, s, alice, proto.OpUsage, proto.UsageArgs{Records: recs})
+	check := func(what string, ms []proto.ModelTokens) {
+		t.Helper()
+		if len(ms) != proto.MaxUsageModels+1 {
+			t.Fatalf("%s: %d models, want %d and %s", what, len(ms), proto.MaxUsageModels, proto.OtherModels)
+		}
+		last := ms[len(ms)-1]
+		// The smallest are m00..m04: 1000+1001+...+1004.
+		if last.Model != proto.OtherModels || itoa(last.Input) != "5010" || itoa(last.Output) != "0" {
+			t.Errorf("%s: last model %s input %s output %s, want %s with 5010 and 0", what, last.Model, itoa(last.Input),
+				itoa(last.Output), proto.OtherModels)
+		}
+		if ms[0].Model != fmt.Sprintf("m%02d", extra) {
+			t.Errorf("%s: first model %s, want the kept ones in name order from m%02d", what, ms[0].Model, extra)
+		}
+	}
+	check("show", mustCall[proto.ShowResult](t, s, alice, proto.OpShow, proto.ShowArgs{ID: is.ID}).Usage.Models)
+	check("digest", mustCall[proto.DigestResult](t, s, alice, proto.OpDigest, proto.DigestArgs{}).Usage.Models)
+}
