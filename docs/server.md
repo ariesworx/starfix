@@ -418,8 +418,12 @@ Fixed caps that no setting changes:
   lists at most 200 edges and `blocked` 50 blockers an issue, each with a
   count of the rest. `show` and `digest` list tokens for at most 20
   models, summing the rest as `(other)`.
-- **Usage records:** each count is at most 10¹² tokens, and a record's time
-  at most an hour past the server's clock.
+- **Usage records:** each count is at most 10¹² tokens, a record's time
+  at most an hour past the server's clock, and a turn's or session's span
+  at most 7 days; a longer session reports in parts. `show` and `digest`
+  attribute at most 100,000 records a read, and mark the tokens partial
+  past that. `show` reads only the records made while the issue was held,
+  and the spans that reach into those stretches.
 - **Similar issues:** lookups read closed titles from a cache refreshed on
   close and reopen, or after a minute.
 

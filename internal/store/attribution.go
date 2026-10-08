@@ -73,8 +73,8 @@ type ModelUsage struct {
 	Tokens
 }
 
-// usageScanRows bounds the usage rows one read takes.
-const usageScanRows = 100_000
+// usageScanRows bounds the usage rows one read takes. Tests lower it.
+var usageScanRows = 100_000
 
 // ctxEvery is how many rows a long loop takes between checks that its
 // context is still live.
@@ -92,8 +92,9 @@ type hold struct {
 
 // usageRow is a token_usage row as attribution reads it.
 type usageRow struct {
-	key   sessionKey
-	model string
+	key       sessionKey
+	requestID string
+	model     string
 	// from and to bound the span; equal for an instant.
 	from, to time.Time
 	Tokens
@@ -124,31 +125,35 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 		return out, nil
 	}
 	var keys []sessionKey
-	spans := map[sessionKey][2]time.Time{}
+	held := map[sessionKey][]window{}
 	for _, h := range own {
 		out.Held += h.end.Sub(h.start)
-		sp, ok := spans[h.key]
-		if !ok {
+		if _, ok := held[h.key]; !ok {
 			keys = append(keys, h.key)
-			sp = [2]time.Time{h.start, h.end}
 		}
-		spans[h.key] = [2]time.Time{minTime(sp[0], h.start), maxTime(sp[1], h.end)}
+		held[h.key] = append(held[h.key], window{h.start, h.end})
 	}
+	// Read the records of each stretch the issue was held, by session:
+	// those whose time is in it, and the spans that start in it and end
+	// later. A span across two stretches is read twice and kept once.
+	ur := usageReader{limit: usageScanRows}
+	for _, k := range keys {
+		for _, w := range mergeWindows(held[k]) {
+			if err := ur.read(ctx, q, usageIn, k.principal, k.session, w.from, w.to, w.from); err != nil {
+				return IssueUsage{}, err
+			}
+			if err := ur.read(ctx, q, usageSpansPast, k.principal, k.session,
+				string(GranularityTurn), string(GranularitySession), w.to, w.to.Add(MaxUsageSpan), w.to); err != nil {
+				return IssueUsage{}, err
+			}
+		}
+	}
+	rows := ur.rows
+	out.Capped = ur.capped
 	// To split a record, every issue its session held matters.
 	holds, err := sessionHolds(ctx, q, keys, now)
 	if err != nil {
 		return IssueUsage{}, err
-	}
-	var rows []usageRow
-	for _, k := range keys {
-		sp := spans[k]
-		rs, capped, err := readUsage(ctx, q, `principal = ? AND session = ? AND at >= ? AND COALESCE(span_start, at) <= ?`,
-			usageScanRows-len(rows), k.principal, k.session, sp[0], sp[1])
-		if err != nil {
-			return IssueUsage{}, err
-		}
-		rows = append(rows, rs...)
-		out.Capped = out.Capped || capped
 	}
 	var sum usageSum
 	for i, r := range rows {
@@ -337,31 +342,86 @@ func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Ti
 	return out, nil
 }
 
-// readUsage reads at most limit token_usage rows matching where, a
-// constant condition with placeholders for args, oldest first, and
-// reports whether more matched.
-func readUsage(ctx context.Context, q querier, where string, limit int, args ...any) ([]usageRow, bool, error) {
-	if limit <= 0 {
-		return nil, true, nil
+// usageIn matches a session's records whose time is in [from, to) and
+// that overlap it: all but a span that ends at from. Its arguments are
+// principal, session, from, to and from again. The session index serves
+// it.
+const usageIn = `principal = ? AND session = ? AND at >= ? AND at < ?
+  AND (at > ? OR span_start IS NULL OR span_start >= at)`
+
+// usageSpansPast matches a session's turn and session records that end
+// at or after to and start before it. Spans are at most MaxUsageSpan
+// long, which bounds the range. Its arguments are principal, session,
+// the two granularities, to, to plus MaxUsageSpan and to again. The span
+// index serves it.
+const usageSpansPast = `principal = ? AND session = ? AND granularity IN (?, ?)
+  AND at >= ? AND at < ? AND span_start < ?`
+
+// usageKey names a record: its session and the harness's request id.
+type usageKey struct {
+	key       sessionKey
+	requestID string
+}
+
+// usageReader reads the token_usage rows of one attribution, keeping
+// each record once and at most limit of them.
+type usageReader struct {
+	limit int
+	rows  []usageRow
+	seen  map[usageKey]bool
+	// capped is set once a record was left out for the limit.
+	capped bool
+}
+
+// read keeps the rows matching where, a constant condition with
+// placeholders for args, oldest first. A record kept already does not
+// count against the limit again.
+func (u *usageReader) read(ctx context.Context, q querier, where string, args ...any) error {
+	if u.capped {
+		return nil
 	}
-	rows, err := q.QueryContext(ctx, `SELECT principal, session, model, at, span_start,
-  input, output, cache_write, cache_write_1h, cache_read
-  FROM token_usage WHERE `+where+` ORDER BY at LIMIT ?`, append(args, limit+1)...) //nolint:gosec // where is a constant from the callers
+	// At most len(u.rows) of the rows are repeats, so this many hold one
+	// more new record than the limit has room for, if there is one.
+	rows, err := readUsage(ctx, q, where, u.limit+1, args...)
 	if err != nil {
-		return nil, false, fmt.Errorf("usage: %w", err)
+		return err
+	}
+	if u.seen == nil {
+		u.seen = map[usageKey]bool{}
+	}
+	for _, r := range rows {
+		k := usageKey{r.key, r.requestID}
+		if u.seen[k] {
+			continue
+		}
+		if len(u.rows) == u.limit {
+			u.capped = true
+			return nil
+		}
+		u.seen[k] = true
+		u.rows = append(u.rows, r)
+	}
+	return nil
+}
+
+// readUsage reads at most limit token_usage rows matching where, oldest
+// first.
+func readUsage(ctx context.Context, q querier, where string, limit int, args ...any) ([]usageRow, error) {
+	rows, err := q.QueryContext(ctx, `SELECT principal, session, request_id, model, at, span_start,
+  input, output, cache_write, cache_write_1h, cache_read
+  FROM token_usage WHERE `+where+` ORDER BY at, request_id LIMIT ?`, append(args, limit)...) //nolint:gosec // where is a constant from the callers
+	if err != nil {
+		return nil, fmt.Errorf("usage: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []usageRow
 	for rows.Next() {
-		if len(out) == limit {
-			return out, true, nil
-		}
 		var r usageRow
 		var spanStart sql.NullTime
 		var c [5]sql.NullInt64
-		if err := rows.Scan(&r.key.principal, &r.key.session, &r.model, &r.to, &spanStart,
+		if err := rows.Scan(&r.key.principal, &r.key.session, &r.requestID, &r.model, &r.to, &spanStart,
 			&c[0], &c[1], &c[2], &c[3], &c[4]); err != nil {
-			return nil, false, fmt.Errorf("usage: %w", err)
+			return nil, fmt.Errorf("usage: %w", err)
 		}
 		r.to = r.to.UTC()
 		r.from = r.to
@@ -377,9 +437,29 @@ func readUsage(ctx context.Context, q querier, where string, limit int, args ...
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, fmt.Errorf("usage: %w", err)
+		return nil, fmt.Errorf("usage: %w", err)
 	}
-	return out, false, nil
+	return out, nil
+}
+
+// window is a stretch of time, [from, to).
+type window struct{ from, to time.Time }
+
+// mergeWindows sorts ws and joins those that touch or overlap, dropping
+// empty ones.
+func mergeWindows(ws []window) []window {
+	slices.SortFunc(ws, func(a, b window) int { return a.from.Compare(b.from) })
+	var out []window
+	for _, w := range ws {
+		switch {
+		case !w.from.Before(w.to):
+		case len(out) > 0 && !w.from.After(out[len(out)-1].to):
+			out[len(out)-1].to = maxTime(out[len(out)-1].to, w.to)
+		default:
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // division is how one record divides: the issues its session held over
@@ -682,13 +762,13 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 	if q.f.By != "" {
 		where, args = where+` AND principal = ?`, append(args, q.f.By)
 	}
-	rows, capped, err := readUsage(ctx, q.tx, where, usageScanRows, args...)
-	if err != nil {
+	ur := usageReader{limit: usageScanRows}
+	if err := ur.read(ctx, q.tx, where, args...); err != nil {
 		return err
 	}
-	u := &d.Usage
-	u.Capped = capped
-	q.capped = q.capped || capped
+	rows, u := ur.rows, &d.Usage
+	u.Capped = ur.capped
+	q.capped = q.capped || ur.capped
 
 	// The issues held in the window: those with a claim event in it, and
 	// those held now.

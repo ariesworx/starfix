@@ -432,3 +432,79 @@ func TestUsagePartsSumToRecord(t *testing.T) {
 		t.Errorf("digest unattributed = %q, want %q", tokensText(loose), want)
 	}
 }
+
+// An issue's usage reads only the records of its own holds, so records
+// its sessions made between those holds neither crowd out the ones that
+// count nor make the result look capped. A record across two holds
+// counts once. Capped is set only when records that count were left out.
+func TestIssueUsageReadsOnlyItsHolds(t *testing.T) {
+	tests := []struct {
+		name   string
+		rows   int
+		capped bool
+		models string
+	}{
+		{"within the cap", 3, false, "codex-mini 111/?/?/?/?"},
+		{"past the cap", 2, true, "codex-mini 110/?/?/?/?"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setUsageScanRows(t, tc.rows)
+			s, clk := clockStore(t)
+			ctx := t.Context()
+			t0 := clk.now()
+			at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+			x := mustCreate(t, s, NewIssue{Title: "x"})
+			other := mustCreate(t, s, NewIssue{Title: "between"})
+			step := func(m int, f func() error) {
+				t.Helper()
+				clk.add(at(m).Sub(clk.now()))
+				if err := f(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := func(id IssueID) func() error {
+				return func() error { _, _, err := s.StartIssue(ctx, alice, id, time.Hour, false); return err }
+			}
+			release := func(id IssueID) func() error {
+				return func() error {
+					_, err := s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "later"}, true, "")
+					return err
+				}
+			}
+			step(0, start(x.ID)) // x held [0, 10m) and [60m, 70m)
+			step(10, release(x.ID))
+			step(20, start(other.ID))
+			step(50, release(other.ID))
+			step(60, start(x.ID))
+			step(70, release(x.ID))
+			recs := []UsageRecord{
+				rec("x1", "codex-mini", at(5), 10, 0),
+				// 5m of x, 50m of nothing, 5m of x: a sixth is x's.
+				{Harness: "codex", RequestID: "across", Model: "codex-mini", At: at(65), Granularity: GranularityTurn,
+					SpanStart: ptr(at(5)), Tokens: Tokens{Input: n64(600)}},
+				rec("x2", "codex-mini", at(66), 1, 0),
+			}
+			for i := range 5 { // other's
+				recs = append(recs, rec(fmt.Sprintf("o%d", i), "codex-mini", at(30+i), 1000, 0))
+			}
+			for i := range recs {
+				recs[i].Output = nil
+			}
+			mustAddUsage(t, s, alice, recs...)
+			u := mustUsage(t, s, x.ID)
+			if modelsText(u.Models) != tc.models || u.Capped != tc.capped {
+				t.Errorf("IssueUsage(x) reading at most %d rows = %q capped %v; want %q capped %v",
+					tc.rows, modelsText(u.Models), u.Capped, tc.models, tc.capped)
+			}
+		})
+	}
+}
+
+// setUsageScanRows bounds the rows one usage read takes, for one test.
+func setUsageScanRows(t *testing.T, n int) {
+	t.Helper()
+	was := usageScanRows
+	usageScanRows = n
+	t.Cleanup(func() { usageScanRows = was })
+}

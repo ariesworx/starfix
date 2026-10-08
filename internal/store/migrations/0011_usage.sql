@@ -10,7 +10,9 @@
 -- the part of cache_write written with a one-hour lifetime. added_at is
 -- the server's time, which the daily cap (limits: usage_per_day) counts.
 -- Which issue a row belongs to is computed when read, from the claim
--- events, and never stored.
+-- events, and never stored. Attribution reads a session's rows by time
+-- (token_usage_session), and its turn and session spans that end past a
+-- time (token_usage_span); a span is at most 7 days, which bounds that.
 
 CREATE TABLE token_usage (
   principal      VARCHAR(255) NOT NULL,
@@ -30,6 +32,7 @@ CREATE TABLE token_usage (
   added_at       DATETIME(6)  NOT NULL,
   PRIMARY KEY (principal, session, request_id),
   KEY token_usage_session (principal, session, at),
+  KEY token_usage_span (principal, session, granularity, at),
   KEY token_usage_at (at),
   KEY token_usage_added (principal, added_at)
 );

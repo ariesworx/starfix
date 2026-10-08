@@ -172,6 +172,7 @@ func TestAddUsageRefusesInvalidRecords(t *testing.T) {
 		{"request with a span", set(func(r *UsageRecord) { r.SpanStart = ptr(now.Add(-time.Second)) }), "span_start"},
 		{"span ends before it starts", turn(func(r *UsageRecord) { r.SpanStart = ptr(now.Add(time.Second)) }), "span_start"},
 		{"span starts before 2020", turn(func(r *UsageRecord) { r.SpanStart = ptr(time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)) }), "span_start"},
+		{"span longer than 7 days", turn(func(r *UsageRecord) { r.SpanStart = ptr(now.Add(-7*24*time.Hour - time.Microsecond)) }), "span_start"},
 		{"negative input", set(func(r *UsageRecord) { r.Input = n64(-1) }), "input"},
 		{"negative output", set(func(r *UsageRecord) { r.Output = n64(-1) }), "output"},
 		{"negative cache write", set(func(r *UsageRecord) { r.CacheWrite = n64(-1) }), "cache_write"},

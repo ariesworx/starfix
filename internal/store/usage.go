@@ -44,6 +44,10 @@ const (
 	MaxUsageCount = 1_000_000_000_000
 	// UsageSkew is how far past the server's clock a record's time may be.
 	UsageSkew = time.Hour
+	// MaxUsageSpan bounds a turn's or session's span, so attribution
+	// finds the spans that reach into a hold within that much of its end.
+	// A longer session reports in parts.
+	MaxUsageSpan = 7 * 24 * time.Hour
 )
 
 // usageEpoch is the earliest time a record may carry: older is a client
@@ -119,6 +123,9 @@ func (r UsageRecord) validate(n int, now time.Time) error {
 	case GranularityTurn, GranularitySession:
 		if s := r.SpanStart; s != nil && (s.After(r.At) || s.Before(usageEpoch)) {
 			return bad("span_start", "must be after 2020 and no later than at")
+		}
+		if s := r.SpanStart; s != nil && r.At.Sub(*s) > MaxUsageSpan {
+			return bad("span_start", "must be within 7 days of at; report a longer session in parts")
 		}
 	default:
 		return bad("granularity", "must be request, turn or session")
