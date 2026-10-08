@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -191,6 +192,31 @@ func TestFinish(t *testing.T) {
 		t.Fatalf("finish twice: %v", err)
 	}
 	assertGapless(t, s)
+}
+
+// FinishIssue fills in the defaults of the issues it files without
+// changing the caller's Discovered.
+func TestFinishLeavesDiscoveredAlone(t *testing.T) {
+	s := newStore(t)
+	is := mustCreate(t, s, NewIssue{Title: "work"})
+	discovered := []NewIssue{{Title: "follow-up"}, {Title: "flaky test", Type: TypeBug, Priority: prio(P1)}}
+	want := slices.Clone(discovered)
+	if _, _, err := s.FinishIssue(t.Context(), alice, is.ID, 0, Finish{Discovered: discovered}); err != nil {
+		t.Fatal(err)
+	}
+	// The fields normalize fills in.
+	defaults := func(n NewIssue) string {
+		p := "nil"
+		if n.Priority != nil {
+			p = fmt.Sprint(*n.Priority)
+		}
+		return fmt.Sprintf("{Status:%q Type:%q Priority:%s}", n.Status, n.Type, p)
+	}
+	for i := range want {
+		if !reflect.DeepEqual(discovered[i], want[i]) {
+			t.Errorf("after FinishIssue, the caller's Discovered[%d] = %s, want %s", i, defaults(discovered[i]), defaults(want[i]))
+		}
+	}
 }
 
 // A finish that fails part way writes nothing.

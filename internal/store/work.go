@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -148,6 +149,9 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if len(f.Discovered) > MaxDiscovered {
 		return Issue{}, nil, fmt.Errorf("%w: at most %d discovered issues", ErrInvalid, MaxDiscovered)
 	}
+	// normalize fills in defaults in place, so work on a copy: the
+	// caller's slice shares its backing array with f.Discovered.
+	f.Discovered = slices.Clone(f.Discovered)
 	ids := make([]IssueID, len(f.Discovered))
 	metas := make([]any, len(f.Discovered))
 	for i := range f.Discovered {
