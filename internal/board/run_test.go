@@ -183,3 +183,25 @@ func TestRunCoalescesActions(t *testing.T) {
 		}
 	})
 }
+
+// A line that fills the width is not followed by erase-to-end-of-line,
+// which on xterm would clear its last cell (the pending wrap); a shorter
+// one is.
+func TestRunPaintsFullLines(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv, sc := &fakeServer{}, newScreen(30, 6)
+		wait := runBoard(t, srv, sc, sc.terminal())
+		synctest.Wait()
+		out := sc.output()
+		if !strings.Contains(out, "live\r\n") || strings.Contains(out, "live\x1b[K") {
+			t.Errorf("the full-width header is drawn %q, want it ended by a newline alone", out)
+		}
+		if !strings.Contains(out, "Ready 1\x1b[K\r\n") {
+			t.Errorf("a short line is not erased to its end: %q", out)
+		}
+		_, _ = sc.keys.Write([]byte("q"))
+		if err := wait(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

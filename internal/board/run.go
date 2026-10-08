@@ -82,7 +82,7 @@ func Run(ctx context.Context, title string, t Terminal, live *Live, conn Conn) e
 			return
 		}
 		last = frame
-		_, _ = io.WriteString(t.Out, paint(frame))
+		_, _ = io.WriteString(t.Out, paint(frame, w))
 	}
 	draw()
 
@@ -162,9 +162,11 @@ func readKeys(ctx context.Context, in io.Reader, keys chan<- []byte) {
 	}
 }
 
-// paint draws frame from the top left corner, clearing what each line
-// and the screen below it held before.
-func paint(frame []string) string {
+// paint draws frame from the top left corner of a terminal width cells
+// wide, clearing what each line and the screen below it held before. A
+// line that fills the width is not erased to its end: the cursor waits
+// on its last cell for the wrap, and xterm would erase that cell.
+func paint(frame []string, width int) string {
 	var b strings.Builder
 	b.WriteString("\x1b[H")
 	for i, l := range frame {
@@ -172,7 +174,9 @@ func paint(frame []string) string {
 			b.WriteString("\r\n")
 		}
 		b.WriteString(l)
-		b.WriteString("\x1b[K")
+		if visibleWidth(l) < width {
+			b.WriteString("\x1b[K")
+		}
 	}
 	b.WriteString("\x1b[J")
 	return b.String()
