@@ -59,7 +59,7 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 			return err
 		}
 		if before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, target)
+			return &StateError{ID: target, Reason: StateClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, target)
 		if err != nil {
@@ -182,7 +182,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 			return err
 		}
 		if before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is already closed", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateAlreadyClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, id)
 		if err != nil {
@@ -275,7 +275,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 		}
 		if release {
 			if before.Status == StatusClosed {
-				return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+				return &StateError{ID: id, Reason: StateClosed}
 			}
 			if err := checkEpoch(c, epoch); err != nil {
 				return err

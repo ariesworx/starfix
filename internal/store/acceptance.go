@@ -335,7 +335,7 @@ func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptanc
 			return err
 		}
 		if is.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, id)
 		if err != nil {

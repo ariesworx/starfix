@@ -382,7 +382,7 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return fmt.Errorf("issue %s at rev %d, not %d: %w", id, before.Rev, expected, ErrConflict)
 		}
 		if patch.Status != nil && before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateClosed}
 		}
 		if len(sets) == 0 {
 			out = before
@@ -397,7 +397,7 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		}
 		if c.active(w.now) && (patch.Status != nil && *patch.Status != before.Status ||
 			patch.Assignee != nil && *patch.Assignee != before.Assignee) {
-			return fmt.Errorf("%w: issue %s is claimed by %s/%s; %s", ErrInvalid, id, c.Holder.Principal, c.Holder.Session, errClaimedFields)
+			return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
 		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
 			if err := mustExist(ctx, w.tx, *patch.ParentID); err != nil {
@@ -431,9 +431,8 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 	return out, nil
 }
 
-// errClaimedFields ends the refusal of a status or assignee change to a
-// claimed issue. starfixd recognizes that refusal by its "is claimed by"
-// text (internal/server/errors.go) to name the next step.
+// errClaimedFields ends the text of a [StateClaimed] refusal, of a status
+// or assignee change to a claimed issue.
 const errClaimedFields = "status and assignee change only through finish, close or a releasing handoff"
 
 // ErrStatusInProgress refuses update's status in_progress: only start
@@ -632,7 +631,7 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 			return err
 		}
 		if before.Status != StatusClosed {
-			return fmt.Errorf("%w: issue %s is not closed", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateNotClosed}
 		}
 		out, err = setStatus(ctx, w, before, OpIssueReopen, []any{string(StatusOpen), nil, nil}, nil)
 		return err
@@ -648,7 +647,7 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 // them in the event.
 func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force bool) (Issue, error) {
 	if before.Status == StatusClosed {
-		return Issue{}, fmt.Errorf("%w: issue %s is already closed", ErrInvalid, before.ID)
+		return Issue{}, &StateError{ID: before.ID, Reason: StateAlreadyClosed}
 	}
 	items, err := acceptanceItems(ctx, w.tx, before)
 	if err != nil {

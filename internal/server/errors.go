@@ -31,6 +31,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var idem *store.IdemError
 	var unmet *store.AcceptanceError
 	var forbidden *store.ForbiddenError
+	var state *store.StateError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
@@ -73,21 +74,19 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 			"status in_progress is set only by start")
 
 	case errors.Is(err, store.ErrInvalid):
-		// These refusals have no typed error in the store, so its
-		// messages are matched: a change to one of them must change
-		// this too.
-		switch {
-		case strings.Contains(text, " is claimed by "):
-			return proto.Errf(proto.CodeInvalid,
-				fmt.Sprintf("finish it, or let it go with `sfx handoff %s --release` first; only the holder or an admin can", id),
-				strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
-		case strings.HasSuffix(text, " is closed; reopen it first"):
-			return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `sfx reopen %s`", id),
-				strings.TrimSuffix(text, "; reopen it first"))
-		case strings.HasSuffix(text, " is already closed"):
-			return proto.Errf(proto.CodeInvalid, "nothing to do", text)
-		case strings.HasSuffix(text, " is not closed"):
-			return proto.Errf(proto.CodeInvalid, "nothing to do", text)
+		if errors.As(err, &state) {
+			msg := state.Error()
+			switch state.Reason {
+			case store.StateClaimed:
+				return proto.Errf(proto.CodeInvalid,
+					fmt.Sprintf("finish it, or let it go with `sfx handoff %s --release` first; only the holder or an admin can", id),
+					strings.TrimPrefix(msg, store.ErrInvalid.Error()+": "))
+			case store.StateClosed:
+				return proto.Errf(proto.CodeInvalid, fmt.Sprintf("reopen it with `sfx reopen %s`", id),
+					strings.TrimSuffix(msg, "; reopen it first"))
+			case store.StateAlreadyClosed, store.StateNotClosed:
+				return proto.Errf(proto.CodeInvalid, "nothing to do", msg)
+			}
 		}
 		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("correct it and retry; `sfx %s -h` lists the options", command(op)), text)
 
