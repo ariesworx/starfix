@@ -213,6 +213,14 @@ server settings stay on the command line.
   gives the window's `usage` line, with the tokens no issue was held for
   and whether any were split by time.
   No tool sets an account; people do that with `sfx update --account`.
+- **Files come from git, not from the agent.** `sfx mcp` reads the paths
+  each held issue's work touched from the repository it was started in,
+  and sends them with a renewal (at most every five minutes per issue),
+  `finish` and `handoff`; no tool takes them. `ready` gives each issue
+  whose files overlap another session's work `overlaps` (and ranks it
+  last), and `show` gives the likely `files`, `files_more` and the
+  `overlaps` with who holds them ([Files](concepts.md#files-what-an-issue-touches)).
+  People declare files with `sfx create --paths` or `sfx update --paths`.
 
 One SSH connection serves an MCP session. It opens on the first tool call
 and is redialed if it drops. Reads, `create`, `comment`, `finish`,

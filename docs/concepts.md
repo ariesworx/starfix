@@ -40,7 +40,9 @@ closed. The other types (`related`, `discovered-from`, `duplicates`,
 
 - **Ready** issues are open, and nothing holds them back: no open blocker
   on the issue or on any parent, and nothing deferred. They come out
-  highest priority first, then oldest first.
+  highest priority first, then oldest first, except that an issue whose
+  files overlap work another session holds comes after the rest
+  ([Files](#files-what-an-issue-touches)).
 - **Blocked** issues are not closed and have at least one open blocker,
   their own or a parent's.
 
@@ -96,6 +98,39 @@ A unit of work is two steps:
 `sfx start --branch` also checks the branch out, and `--worktree DIR`
 creates a worktree on it. The MCP `start` tool never runs git; the agent
 does.
+
+## Files: what an issue touches
+
+The server keeps, for each issue, the paths its work is likely to touch,
+so that two sessions are not sent to edit the same files. They come from
+two sources:
+
+- **Commit paths** are what the work did. `sfx` reads them from git and
+  sends them: `sfx mcp` with a renewal (at most every five minutes per
+  issue) and with `finish` and `handoff`, and a terminal's `sfx finish`,
+  `handoff` and `away`. An issue's paths are those of the commits since
+  the default branch whose `Starfix:` trailer names it, or, on the
+  issue's own branch, every commit on it and the uncommitted files.
+  Earlier holders' paths stay with the issue.
+- **Declared paths** are what someone expects the work to touch, given
+  with `sfx create --paths` or `sfx update --paths`. A path ending in `/`
+  is a directory and covers everything under it. `update --paths`
+  replaces the declared set, and an empty value clears it.
+
+Paths are relative to the repository's root, with forward slashes. An
+issue keeps at most 200 (the server's `paths_per_issue`); past that, the
+oldest commit paths make way for new ones, and more declared paths than
+that are refused.
+
+`ready` ranks an issue down, never out, when one of its paths equals a
+path of an issue another session holds, or when a declared directory of
+either covers a path of the other. It names those issues (`overlaps
+ID`), and `show` lists the likely files and who holds the overlapping
+work. Your own session's claims do not count, and `start` with no id
+takes the first issue that overlaps nothing, if there is one.
+
+Reading git is a hint, never a requirement: with no git, no repository
+or a detached HEAD, `sfx` sends nothing and the work goes on.
 
 ## Acceptance criteria
 
