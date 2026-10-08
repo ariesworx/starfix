@@ -44,7 +44,7 @@ func cmdTUI(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	rc := conn.(*mcpserver.RepoConn)
+	rc := conn.(*mcpserver.RepoConn) // the only Conn the dialer above returns
 	if w := rc.Warning(r.env.Version); w != "" {
 		// Shown again once the board gives the screen back.
 		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", esc(w))
