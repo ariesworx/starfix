@@ -324,7 +324,9 @@ func TestDigestUsage(t *testing.T) {
 		clk.add(at(to).Sub(clk.now()))
 		var err error
 		if start {
-			_, _, err = s.StartIssue(ctx, a, id, time.Hour, false)
+			// A lease longer than any hold here, as if renewed: a lapsed
+			// lease would end a hold before its finish.
+			_, _, err = s.StartIssue(ctx, a, id, 3*time.Hour, false)
 		} else {
 			_, _, err = s.FinishIssue(ctx, a, id, 0, Finish{})
 		}
