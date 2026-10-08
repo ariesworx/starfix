@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/ariesworx/starfix/internal/proto"
 )
@@ -42,8 +43,12 @@ type Input struct {
 	// Send sends one batch of at most MaxBatch records; it returns once
 	// the server has accepted them.
 	Send func(context.Context, []proto.UsageRecord) error
-	// Final says the session has stopped writing (SessionEnd).
+	// Final says the session has stopped writing (SessionEnd), so each
+	// file's last response is finished.
 	Final bool
+	// Done are files the harness has finished writing, read as Final: a
+	// stopped subagent's (SubagentStop's agent_transcript_path).
+	Done []string
 }
 
 // Result is what a run did.
@@ -58,6 +63,11 @@ type Result struct {
 	// Code version such a line named, if any.
 	Unrecognized bool
 	Version      string
+	// Refused counts records the server refused as invalid, which were
+	// dropped (and counted in Skipped) so they do not block the rest;
+	// Refusal is the last such refusal.
+	Refused int
+	Refusal error
 }
 
 // Claude sends what a Claude Code session's transcripts hold that earlier
@@ -88,7 +98,7 @@ func Claude(ctx context.Context, in Input) (Result, error) {
 	var done []pending
 	var recs []proto.UsageRecord
 	for _, path := range in.Files {
-		fr, m, err := readFile(path, marks[path], in.Session, in.Final)
+		fr, m, err := readFile(path, marks[path], in.Session, in.Final || slices.Contains(in.Done, path))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -111,12 +121,12 @@ func Claude(ctx context.Context, in Input) (Result, error) {
 	}
 	accepted := 0
 	for i := 0; i < len(recs); i += MaxBatch {
-		batch := recs[i:min(i+MaxBatch, len(recs))]
-		if err := in.Send(ctx, batch); err != nil {
+		n, err := send(ctx, in.Send, recs[i:min(i+MaxBatch, len(recs))], &res)
+		res.Sent += n
+		if err != nil {
 			errs = append(errs, err)
 			break
 		}
-		res.Sent += len(batch)
 		accepted++
 	}
 	keep := map[string]mark{}
@@ -129,6 +139,37 @@ func Claude(ctx context.Context, in Input) (Result, error) {
 		errs = append(errs, err)
 	}
 	return res, errors.Join(errs...)
+}
+
+// send sends batch and returns how many records the server accepted. The
+// server refuses a whole batch, as invalid, for one record it refuses,
+// such as one whose time is past its own clock, which the client cannot
+// check. Such a batch is halved until each record it refuses stands
+// alone, and that record is dropped, counted in res, so it cannot block
+// the records after it on every run. Any other failure, such as
+// unavailable or busy, drops nothing: it is returned, and the next run
+// sends the batch again.
+func send(ctx context.Context, f func(context.Context, []proto.UsageRecord) error, batch []proto.UsageRecord, res *Result) (int, error) {
+	err := f(ctx, batch)
+	if err == nil {
+		return len(batch), nil
+	}
+	if pe, ok := errors.AsType[*proto.Error](err); !ok || pe.Code != proto.CodeInvalid {
+		return 0, err
+	}
+	if len(batch) == 1 {
+		res.Refused++
+		res.Skipped++
+		res.Refusal = err
+		return 0, nil
+	}
+	mid := len(batch) / 2
+	n, err := send(ctx, f, batch[:mid], res)
+	if err != nil {
+		return n, err
+	}
+	m, err := send(ctx, f, batch[mid:], res)
+	return n + m, err
 }
 
 // mark is where the last run left a file: Offset, just past the last
@@ -144,6 +185,15 @@ type mark struct {
 // opened, and returns what it found and the mark to keep once that is
 // sent.
 func readFile(path string, m mark, session string, final bool) (fileRead, mark, error) {
+	// A FIFO or device would block the open, or the read, past any
+	// deadline: only a regular file is read.
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: not a regular file", path)
+	}
 	f, err := os.Open(path) //nolint:gosec // a transcript the harness named
 	if err != nil {
 		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: %w", path, err)

@@ -13,9 +13,16 @@ import (
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
-// usageTimeout bounds `usage --hook`, inside the 30 seconds setup gives
-// the hook, so a slow server costs a note, not a hung process.
-const usageTimeout = 25 * time.Second
+// usageTimeout bounds `usage --hook`, a little inside the timeout setup
+// gives the hook, so a slow server costs a note, not a killed process.
+// Claude Code waits for the SessionEnd hook as it exits, so that run has
+// less.
+func usageTimeout(event string) time.Duration {
+	if event == "SessionEnd" {
+		return agentsetup.SessionEndTimeout - time.Second
+	}
+	return agentsetup.UsageTimeout - 5*time.Second
+}
 
 func cmdUsage(ctx context.Context, r *runner, args []string) error {
 	const usage = "usage --hook[=AGENT]"
@@ -56,7 +63,7 @@ func (r *runner) usageHook(ctx context.Context) {
 		r.dir = in.Cwd
 	}
 	r.quiet = true
-	ctx, cancel := context.WithTimeout(ctx, usageTimeout)
+	ctx, cancel := context.WithTimeout(ctx, usageTimeout(in.HookEventName))
 	defer cancel()
 	res, err := r.captureClaude(ctx, in)
 	if errors.Is(err, client.ErrNoConfig) {
@@ -66,6 +73,13 @@ func (r *runner) usageHook(ctx context.Context) {
 	switch {
 	case err != nil:
 		note = usageFailure(err)
+	case res.Refused > 0:
+		msg := res.Refusal.Error()
+		if pe, ok := errors.AsType[*proto.Error](res.Refusal); ok {
+			msg = pe.Message
+		}
+		note = "starfix: " + strconv.Itoa(res.Refused) + " token usage record" + plural(res.Refused) + " refused and dropped: " +
+			strconv.Quote(msg) + "; fix: \"check this machine's clock against the server's; dropped records are not sent again\""
 	case res.Unrecognized:
 		v := "an unknown version"
 		if res.Version != "" {
@@ -98,10 +112,22 @@ func (r *runner) captureClaude(ctx context.Context, in hookInput) (capture.Resul
 	}
 	files, err := capture.ClaudeFiles(in.TranscriptPath, in.SessionID, in.AgentTranscriptPath)
 	// At SessionEnd the session has stopped writing, so its last
-	// responses are finished.
-	res, cerr := capture.Claude(ctx, capture.Input{Session: in.SessionID, Files: files,
-		StateDir: filepath.Join(cache, "starfix"), Send: r.sendUsage, Final: in.HookEventName == "SessionEnd"})
+	// responses are finished; at SubagentStop, the subagent's are.
+	var done []string
+	if in.HookEventName == "SubagentStop" && filepath.IsAbs(in.AgentTranscriptPath) {
+		done = []string{filepath.Clean(in.AgentTranscriptPath)}
+	}
+	res, cerr := capture.Claude(ctx, capture.Input{Session: in.SessionID, Files: files, StateDir: filepath.Join(cache, "starfix"),
+		Send: r.sendUsage, Final: in.HookEventName == "SessionEnd", Done: done})
 	return res, errors.Join(err, cerr)
+}
+
+// plural is "s" unless n is 1.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // sendUsage sends one batch with the usage op.

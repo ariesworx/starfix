@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,7 +20,9 @@ import (
 // Claude Code writes one transcript per session, as JSON lines, and one
 // per subagent beside it, in <dir>/<session>/subagents/agent-*.jsonl.
 // Each API response appears once per content block, so on several lines,
-// one after another, each carrying the response's usage; message.id names
+// each carrying the response's usage. Tools run while a response streams,
+// so a tool result (a user line) or an attachment can fall among its
+// lines; the next response cannot start before it ends. message.id names
 // the response (requestId is missing from some lines, such as those of
 // remote_projects sessions). The counts repeat, except output_tokens,
 // which grows from line to line: the last line has the response's final
@@ -89,42 +92,46 @@ var assistantType = []byte(`"type":"assistant"`)
 // line whose usage cannot be read in full, or that falls outside what the
 // server accepts, is lineBad, with the Claude Code version the line names
 // if it looks like one. Counts are never guessed: a missing count is
-// unknown.
-func parseClaudeLine(line []byte, session string) (proto.UsageRecord, verdict, string) {
+// unknown. id is the message id of any assistant line, of whatever
+// session or verdict, that names one: a new one shows the response
+// before it has ended.
+func parseClaudeLine(line []byte, session string) (rec proto.UsageRecord, v verdict, version, id string) {
 	var e claudeEntry
 	err := json.Unmarshal(line, &e)
 	if _, typeErr := errors.AsType[*json.UnmarshalTypeError](err); err != nil && !typeErr {
 		if bytes.Contains(line, assistantType) {
-			return proto.UsageRecord{}, lineBad, ""
+			return proto.UsageRecord{}, lineBad, "", ""
 		}
-		return proto.UsageRecord{}, lineOther, ""
+		return proto.UsageRecord{}, lineOther, "", ""
 	}
 	// On a type error, the fields that did decode are still set.
-	if e.Type != "assistant" || (e.SessionID != "" && e.SessionID != session) {
-		return proto.UsageRecord{}, lineOther, ""
+	m := e.Message
+	if e.Type == "assistant" && m != nil {
+		id = m.ID
 	}
-	version := ""
+	if e.Type != "assistant" || (e.SessionID != "" && e.SessionID != session) {
+		return proto.UsageRecord{}, lineOther, "", id
+	}
 	if versionShape.MatchString(e.Version) {
 		version = e.Version
 	}
-	m := e.Message
 	if err == nil && m != nil && m.Model == syntheticModel {
-		return proto.UsageRecord{}, lineOther, ""
+		return proto.UsageRecord{}, lineOther, "", id
 	}
 	if err != nil || m == nil || m.Usage == nil || e.SessionID == "" {
-		return proto.UsageRecord{}, lineBad, version
+		return proto.UsageRecord{}, lineBad, version, id
 	}
 	u := m.Usage
-	rec := proto.UsageRecord{Harness: Harness, RequestID: m.ID, Model: m.Model,
+	rec = proto.UsageRecord{Harness: Harness, RequestID: m.ID, Model: m.Model,
 		At: e.Timestamp.UTC(), Granularity: "request",
 		Tokens: proto.Tokens{Input: u.Input, Output: u.Output, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead}}
 	if c := u.CacheCreation; c != nil && c.OneHour != nil && u.CacheWrite != nil && *c.OneHour <= *u.CacheWrite {
 		rec.CacheWrite1h = c.OneHour
 	}
 	if !valid(rec) {
-		return proto.UsageRecord{}, lineBad, version
+		return proto.UsageRecord{}, lineBad, version, id
 	}
-	return rec, lineUsage, version
+	return rec, lineUsage, version, id
 }
 
 // Bounds the server holds a record to (store.UsageRecord.validate); a
@@ -174,15 +181,16 @@ type fileRead struct {
 //
 // Output grows until the response's last line is written, and the server
 // keeps the first count it gets for a response, so a response is sent
-// only once it is finished: once a later line is of another message, or
-// of another type. The last response read has no such line yet; unless
-// final, it is left out and the read ends before its first line, so the
-// next read takes it whole. Lines passed over for their length do not
-// finish a response.
+// only once it has ended: once an assistant line of another message
+// follows it, since the next request starts only after it ends. Tool
+// results and attachments can fall among a response's lines, so they do
+// not end it. The last response read has no such line yet; unless final,
+// it is left out and the read ends before its first line, so the next
+// read takes it whole.
 func readClaude(r io.Reader, session string, final bool) (fileRead, error) {
 	var out fileRead
 	seen := map[string]int{}
-	// open is the response whose lines are the last read, from start;
+	// open is the last response read, from its first line at start;
 	// added says its record was first seen there.
 	var open struct {
 		id    string
@@ -190,8 +198,8 @@ func readClaude(r io.Reader, session string, final bool) (fileRead, error) {
 		added bool
 	}
 	end, long, err := scanLines(r, maxLine, 64<<10, func(line []byte, at int64) {
-		rec, v, version := parseClaudeLine(line, session)
-		if v != lineUsage || rec.RequestID != open.id {
+		rec, v, version, id := parseClaudeLine(line, session)
+		if id != "" && id != open.id {
 			open.id = ""
 		}
 		switch v {
@@ -289,7 +297,7 @@ func ClaudeFiles(transcript, session, agent string) ([]string, error) {
 		dir := filepath.Join(filepath.Dir(transcript), session, "subagents")
 		entries, err := os.ReadDir(dir)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return files, err
+			return files, fmt.Errorf("list subagent transcripts in %s: %w", dir, err)
 		}
 		for _, e := range entries {
 			if name := e.Name(); e.Type().IsRegular() && strings.HasPrefix(name, "agent-") && strings.HasSuffix(name, ".jsonl") {

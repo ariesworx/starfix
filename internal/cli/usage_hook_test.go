@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ariesworx/starfix/internal/agentsetup"
 	"github.com/ariesworx/starfix/internal/capture"
 )
 
@@ -64,7 +66,8 @@ func TestUsageHookNeverFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	user := `{"type":"user","sessionId":"` + hookSession + `","message":{"role":"user","content":"Fixture prompt."}}` + "\n"
-	records := writeTranscript(t, transcriptLine(t, "msg_01A", false)+user)
+	// records ends a response: the next one has begun.
+	records := writeTranscript(t, transcriptLine(t, "msg_01A", false)+user+transcriptLine(t, "msg_01B", false))
 	// open ends with a response that may still grow: a Stop run holds it
 	// back, so has nothing to send; a SessionEnd run sends it.
 	open := writeTranscript(t, transcriptLine(t, "msg_01O", false))
@@ -134,5 +137,23 @@ func TestUsageRefusesArguments(t *testing.T) {
 	}
 	if code, _, errb := runCLI(t, "-C", t.TempDir(), "usage", "--hook="+capture.Harness); code != ExitOK || errb != "" {
 		t.Errorf("sfx usage --hook=%s outside a repository: exit %d, stderr %q; want 0 and nothing", capture.Harness, code, errb)
+	}
+}
+
+// Each run gives up before Claude Code would kill it: inside the timeout
+// setup writes for its hook.
+func TestUsageTimeout(t *testing.T) {
+	tests := []struct {
+		event string
+		hook  time.Duration
+	}{
+		{"Stop", agentsetup.UsageTimeout},
+		{"SubagentStop", agentsetup.UsageTimeout},
+		{"SessionEnd", agentsetup.SessionEndTimeout},
+	}
+	for _, tc := range tests {
+		if got := usageTimeout(tc.event); got <= 0 || got >= tc.hook {
+			t.Errorf("usageTimeout(%s) = %v, want under the hook's %v", tc.event, got, tc.hook)
+		}
 	}
 }

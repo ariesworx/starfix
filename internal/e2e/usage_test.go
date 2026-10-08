@@ -154,18 +154,17 @@ func writeClaudeLines(t *testing.T, path string, lines ...map[string]any) {
 	}
 }
 
-// claudeResponse is one API response as Claude Code writes it: a line
-// per content block, each with the response's usage, its output count
-// growing to the last line's. req is the requestId, which some lines
-// lack ("").
-func claudeResponse(session, id, req string, outputs []int, usage map[string]any) []map[string]any {
-	at := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+// claudeResponse is one API response as Claude Code writes it, at at: a
+// line per content block, each with the response's usage, its output
+// count growing to the last line's. req is the requestId, which some
+// lines lack ("").
+func claudeResponse(session, id, req string, at time.Time, outputs []int, usage map[string]any) []map[string]any {
 	var lines []map[string]any
 	for i, o := range outputs {
 		u := maps.Clone(usage)
 		u["output_tokens"] = o
-		l := map[string]any{"type": "assistant", "sessionId": session, "timestamp": at, "uuid": fmt.Sprintf("%s-%d", id, i),
-			"message": map[string]any{"id": id, "model": "claude-opus-4-5-20251101", "role": "assistant",
+		l := map[string]any{"type": "assistant", "sessionId": session, "timestamp": at.UTC().Format("2006-01-02T15:04:05.000Z"),
+			"uuid": fmt.Sprintf("%s-%d", id, i), "message": map[string]any{"id": id, "model": "claude-opus-4-5-20251101", "role": "assistant",
 				"content": []any{map[string]any{"type": "text", "text": "Fixture reply."}}, "usage": u}}
 		if req != "" {
 			l["requestId"], l["version"] = req, "2.1.300"
@@ -175,14 +174,22 @@ func claudeResponse(session, id, req string, outputs []int, usage map[string]any
 	return lines
 }
 
+// toolResult is the user line a tool's result makes, which can fall
+// among the lines of the response that called it.
+func toolResult(session string) map[string]any {
+	return map[string]any{"type": "user", "sessionId": session,
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "content": "ok"}}}}
+}
+
 // A Claude Code hook run reads the session's transcripts, its subagent's
 // included, and sends their tokens through the SSH server to the daemon;
 // show on the issue the session held then shows them, counted once. A
-// response is sent once finished, with its last line's output: at Stop
-// the subagent's last response, which nothing follows yet, waits, and
-// SessionEnd sends it. The records go to the session the connection
-// names: the hook's session_id, unless STARFIX_SESSION is set, as for
-// prime --hook and sfx mcp.
+// response is sent once another has begun, with its last line's output,
+// though a tool result splits it: at Stop the last response of each file
+// waits; SubagentStop sends the stopped subagent's, and SessionEnd the
+// rest. The records go to the session the connection names: the hook's
+// session_id, unless STARFIX_SESSION is set, as for prime --hook and sfx
+// mcp.
 func TestUsageHookCapture(t *testing.T) {
 	w := newWorld(t, daemonOpts{})
 	tests := []struct {
@@ -202,21 +209,31 @@ func TestUsageHookCapture(t *testing.T) {
 
 			dir := t.TempDir()
 			main := filepath.Join(dir, sess+".jsonl")
-			writeClaudeLines(t, main, claudeResponse(sess, "msg_01Main", "req_01Main", []int{5, 100, 280},
+			sub := filepath.Join(dir, sess, "subagents", "agent-a1.jsonl")
+			now := time.Now()
+			a := claudeResponse(sess, "msg_01Main", "req_01Main", now, []int{5, 100, 280},
 				map[string]any{"input_tokens": 1200, "cache_creation_input_tokens": 5000, "cache_read_input_tokens": 90000,
-					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 1000, "ephemeral_5m_input_tokens": 4000}})...)
-			writeClaudeLines(t, main, map[string]any{"type": "user", "sessionId": sess,
-				"message": map[string]any{"role": "user", "content": "Fixture prompt."}})
-			writeClaudeLines(t, filepath.Join(dir, sess, "subagents", "agent-a1.jsonl"), claudeResponse(sess, "msg_01Sub", "", []int{2, 20},
+					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 1000, "ephemeral_5m_input_tokens": 4000}})
+			writeClaudeLines(t, main, a[0], a[1], toolResult(sess), a[2], toolResult(sess))
+			writeClaudeLines(t, main, claudeResponse(sess, "msg_01Last", "req_01Last", now, []int{50, 300},
+				map[string]any{"input_tokens": 1200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0})...)
+			writeClaudeLines(t, sub, claudeResponse(sess, "msg_01Sub", "", now, []int{2, 20},
 				map[string]any{"input_tokens": 1200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
 					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}})...)
 
 			cache := t.TempDir()
-			mainOnly := "tokens claude-opus-4-5-20251101: 1.2k in, 280 out, 5k cache write (1k 1h), 90k cache read\n"
-			both := "tokens claude-opus-4-5-20251101: 2.4k in, 300 out, 5k cache write (1k 1h), 90k cache read\n"
-			for i, run := range []struct{ event, want string }{{"Stop", mainOnly}, {"SessionEnd", both}, {"SessionEnd", both}} {
-				r := u.usageHook(cache, map[string]string{"session_id": sess, "transcript_path": main,
-					"cwd": filepath.Join(u.repo, "src"), "hook_event_name": run.event})
+			const model = "tokens claude-opus-4-5-20251101: "
+			for i, run := range []struct{ event, agent, want string }{
+				{"Stop", "", model + "1.2k in, 280 out, 5k cache write (1k 1h), 90k cache read\n"},
+				{"SubagentStop", sub, model + "2.4k in, 300 out, 5k cache write (1k 1h), 90k cache read\n"},
+				{"SessionEnd", "", model + "3.6k in, 600 out, 5k cache write (1k 1h), 90k cache read\n"},
+				{"SessionEnd", "", model + "3.6k in, 600 out, 5k cache write (1k 1h), 90k cache read\n"},
+			} {
+				in := map[string]string{"session_id": sess, "transcript_path": main, "cwd": filepath.Join(u.repo, "src"), "hook_event_name": run.event}
+				if run.agent != "" {
+					in["agent_transcript_path"] = run.agent
+				}
+				r := u.usageHook(cache, in)
 				if r.code != 0 || r.stdout != "" || r.stderr != "" {
 					t.Fatalf("usage --hook run %d (%s): exit %d, stdout %q, stderr %q; want 0 and nothing", i+1, run.event, r.code, r.stdout, r.stderr)
 				}
@@ -225,5 +242,41 @@ func TestUsageHookCapture(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The server refuses a record whose time is more than an hour past its
+// clock, and with it the whole batch. The hook drops that record, sends
+// the rest, and says so in one line; the next run sends nothing again.
+func TestUsageHookDropsRefusedRecord(t *testing.T) {
+	w := newWorld(t, daemonOpts{})
+	u := w.newUser("alice", "")
+	const sess = "8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a"
+	u.env = map[string]string{"CLAUDE_CODE_SESSION_ID": sess}
+	task := strings.TrimSpace(u.ok("create", "Do the work"))
+	u.ok("start", task)
+
+	main := filepath.Join(t.TempDir(), sess+".jsonl")
+	now := time.Now()
+	usage := map[string]any{"input_tokens": 1000}
+	for _, r := range []struct {
+		id string
+		at time.Time
+	}{{"msg_01One", now}, {"msg_01Ahead", now.Add(2 * time.Hour)}, {"msg_01Two", now}, {"msg_01Open", now}} {
+		writeClaudeLines(t, main, claudeResponse(sess, r.id, "", r.at, []int{100}, usage)...)
+	}
+	in := map[string]string{"session_id": sess, "transcript_path": main, "cwd": filepath.Join(u.repo, "src"), "hook_event_name": "Stop"}
+	cache := t.TempDir()
+	r := u.usageHook(cache, in)
+	if r.code != 0 || r.stdout != "" || !strings.HasPrefix(r.stderr, "starfix: 1 token usage record refused and dropped: ") ||
+		!strings.Contains(r.stderr, "; fix: ") || strings.Count(r.stderr, "\n") != 1 {
+		t.Fatalf("usage --hook with a record ahead of the server: exit %d, stdout %q, stderr %q; want one note on the dropped record", r.code, r.stdout, r.stderr)
+	}
+	want := "tokens claude-opus-4-5-20251101: 2k in, 200 out\n"
+	if shown := u.ok("show", task); !strings.Contains(shown, want) {
+		t.Fatalf("show lacks %q, the records sent around the refused one:\n%s", want, shown)
+	}
+	if r := u.usageHook(cache, in); r.code != 0 || r.stderr != "" {
+		t.Fatalf("second usage --hook: exit %d, stderr %q; want nothing", r.code, r.stderr)
 	}
 }

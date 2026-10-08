@@ -17,11 +17,16 @@ import (
 )
 
 // sink is a Send that keeps what it is sent, failing while fail is set.
+// Like the server, it refuses a whole batch that holds a record it
+// refuses (refuse), or more than limit records, and keeps the first
+// record it gets for each request id.
 type sink struct {
 	mu      sync.Mutex
 	batches [][]proto.UsageRecord
 	fail    error
-	// output is the output count last sent for each request id.
+	refuse  func(proto.UsageRecord) bool
+	limit   int
+	// output is the output count kept for each request id: the first sent.
 	output map[string]int64
 }
 
@@ -31,12 +36,20 @@ func (s *sink) send(_ context.Context, recs []proto.UsageRecord) error {
 	if s.fail != nil {
 		return s.fail
 	}
+	if s.limit > 0 && len(recs) > s.limit {
+		return proto.Errf(proto.CodeInvalid, "send fewer", fmt.Sprintf("at most %d usage records per call, not %d", s.limit, len(recs)))
+	}
+	for i, r := range recs {
+		if s.refuse != nil && s.refuse(r) {
+			return proto.Errf(proto.CodeInvalid, "correct it and retry", fmt.Sprintf("usage record %d: at is more than an hour past the server's clock", i+1))
+		}
+	}
 	s.batches = append(s.batches, slices.Clone(recs))
 	if s.output == nil {
 		s.output = map[string]int64{}
 	}
 	for _, r := range recs {
-		if r.Output != nil {
+		if _, ok := s.output[r.RequestID]; !ok && r.Output != nil {
 			s.output[r.RequestID] = *r.Output
 		}
 	}
@@ -118,22 +131,30 @@ func (l layout) capture(t *testing.T, s *sink, final bool) (Result, error) {
 	return Claude(t.Context(), Input{Session: session, Files: files, StateDir: l.state, Send: s.send, Final: final})
 }
 
-// mainIDs are the responses in the main fixture, all finished. The
-// subagent's one response, deltaID, is its file's last: still open until
-// a later line or the session's end.
-var mainIDs = []string{"msg_01FixtureAlpha", "msg_01FixtureBravo", "msg_01FixtureCharlie", "msg_01FixtureEcho"}
+// mainIDs are the responses in the main fixture. A Stop run sends
+// stopIDs: the last, echoID, is followed by no other message, so it may
+// still grow, and waits. So does the subagent's one response, deltaID.
+var (
+	mainIDs = []string{"msg_01FixtureAlpha", "msg_01FixtureBravo", "msg_01FixtureCharlie", echoID}
+	stopIDs = mainIDs[:3]
+)
 
-const deltaID = "msg_01FixtureDelta"
+const (
+	echoID  = "msg_01FixtureEcho"
+	deltaID = "msg_01FixtureDelta"
+)
 
 // Each run sends only what earlier runs did not. A line still being
-// written waits for the next run, and so does a response whose last
-// line may be yet to come, so its final output is the one sent.
+// written waits for the next run, and so does a response that no other
+// message follows yet, even across tool results, so its final output is
+// the one sent: the sink, like the server, keeps the first.
 func TestClaudeAcrossRuns(t *testing.T) {
 	l := newLayout(t)
 	s := &sink{}
 	newFirst := claudeLine("msg_01New", "req_01New", "claude-x", `{"input_tokens":1,"output_tokens":5}`) + "\n"
 	newLast := claudeLine("msg_01New", "req_01New", "claude-x", `{"input_tokens":1,"output_tokens":90}`) + "\n"
-	user := `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":"Fixture prompt."}}` + "\n"
+	next := claudeLine("msg_01Next", "", "claude-x", `{"input_tokens":2,"output_tokens":7}`) + "\n"
+	result := `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}` + "\n"
 	half := claudeLine("msg_01Half", "", "claude-x", `{"input_tokens":1}`)
 	steps := []struct {
 		name   string
@@ -141,15 +162,16 @@ func TestClaudeAcrossRuns(t *testing.T) {
 		final  bool
 		want   []string
 	}{
-		{name: "first run sends the main transcript; the subagent's response is open", want: mainIDs},
+		{name: "first run: the last response of each file waits", want: stopIDs},
 		{name: "second run sends nothing"},
-		{name: "a new response's first line waits", before: func() { appendTo(t, l.main, newFirst) }},
-		{name: "its last line, then a user line, send it once", want: []string{"msg_01New"},
-			before: func() { appendTo(t, l.main, newLast+user) }},
+		{name: "a new response sends the one before; its tool result does not end it", want: []string{echoID},
+			before: func() { appendTo(t, l.main, newFirst+result) }},
+		{name: "its later lines still wait", before: func() { appendTo(t, l.main, newLast+result) }},
+		{name: "the next response sends it once", want: []string{"msg_01New"}, before: func() { appendTo(t, l.main, next) }},
 		{name: "half a line waits", before: func() { appendTo(t, l.sub, half[:len(half)/2]) }},
-		{name: "the rest of it closes the subagent's response", want: []string{deltaID},
+		{name: "the rest of it ends the subagent's response", want: []string{deltaID},
 			before: func() { appendTo(t, l.sub, half[len(half)/2:]+"\n") }},
-		{name: "session end sends the open response", final: true, want: []string{"msg_01Half"}},
+		{name: "session end sends the open responses", final: true, want: []string{"msg_01Next", "msg_01Half"}},
 		{name: "another session end sends nothing", final: true},
 	}
 	for _, st := range steps {
@@ -161,10 +183,13 @@ func TestClaudeAcrossRuns(t *testing.T) {
 			t.Fatalf("%s: sent %v (Sent %d), %v; want %v", st.name, got, res.Sent, err, st.want)
 		}
 	}
-	// The new response straddled two runs and was sent once, with the
-	// output of its last line.
+	// The new response was split by tool results and straddled runs; the
+	// count kept is its last line's.
 	if got := s.output["msg_01New"]; got != 90 {
-		t.Errorf("response across two runs sent output %d, want 90, its last line's", got)
+		t.Errorf("response across tool results and runs kept output %d, want 90, its last line's", got)
+	}
+	if got := s.output["msg_01FixtureAlpha"]; got != 200 {
+		t.Errorf("fixture response split by a tool result kept output %d, want 200", got)
 	}
 }
 
@@ -181,8 +206,8 @@ func TestClaudeRetriesAfterFailedSend(t *testing.T) {
 	if _, err := l.run(t, s); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.ids(); !slices.Equal(got, mainIDs) {
-		t.Fatalf("run after the failure sent %v, want %v", got, mainIDs)
+	if got := s.ids(); !slices.Equal(got, stopIDs) {
+		t.Fatalf("run after the failure sent %v, want %v", got, stopIDs)
 	}
 }
 
@@ -295,7 +320,7 @@ func TestClaudeUnrecognized(t *testing.T) {
 
 func TestStateFile(t *testing.T) {
 	l := newLayout(t)
-	if _, err := l.run(t, &sink{}); err != nil {
+	if _, err := l.capture(t, &sink{}, true); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(l.state, StateFile)
@@ -410,14 +435,89 @@ func TestClaudeConcurrentRuns(t *testing.T) {
 	}
 	got := s.ids()
 	slices.Sort(got)
-	if got = slices.Compact(got); !slices.Equal(got, mainIDs) {
-		t.Errorf("concurrent runs sent %v, want %v (each at least once)", got, mainIDs)
+	if got = slices.Compact(got); !slices.Equal(got, stopIDs) {
+		t.Errorf("concurrent runs sent %v, want %v (each at least once)", got, stopIDs)
 	}
 	if len(loadState(l.state)) != 2 {
 		t.Errorf("state after concurrent runs = %v, want both files", loadState(l.state))
 	}
 	if _, err := l.run(t, s); err != nil || len(s.ids()) != 0 {
 		t.Errorf("run after the concurrent ones sent again, or failed: %v", err)
+	}
+}
+
+// One record the server refuses, such as one whose time is past the
+// server's clock, refuses its whole batch. The rest are sent without it,
+// it is dropped and counted, and the offsets move on, so it does not
+// block every later run.
+func TestClaudeDropsRefusedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	var b strings.Builder
+	for i := range 7 {
+		id := fmt.Sprintf("msg_%02d", i)
+		if i == 4 {
+			id = "msg_bad"
+		}
+		b.WriteString(claudeLine(id, "", "claude-x", `{"input_tokens":1}`) + "\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &sink{refuse: func(r proto.UsageRecord) bool { return r.RequestID == "msg_bad" }}
+	in := Input{Session: session, Files: []string{path}, StateDir: filepath.Join(t.TempDir(), "starfix"), Send: s.send, Final: true}
+	res, err := Claude(t.Context(), in)
+	got := s.ids()
+	slices.Sort(got)
+	want := []string{"msg_00", "msg_01", "msg_02", "msg_03", "msg_05", "msg_06"}
+	if err != nil || !slices.Equal(got, want) || res.Sent != 6 || res.Skipped != 1 || res.Refused != 1 {
+		t.Fatalf("run with one refused record = sent %v, %+v, %v; want %v, Sent 6, Skipped 1, Refused 1", got, res, err, want)
+	}
+	if pe, ok := errors.AsType[*proto.Error](res.Refusal); !ok || pe.Code != proto.CodeInvalid {
+		t.Errorf("Refusal = %v, want the server's invalid refusal", res.Refusal)
+	}
+	if res, err := Claude(t.Context(), in); err != nil || len(s.ids()) != 0 || res.Refused != 0 {
+		t.Errorf("run after the refusal = %+v, %v, sent again; want nothing sent", res, err)
+	}
+}
+
+// A refusal that is not invalid, such as busy, drops nothing: the run
+// stops and the next one sends the same records.
+func TestClaudeKeepsRecordsWhenBusy(t *testing.T) {
+	l := newLayout(t)
+	s := &sink{fail: proto.Errf(proto.CodeBusy, "wait", "too many usage records today")}
+	if res, err := l.run(t, s); err == nil || res.Sent != 0 || res.Refused != 0 {
+		t.Fatalf("run while busy = %+v, %v; want an error and nothing dropped", res, err)
+	}
+	s.fail = nil
+	if _, err := l.run(t, s); err != nil || !slices.Equal(s.ids(), stopIDs) {
+		t.Fatalf("run after busy did not send %v again: %v", stopIDs, err)
+	}
+}
+
+// A server with a smaller batch limit refuses a batch as invalid; the
+// records still all go, in smaller batches, and none is dropped.
+func TestClaudeSmallerBatchLimit(t *testing.T) {
+	l := newLayout(t)
+	s := &sink{limit: 1}
+	if res, err := l.capture(t, s, true); err != nil || res.Sent != 5 || res.Refused != 0 {
+		t.Fatalf("run against a limit of 1 = %+v, %v; want 5 sent, none refused", res, err)
+	}
+}
+
+// Files the harness has finished writing, such as a stopped subagent's,
+// are read whole even on a run that is not final.
+func TestClaudeDoneFiles(t *testing.T) {
+	l := newLayout(t)
+	s := &sink{}
+	files, err := ClaudeFiles(l.main, session, l.sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Claude(t.Context(), Input{Session: session, Files: files, StateDir: l.state, Send: s.send, Done: []string{l.sub}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := s.ids(), append(slices.Clone(stopIDs), deltaID); !slices.Equal(got, want) {
+		t.Errorf("SubagentStop run sent %v, want %v: the stopped subagent's response too", got, want)
 	}
 }
 

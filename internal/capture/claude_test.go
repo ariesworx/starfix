@@ -85,7 +85,7 @@ func TestParseClaudeLine(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, got, version := parseClaudeLine([]byte(tc.line), session)
+			rec, got, version, _ := parseClaudeLine([]byte(tc.line), session)
 			if got != tc.want {
 				t.Fatalf("parseClaudeLine(%s) = verdict %v, want %v", tc.line, got, tc.want)
 			}
@@ -109,8 +109,26 @@ func TestParseClaudeLineVersion(t *testing.T) {
 		{strings.Repeat("9", 40), ""},
 	} {
 		line := strings.Replace(claudeLine("msg_01A", "req_01A", "claude-x", ""), "2.1.300", tc.version, 1)
-		if _, _, got := parseClaudeLine([]byte(line), session); got != tc.want {
+		if _, _, got, _ := parseClaudeLine([]byte(line), session); got != tc.want {
 			t.Errorf("parseClaudeLine(version %q) version = %q, want %q", tc.version, got, tc.want)
+		}
+	}
+}
+
+// Any assistant line names its message, whatever else it holds: the
+// reader needs it to tell when a response has ended.
+func TestParseClaudeLineMessageID(t *testing.T) {
+	tests := []struct{ name, line, want string }{
+		{"usage", claudeLine("msg_01A", "", "claude-x", `{"input_tokens":1}`), "msg_01A"},
+		{"synthetic", claudeLine("msg_01S", "", "<synthetic>", `{"input_tokens":0}`), "msg_01S"},
+		{"no usage", claudeLine("msg_01N", "", "claude-x", ""), "msg_01N"},
+		{"another session", strings.Replace(claudeLine("msg_01O", "", "claude-x", `{"input_tokens":1}`), session, "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d", 1), "msg_01O"},
+		{"user line", `{"type":"user","sessionId":"` + session + `","message":{"id":"msg_01U"}}`, ""},
+		{"not JSON", `{"type":"assistant",`, ""},
+	}
+	for _, tc := range tests {
+		if _, _, _, got := parseClaudeLine([]byte(tc.line), session); got != tc.want {
+			t.Errorf("parseClaudeLine(%s) message id = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
@@ -139,7 +157,7 @@ func TestReadClaudeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	got, err := readClaude(f, session, false)
+	got, err := readClaude(f, session, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +167,11 @@ func TestReadClaudeFixture(t *testing.T) {
 	}
 	want := []string{"msg_01FixtureAlpha", "msg_01FixtureBravo", "msg_01FixtureCharlie", "msg_01FixtureEcho"}
 	if !slices.Equal(ids, want) {
-		t.Fatalf("readClaude(session.jsonl) request ids = %v, want %v", ids, want)
+		t.Fatalf("readClaude(session.jsonl, final) request ids = %v, want %v", ids, want)
+	}
+	// Response A's tool result split its lines, and its output grew after.
+	if a := got.recs[0]; *a.Output != 200 {
+		t.Errorf("response split by a tool result = %s, want output 200, its last line's", show(a))
 	}
 	// Response B is on seven lines: counted once, not seven times, with
 	// the output of its last line, which grew from 5 to 120.
@@ -168,7 +190,15 @@ func TestReadClaudeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.end != st.Size() || got.bad != 0 || got.long != 0 {
-		t.Errorf("readClaude(session.jsonl) end %d bad %d long %d, want end %d and none skipped", got.end, got.bad, got.long, st.Size())
+		t.Errorf("readClaude(session.jsonl, final) end %d bad %d long %d, want end %d and none skipped", got.end, got.bad, got.long, st.Size())
+	}
+	// Nothing follows response E but a system line: a Stop run holds it.
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := readClaude(f, session, false)
+	if err != nil || len(stop.recs) != 3 || stop.end >= st.Size() {
+		t.Errorf("readClaude(session.jsonl) = %d records, end %d, %v; want 3, E held before %d", len(stop.recs), stop.end, err, st.Size())
 	}
 }
 
@@ -253,15 +283,17 @@ func TestScanLinesOffsets(t *testing.T) {
 	}
 }
 
-// A response's output grows from line to line, so a response is sent
-// only once a later line shows it finished: a line of another message,
-// or of another type. Until then the read ends before its first line,
-// so the next read takes it whole. A final read, at session end, sends
-// it as it is.
+// A response's output grows from line to line, and tools run while it
+// streams, so a tool result or attachment can fall among its lines. A
+// response is sent only once an assistant line of another message
+// follows it: the next request cannot start before this one ends. Until
+// then the read ends before its first line, so the next read takes it
+// whole. A final read, at session end, sends it as it is.
 func TestReadClaudeHoldsOpenResponse(t *testing.T) {
 	a1 := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":5}`) + "\n"
 	a2 := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":197}`) + "\n"
 	b1 := claudeLine("msg_01B", "req_01B", "claude-x", `{"input_tokens":6,"output_tokens":3}`) + "\n"
+	synth := claudeLine("msg_01S", "", "<synthetic>", `{"input_tokens":0}`) + "\n"
 	user := `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":"x"}}` + "\n"
 	other := strings.Replace(b1, session, "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d", 1)
 	tests := []struct {
@@ -275,11 +307,14 @@ func TestReadClaudeHoldsOpenResponse(t *testing.T) {
 		{name: "open at the end", in: a1 + a2, end: 0},
 		{name: "after a finished one", in: user + a1 + b1, want: []string{"msg_01A=5"}, end: len(user + a1)},
 		{name: "closed by another message", in: a1 + a2 + b1, want: []string{"msg_01A=197"}, end: len(a1 + a2)},
-		{name: "closed by a user line", in: a1 + a2 + user, want: []string{"msg_01A=197"}, end: len(a1 + a2 + user)},
-		{name: "closed by another session's line", in: a1 + other, want: []string{"msg_01A=5"}, end: len(a1 + other)},
-		{name: "closed by a bad line", in: a1 + "{\"type\":\"assistant\",\n", want: []string{"msg_01A=5"}, end: len(a1) + 21},
+		{name: "a tool result does not close it", in: a1 + user, end: 0},
+		{name: "split by a tool result", in: a1 + user + a2 + user, end: 0},
+		{name: "split, then closed", in: a1 + user + a2 + user + b1, want: []string{"msg_01A=197"}, end: len(a1 + user + a2 + user)},
+		{name: "closed by a synthetic message", in: a1 + synth, want: []string{"msg_01A=5"}, end: len(a1 + synth)},
+		{name: "closed by another session's message", in: a1 + other, want: []string{"msg_01A=5"}, end: len(a1 + other)},
+		{name: "a line without a message id does not close it", in: a1 + "{\"type\":\"assistant\",\n", end: 0},
 		{name: "a partial line does not close it", in: a1 + b1[:10], end: 0},
-		{name: "final read sends it", in: a1 + a2, final: true, want: []string{"msg_01A=197"}, end: len(a1 + a2)},
+		{name: "final read sends it", in: a1 + user + a2, final: true, want: []string{"msg_01A=197"}, end: len(a1 + user + a2)},
 		{name: "final read sends every one", in: a1 + b1, final: true, want: []string{"msg_01A=5", "msg_01B=3"}, end: len(a1 + b1)},
 	}
 	for _, tc := range tests {
@@ -302,7 +337,7 @@ func FuzzParseClaudeLine(f *testing.F) {
 	f.Add([]byte(`{"type":"user"}`))
 	f.Add([]byte(`not json`))
 	f.Fuzz(func(t *testing.T, line []byte) {
-		rec, v, version := parseClaudeLine(line, session)
+		rec, v, version, _ := parseClaudeLine(line, session)
 		if v != lineUsage {
 			return
 		}
