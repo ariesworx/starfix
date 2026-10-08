@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/client"
+	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -492,5 +494,41 @@ func TestTopIDsEmpty(t *testing.T) {
 		if err != nil || top != (bound{}) {
 			t.Fatalf("topIDs of an empty store = %+v, %v; want zeros", top, err)
 		}
+	}
+}
+
+// The leak check counts only what the soak left running: goroutines of
+// another world, as an earlier test under -shuffle may leave, are in the
+// baseline, while a connection the soak opened and never closed is
+// reported.
+func TestCheckLeaksBaseline(t *testing.T) {
+	dial := func(u *user, session string) *mcpserver.RepoConn {
+		t.Helper()
+		c, err := mcpserver.DialRepo(t.Context(), u.repo, client.Options{Version: "v0.2.0", Session: session,
+			Machine: "m", Getenv: func(string) string { return "" }})
+		if err != nil {
+			t.Fatalf("dial as %s: %v", session, err)
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		return c
+	}
+	other := newWorld(t, daemonOpts{})
+	dial(other.newUser("alice", ""), "earlier-test")
+	cfg, err := soakConfigFrom(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newSoak(t, cfg)
+	s.checkLeaks(2 * time.Second)
+	if vs := s.mon.violations(); len(vs) > 0 {
+		t.Errorf("checkLeaks with another world's connection open before the run = %v, want none", vs)
+	}
+
+	s = newSoak(t, cfg)
+	dial(s.users["alice"], "leaked")
+	s.checkLeaks(2 * time.Second)
+	if vs := s.mon.violations(); len(vs) != 1 || !strings.Contains(vs[0].msg, "after every session closed") {
+		t.Errorf("checkLeaks with the run's own connection left open = %v, want one leak", vs)
 	}
 }

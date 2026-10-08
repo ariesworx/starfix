@@ -157,7 +157,8 @@ type soak struct {
 		eventWindowsChecked, eventsChecked, eventsPushed atomic.Int64
 		claimsChecked                                    atomic.Int64
 	}
-	baseline int // goroutines before any session started
+	baseline int            // goroutines before any session started
+	connBase map[string]int // connGoroutines then
 	started  time.Time
 	ended    time.Duration // real length of the work
 }
@@ -173,7 +174,7 @@ func newSoak(t *testing.T, cfg soakConfig) *soak {
 	}
 	s.eve = s.w.newUser("eve", "")
 	s.db = openCheckerDB(t, s.w.dsn)
-	s.baseline = runtime.NumGoroutine()
+	s.baseline, s.connBase = runtime.NumGoroutine(), connGoroutines()
 	return s
 }
 

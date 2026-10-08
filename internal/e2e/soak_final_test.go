@@ -48,7 +48,7 @@ func (s *soak) verify() {
 	for _, a := range s.all() {
 		a.close()
 	}
-	s.checkLeaks()
+	s.checkLeaks(15 * time.Second)
 }
 
 // attempts gathers the requests that carried one marker, or one batch.
@@ -800,39 +800,56 @@ func (s *soak) checkAttribution(ctx context.Context, eve *mcpserver.RepoConn, ro
 	}
 }
 
-// checkLeaks: once every session has closed, the daemon serves no
-// connection, pushes to no watch, and the SSH server and clients hold
-// none; the goroutines are back near where they started.
 // eveOptions are the options of a connection of eve, who only reads.
 func (s *soak) eveOptions(session string) client.Options {
 	return client.Options{Version: "v0.2.0", Session: session, Machine: "checker", Getenv: func(string) string { return "" }}
 }
 
-func (s *soak) checkLeaks() {
-	patterns := []string{"server.(*Server).handle(", "server.(*Server).watch.func", "server.Bridge(",
-		"client.(*Conn).read(", "e2e.(*world).serveSSH("}
-	deadline := time.Now().Add(15 * time.Second)
+// leakPatterns name the goroutines that serve or hold a connection: the
+// daemon's handler and watch pushes, the bridge, the client's reader and
+// the SSH server's.
+var leakPatterns = []string{"server.(*Server).handle(", "server.(*Server).watch.func", "server.Bridge(",
+	"client.(*Conn).read(", "e2e.(*world).serveSSH("}
+
+// connGoroutines counts the running goroutines that match each of
+// leakPatterns.
+func connGoroutines() map[string]int {
+	buf := make([]byte, 16<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	counts := map[string]int{}
+	for g := range bytes.SplitSeq(buf, []byte("\n\n")) {
+		for _, p := range leakPatterns {
+			if bytes.Contains(g, []byte(p)) {
+				counts[p]++
+			}
+		}
+	}
+	return counts
+}
+
+// checkLeaks: once every session has closed, within wait, the daemon
+// serves no connection, pushes to no watch, and the SSH server and
+// clients hold none beyond those running before the run, as another
+// test's may be; the goroutines are back near where they started.
+func (s *soak) checkLeaks(wait time.Duration) {
+	deadline := time.Now().Add(wait)
 	for {
-		buf := make([]byte, 16<<20)
-		buf = buf[:runtime.Stack(buf, true)]
-		counts := map[string]int{}
-		for g := range bytes.SplitSeq(buf, []byte("\n\n")) {
-			for _, p := range patterns {
-				if bytes.Contains(g, []byte(p)) {
-					counts[p]++
-				}
+		grown := map[string]int{}
+		for p, n := range connGoroutines() {
+			if d := n - s.connBase[p]; d > 0 {
+				grown[p] = d
 			}
 		}
 		s.w.connsMu.Lock()
 		conns := len(s.w.conns)
 		s.w.connsMu.Unlock()
 		n := runtime.NumGoroutine()
-		if len(counts) == 0 && conns == 0 && n <= s.baseline+24 {
+		if len(grown) == 0 && conns == 0 && n <= s.baseline+24 {
 			return
 		}
 		if time.Now().After(deadline) {
-			s.mon.fail("", "after every session closed: goroutines %v, %d SSH connections open, %d goroutines (%d before the run)",
-				counts, conns, n, s.baseline)
+			s.mon.fail("", "after every session closed: goroutines %v more than before the run, %d SSH connections open, %d goroutines (%d before the run)",
+				grown, conns, n, s.baseline)
 			return
 		}
 		pause(context.Background(), 50*time.Millisecond)
