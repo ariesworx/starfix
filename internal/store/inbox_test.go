@@ -247,7 +247,7 @@ func TestInboxRollsBackWithItsCause(t *testing.T) {
 	}
 	select {
 	case <-w.Ready():
-		got, over := w.Take()
+		got, _, over := w.Take()
 		t.Errorf("failed changes pushed %+v (overflow %v)", got, over)
 	default:
 	}
@@ -365,7 +365,7 @@ func TestWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-wb.Ready()
-	got, over := wb.Take()
+	got, _, over := wb.Take()
 	if over || len(got) != 1 || got[0].Kind != InboxMention || got[0].ID == 0 || got[0].Issue != is.ID {
 		t.Fatalf("Take() = %+v, %v; want one mention with its id", got, over)
 	}
@@ -383,7 +383,7 @@ func TestWatch(t *testing.T) {
 		}
 	}
 	<-wb.Ready()
-	if got, over := wb.Take(); !over || len(got) != 0 {
+	if got, _, over := wb.Take(); !over || len(got) != 0 {
 		t.Fatalf("Take() after overflow = %d items, overflow %v; want none and true", len(got), over)
 	}
 	if _, err := s.AddComment(ctx, alice, is.ID, "@bob after", ""); err != nil {
@@ -391,7 +391,7 @@ func TestWatch(t *testing.T) {
 	}
 	select {
 	case <-wb.Ready():
-		got, over := wb.Take()
+		got, _, over := wb.Take()
 		t.Fatalf("an overflowed watch got %d items (overflow %v)", len(got), over)
 	default:
 	}
@@ -401,14 +401,14 @@ func TestWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-w2.Ready()
-	if got, over := w2.Take(); over || len(got) != 1 {
+	if got, _, over := w2.Take(); over || len(got) != 1 {
 		t.Fatalf("a new watch Take() = %+v, %v; want one item", got, over)
 	}
 	w2.Close()
 	if _, err := s.AddComment(ctx, alice, is.ID, "@bob closed", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := w2.Take(); len(got) != 0 {
+	if got, _, _ := w2.Take(); len(got) != 0 {
 		t.Fatalf("a closed watch got %+v", got)
 	}
 }

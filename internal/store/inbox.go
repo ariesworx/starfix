@@ -22,7 +22,8 @@ import (
 //
 // Items are pushed as they are committed to the sessions watching for
 // them (Watch), so an agent hears of a lost claim on its next tool call
-// rather than when it next polls.
+// rather than when it next polls. A watch made with WatchEvents is also
+// pushed every issue event, for a live board.
 
 // InboxKind is what an inbox item is about.
 type InboxKind string
@@ -308,21 +309,26 @@ func (s *Store) AckInbox(ctx context.Context, actor Actor, ids []int64, all bool
 }
 
 // Watch is a subscription to the items committed for one principal and
-// session from now on: the session's own and the principal's. Items wait
-// in a queue of WatchQueue; when it is full the watch overflows, drops
-// what it held and receives nothing more, so a slow reader never holds up
-// the writer. The reader then rereads the inbox and watches again. A
-// Watch is safe for concurrent use.
+// session from now on: the session's own and the principal's, and, for a
+// watch made with WatchEvents, every event committed on an issue. Both
+// wait in one queue of WatchQueue; when it is full the watch overflows,
+// drops what it held and receives nothing more, so a slow reader never
+// holds up the writer. The reader then rereads what it follows and
+// watches again. A Watch is safe for concurrent use.
 type Watch struct {
 	s                  *Store
 	principal, session string
+	// events: the watch also takes issue events.
+	events bool
 	// ready holds at most one signal that Take has something to return.
 	ready chan struct{}
 
-	// mu guards queue, over and closed. publish takes it while holding
-	// the store's watchers.mu, so take watchers.mu first or not at all.
+	// mu guards queue, evq, over and closed. publish takes it while
+	// holding the store's watchers.mu, so take watchers.mu first or not
+	// at all.
 	mu     sync.Mutex
 	queue  []InboxItem
+	evq    []Event
 	over   bool
 	closed bool
 }
@@ -339,7 +345,20 @@ type watchers struct {
 // after subscribing, not before, and nothing falls between the two; an
 // item may then arrive both ways. Close the watch when done.
 func (s *Store) Watch(principal, session string) *Watch {
-	w := &Watch{s: s, principal: principal, session: session, ready: make(chan struct{}, 1)}
+	return s.subscribe(&Watch{principal: principal, session: session})
+}
+
+// WatchEvents is Watch that also receives every event committed on an
+// issue after it returns, without its before and after states (History
+// has them). Read what the events change after subscribing, as with the
+// inbox.
+func (s *Store) WatchEvents(principal, session string) *Watch {
+	return s.subscribe(&Watch{principal: principal, session: session, events: true})
+}
+
+// subscribe adds w to the store's watches.
+func (s *Store) subscribe(w *Watch) *Watch {
+	w.s, w.ready = s, make(chan struct{}, 1)
 	s.watch.mu.Lock()
 	defer s.watch.mu.Unlock()
 	if s.watch.set == nil {
@@ -354,14 +373,14 @@ func (s *Store) Watch(principal, session string) *Watch {
 // many items.
 func (w *Watch) Ready() <-chan struct{} { return w.ready }
 
-// Take returns the queued items, oldest first, and empties the queue.
-// overflowed reports that the queue filled up: the items were dropped and
-// the watch is finished.
-func (w *Watch) Take() (items []InboxItem, overflowed bool) {
+// Take returns the queued items and events, each oldest first, and
+// empties the queue. overflowed reports that the queue filled up: what it
+// held was dropped and the watch is finished.
+func (w *Watch) Take() (items []InboxItem, events []Event, overflowed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	items, w.queue = w.queue, nil
-	return items, w.over
+	items, events, w.queue, w.evq = w.queue, w.evq, nil, nil
+	return items, events, w.over
 }
 
 // Close ends the subscription. It is safe to call more than once.
@@ -371,7 +390,7 @@ func (w *Watch) Close() {
 	w.s.watch.mu.Unlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.closed, w.queue = true, nil
+	w.closed, w.queue, w.evq = true, nil, nil
 }
 
 // wants reports whether it is addressed to w's principal, and to w's
@@ -380,18 +399,31 @@ func (w *Watch) wants(it InboxItem) bool {
 	return it.To == w.principal && (it.Session == "" || it.Session == w.session)
 }
 
-// offer queues it without blocking, and reports whether the watch can
-// take more.
-func (w *Watch) offer(it InboxItem) bool {
+// offer queues what it is given of items and events without blocking,
+// and reports whether the watch can take more.
+func (w *Watch) offer(items []InboxItem, events []Event) bool {
+	var mine []InboxItem
+	for _, it := range items {
+		if w.wants(it) {
+			mine = append(mine, it)
+		}
+	}
+	if !w.events {
+		events = nil
+	}
+	if len(mine)+len(events) == 0 {
+		return true
+	}
 	w.mu.Lock()
 	switch {
 	case w.closed:
 		w.mu.Unlock()
 		return false
-	case len(w.queue) >= WatchQueue:
-		w.over, w.queue = true, nil
+	case len(w.queue)+len(w.evq)+len(mine)+len(events) > WatchQueue:
+		w.over, w.queue, w.evq = true, nil, nil
 	default:
-		w.queue = append(w.queue, it)
+		w.queue = append(w.queue, mine...)
+		w.evq = append(w.evq, events...)
 	}
 	over := w.over
 	w.mu.Unlock()
@@ -402,17 +434,15 @@ func (w *Watch) offer(it InboxItem) bool {
 	return !over
 }
 
-// publish hands committed items to the watches that want them. It never
-// blocks: a watch whose queue is full overflows and is dropped.
-func (s *Store) publish(items []InboxItem) {
+// publish hands committed items and issue events to the watches that
+// want them. It never blocks: a watch whose queue is full overflows and
+// is dropped.
+func (s *Store) publish(items []InboxItem, events []Event) {
 	s.watch.mu.Lock()
 	defer s.watch.mu.Unlock()
 	for w := range s.watch.set {
-		for _, it := range items {
-			if w.wants(it) && !w.offer(it) {
-				delete(s.watch.set, w)
-				break
-			}
+		if !w.offer(items, events) {
+			delete(s.watch.set, w)
 		}
 	}
 }

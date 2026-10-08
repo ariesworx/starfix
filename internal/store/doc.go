@@ -8,7 +8,8 @@
 // keyed by [IssueID]) with their dependencies ([Dep]), labels and
 // comments ([Comment]); claims, which lease an issue to one session
 // ([Claim]); the agents registry ([Agent]); inbox items ([InboxItem]),
-// pushed to each [Watch] as they commit; handoff notes ([Handoff]);
+// pushed to each [Watch] as they commit, with every issue event for a
+// watch that asks; handoff notes ([Handoff]);
 // acceptance checklists ([AcceptanceItem]); and the event log ([Event]).
 // Ready, Blocked, Digest and acceptance items are computed at read time,
 // with recursive CTEs where they follow the graph; nothing derived is

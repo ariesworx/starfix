@@ -88,7 +88,7 @@ func (s *Server) flush(sess *session, p *pusher) bool {
 	if p.ended {
 		return false
 	}
-	items, over := p.w.Take()
+	items, _, over := p.w.Take()
 	for _, it := range items {
 		w := wireInboxItem(it)
 		if !s.pushOne(sess, p, proto.Push{Op: proto.EvInbox, Item: &w}) {

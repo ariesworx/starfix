@@ -1,10 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -220,6 +222,24 @@ func (s *Store) ClaimOf(ctx context.Context, id IssueID) (*Claim, error) {
 // soonest to expire first.
 func (s *Store) ClaimsOf(ctx context.Context, principal string) ([]Claim, error) {
 	return s.claims(ctx, s.r, `principal = ? AND expires_at > ?`, principal, s.now())
+}
+
+// ActiveClaims returns the live claims on every issue, longest held
+// first, at most limit of them (0 means DefaultPage, at most MaxPage),
+// and how many more there are.
+func (s *Store) ActiveClaims(ctx context.Context, limit int) ([]Claim, int, error) {
+	cs, err := s.claims(ctx, s.r, `principal IS NOT NULL AND expires_at > ?`, s.now())
+	if err != nil {
+		return nil, 0, err
+	}
+	slices.SortStableFunc(cs, func(a, b Claim) int {
+		return cmp.Or(a.ClaimedAt.Compare(b.ClaimedAt), cmp.Compare(a.Issue, b.Issue))
+	})
+	limit = clampLimit(limit, DefaultPage, MaxPage)
+	if len(cs) <= limit {
+		return cs, 0, nil
+	}
+	return cs[:limit], len(cs) - limit, nil
 }
 
 // claims reads the claims that where, a constant condition with

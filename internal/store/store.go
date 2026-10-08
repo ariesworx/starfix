@@ -308,6 +308,9 @@ type wtx struct {
 	touched bool
 	// inbox are the items this attempt wrote, pushed once it commits.
 	inbox []InboxItem
+	// issueEvents are the events flush wrote on issues, without their
+	// states, pushed once the attempt commits.
+	issueEvents []Event
 	// pending are the events recorded, written by flush.
 	pending []pendingEvent
 	// idem is the operation's idempotency stamp, when it has a key.
@@ -414,6 +417,9 @@ func (w *wtx) flush(ctx context.Context) error {
 				return fmt.Errorf("%w: idempotency key %q: %w", errRetry, w.idem.key, err)
 			}
 			return fmt.Errorf("insert event: %w", err)
+		}
+		if IssueID(e.target).Validate() == nil {
+			w.issueEvents = append(w.issueEvents, Event{Seq: seq, At: w.now, Actor: w.actor, Op: e.op, Target: e.target})
 		}
 	}
 	w.pending = nil
@@ -553,7 +559,7 @@ func (s *Store) write(ctx context.Context, actor Actor, fn func(*wtx) error) err
 // mutation that recorded no event unless the attempt is quiet, writes the
 // buffered events and commits. Only once the commit succeeds does it mark
 // the store dirty, invalidate the similar-title cache and push inbox
-// items, so a rolled-back attempt leaves no trace.
+// items and issue events, so a rolled-back attempt leaves no trace.
 func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -583,8 +589,8 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if w.closedChanged {
 		s.similar.invalidate()
 	}
-	if len(w.inbox) > 0 {
-		s.publish(w.inbox)
+	if len(w.inbox) > 0 || len(w.issueEvents) > 0 {
+		s.publish(w.inbox, w.issueEvents)
 	}
 	return nil
 }
