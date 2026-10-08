@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,13 @@ type Options struct {
 	// RenewEvery is how often the claims this session took are renewed
 	// while it runs. Default 60s; negative turns renewal off.
 	RenewEvery time.Duration
+	// Dir is the repository the agent works in. Renew, finish and handoff
+	// send the paths each issue's work touched there ([RepoPaths]); empty
+	// sends none.
+	Dir string
+	// PathsEvery is how often a renewal sends a held issue's paths.
+	// Default DefaultPathsEvery; negative never.
+	PathsEvery time.Duration
 }
 
 // Lease is how long a claim taken by an agent's start lasts. Serve renews
@@ -74,6 +82,8 @@ type Server struct {
 	opts   Options
 	claims claims
 	pushed pushed
+	// now is the clock for the paths throttle; tests set it.
+	now func() time.Time
 }
 
 // claims are the issues this session took and their epochs, so finish and
@@ -82,6 +92,9 @@ type Server struct {
 type claims struct {
 	mu   sync.Mutex
 	held map[string]int64 // issue id to epoch; guarded by mu
+	// sent is when each held issue's paths last went with a renewal;
+	// guarded by mu.
+	sent map[string]time.Time
 }
 
 func (c *claims) take(id string, epoch int64) {
@@ -101,6 +114,37 @@ func (c *claims) drop(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.held, id)
+	delete(c.sent, id)
+}
+
+// due returns the held issues whose paths last went with a renewal every
+// or more before now, or never did, in id order; none when every is
+// negative.
+func (c *claims) due(now time.Time, every time.Duration) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if every < 0 {
+		return nil
+	}
+	var out []string
+	for id := range c.held {
+		if t, ok := c.sent[id]; !ok || now.Sub(t) >= every {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// sentAt records that the paths of ids went with a renewal at t.
+func (c *claims) sentAt(ids []string, t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, id := range ids {
+		if _, ok := c.held[id]; ok {
+			c.sent[id] = t
+		}
+	}
 }
 
 func (c *claims) any() bool {
@@ -121,6 +165,11 @@ func (c *claims) keep(still []proto.Claim) {
 		}
 	}
 	c.held = now
+	for id := range c.sent {
+		if _, ok := now[id]; !ok {
+			delete(c.sent, id)
+		}
+	}
 }
 
 // New returns a server that dials with opts.Dial on its first tool call.
@@ -131,7 +180,11 @@ func New(opts Options) *Server {
 	if opts.RenewEvery == 0 {
 		opts.RenewEvery = time.Minute
 	}
-	s := &Server{opts: opts, link: &link{dial: opts.Dial}, claims: claims{held: map[string]int64{}}}
+	if opts.PathsEvery == 0 {
+		opts.PathsEvery = DefaultPathsEvery
+	}
+	s := &Server{opts: opts, link: &link{dial: opts.Dial}, claims: claims{held: map[string]int64{}, sent: map[string]time.Time{}},
+		now: time.Now}
 	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "starfix", Version: opts.Version},
 		&mcp.ServerOptions{Instructions: Instructions, Capabilities: &mcp.ServerCapabilities{}})
 	s.register()
@@ -181,16 +234,31 @@ func (s *Server) renewLoop(ctx context.Context) {
 // registry, so it renews while connected even holding nothing; it does
 // not dial just for that. A failure is left for the next tick: the lease
 // is many ticks long.
+//
+// Every PathsEvery it also sends the paths each held issue's work touched
+// (RepoPaths). If the server refuses the renewal with them, it renews
+// again without them: paths are never worth a lapsed claim.
 func (s *Server) Renew(ctx context.Context) {
 	if !s.claims.any() && !s.link.connected() {
 		return
 	}
+	now := s.now()
+	due := s.claims.due(now, s.opts.PathsEvery)
+	var paths map[string][]string
+	if len(due) > 0 && s.opts.Dir != "" {
+		paths = RepoPaths(ctx, s.opts.Dir, due)
+	}
 	var r proto.ClaimsResult
 	err := s.link.with(ctx, true, func(c Conn) error {
-		return c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease}, &r)
+		err := c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease, Paths: paths}, &r)
+		if pe, ok := errors.AsType[*proto.Error](err); ok && pe.Code == proto.CodeInvalid && paths != nil {
+			err = c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease}, &r)
+		}
+		return err
 	})
 	if err == nil {
 		s.claims.keep(r.Claims)
+		s.claims.sentAt(due, now)
 	}
 }
 

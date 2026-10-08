@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/gitx"
+	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -125,6 +127,7 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 		}
 		in.Waived[n] = reason
 	}
+	in.Paths = mcpserver.RepoPaths(ctx, r.dir, []string{in.ID})[in.ID]
 	in.Idem = proto.NewIdem("cli")
 	var out proto.FinishResult
 	if err := r.call(ctx, proto.OpFinish, in, &out); err != nil {
@@ -159,6 +162,7 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 	if in.Note, err = r.text(strings.Join(pos[1:], " ")); err != nil {
 		return err
 	}
+	in.Paths = mcpserver.RepoPaths(ctx, r.dir, []string{in.ID})[in.ID]
 	in.Idem = proto.NewIdem("cli")
 	return r.write(ctx, proto.OpHandoff, in)
 }
@@ -274,8 +278,17 @@ func cmdAway(ctx context.Context, r *runner, args []string) error {
 	if _, err := proto.ParseDuration(d); err != nil {
 		return usagef(usage, "%q: %v", d, err)
 	}
+	// The paths go to the issues the repository's branch and trailers
+	// name; the server ignores any this principal does not hold. They are
+	// a hint, so a refusal of them never stops the renewal.
+	in := proto.RenewArgs{Lease: d, All: true, Paths: mcpserver.RepoPaths(ctx, r.dir, nil)}
 	var out proto.ClaimsResult
-	if err := r.call(ctx, proto.OpRenew, proto.RenewArgs{Lease: d, All: true}, &out); err != nil {
+	err = r.call(ctx, proto.OpRenew, in, &out)
+	if pe, ok := errors.AsType[*proto.Error](err); ok && pe.Code == proto.CodeInvalid && in.Paths != nil {
+		in.Paths = nil
+		err = r.call(ctx, proto.OpRenew, in, &out)
+	}
+	if err != nil {
 		return err
 	}
 	if r.json {
