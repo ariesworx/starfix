@@ -97,8 +97,10 @@ func (r *runner) captureClaude(ctx context.Context, in hookInput) (capture.Resul
 			"cannot find the cache directory: "+err.Error())
 	}
 	files, err := capture.ClaudeFiles(in.TranscriptPath, in.SessionID, in.AgentTranscriptPath)
+	// At SessionEnd the session has stopped writing, so its last
+	// responses are finished.
 	res, cerr := capture.Claude(ctx, capture.Input{Session: in.SessionID, Files: files,
-		StateDir: filepath.Join(cache, "starfix"), Send: r.sendUsage})
+		StateDir: filepath.Join(cache, "starfix"), Send: r.sendUsage, Final: in.HookEventName == "SessionEnd"})
 	return res, errors.Join(err, cerr)
 }
 

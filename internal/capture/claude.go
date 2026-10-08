@@ -19,10 +19,13 @@ import (
 // Claude Code writes one transcript per session, as JSON lines, and one
 // per subagent beside it, in <dir>/<session>/subagents/agent-*.jsonl.
 // Each API response appears once per content block, so on several lines,
-// all carrying the response's usage; message.id and requestId together
-// name the response. The format is internal to Claude Code and changes
-// between versions: what is read here was checked against version 2.1.x
-// on 8 Oct 2026.
+// one after another, each carrying the response's usage; message.id names
+// the response (requestId is missing from some lines, such as those of
+// remote_projects sessions). The counts repeat, except output_tokens,
+// which grows from line to line: the last line has the response's final
+// count. The format is internal to Claude Code and changes between
+// versions: what is read here was checked against version 2.1.x, and a
+// live transcript, on 8 Oct 2026.
 
 // Harness is the harness name records carry: `sfx setup`'s agent name.
 const Harness = "claude-code"
@@ -43,7 +46,6 @@ var versionShape = regexp.MustCompile(`^[0-9A-Za-z.+-]{1,32}$`)
 type claudeEntry struct {
 	Type      string    `json:"type"`
 	SessionID string    `json:"sessionId"`
-	RequestID string    `json:"requestId"`
 	Timestamp time.Time `json:"timestamp"`
 	Version   string    `json:"version"`
 	Message   *struct {
@@ -113,13 +115,13 @@ func parseClaudeLine(line []byte, session string) (proto.UsageRecord, verdict, s
 		return proto.UsageRecord{}, lineBad, version
 	}
 	u := m.Usage
-	rec := proto.UsageRecord{Harness: Harness, RequestID: m.ID + ":" + e.RequestID, Model: m.Model,
+	rec := proto.UsageRecord{Harness: Harness, RequestID: m.ID, Model: m.Model,
 		At: e.Timestamp.UTC(), Granularity: "request",
 		Tokens: proto.Tokens{Input: u.Input, Output: u.Output, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead}}
 	if c := u.CacheCreation; c != nil && c.OneHour != nil && u.CacheWrite != nil && *c.OneHour <= *u.CacheWrite {
 		rec.CacheWrite1h = c.OneHour
 	}
-	if m.ID == "" || e.RequestID == "" || !valid(rec) {
+	if !valid(rec) {
 		return proto.UsageRecord{}, lineBad, version
 	}
 	return rec, lineUsage, version
@@ -159,22 +161,39 @@ type fileRead struct {
 	// end is the offset, from where the read began, just past the last
 	// complete line.
 	end int64
-	// bad counts response lines that could not be read; long, lines
-	// passed over for their length.
-	bad, long int
+	// good counts response lines read; bad, those that could not be;
+	// long, lines passed over for their length.
+	good, bad, long int
 	// version is the Claude Code version a bad line named, if any.
 	version string
 }
 
 // readClaude reads session's responses from r up to its last complete
-// line. A response on several lines is one record: the one with the
-// largest output count, since output can grow from one content block's
-// line to the next.
-func readClaude(r io.Reader, session string) (fileRead, error) {
+// line. A response on several lines is one record, with the largest
+// output count, which is its last line's.
+//
+// Output grows until the response's last line is written, and the server
+// keeps the first count it gets for a response, so a response is sent
+// only once it is finished: once a later line is of another message, or
+// of another type. The last response read has no such line yet; unless
+// final, it is left out and the read ends before its first line, so the
+// next read takes it whole. Lines passed over for their length do not
+// finish a response.
+func readClaude(r io.Reader, session string, final bool) (fileRead, error) {
 	var out fileRead
 	seen := map[string]int{}
-	end, long, err := scanLines(r, maxLine, 64<<10, func(line []byte) {
+	// open is the response whose lines are the last read, from start;
+	// added says its record was first seen there.
+	var open struct {
+		id    string
+		start int64
+		added bool
+	}
+	end, long, err := scanLines(r, maxLine, 64<<10, func(line []byte, at int64) {
 		rec, v, version := parseClaudeLine(line, session)
+		if v != lineUsage || rec.RequestID != open.id {
+			open.id = ""
+		}
 		switch v {
 		case lineBad:
 			out.bad++
@@ -182,6 +201,7 @@ func readClaude(r io.Reader, session string) (fileRead, error) {
 				out.version = version
 			}
 		case lineUsage:
+			out.good++
 			i, ok := seen[rec.RequestID]
 			switch {
 			case !ok:
@@ -190,9 +210,18 @@ func readClaude(r io.Reader, session string) (fileRead, error) {
 			case more(rec.Output, out.recs[i].Output):
 				out.recs[i] = rec
 			}
+			if open.id == "" {
+				open.id, open.start, open.added = rec.RequestID, at, !ok
+			}
 		}
 	})
 	out.end, out.long = end, long
+	if open.id != "" && !final {
+		out.end = open.start
+		if open.added {
+			out.recs = out.recs[:len(out.recs)-1]
+		}
+	}
 	return out, err
 }
 
@@ -206,7 +235,7 @@ func more(a, b *int64) bool {
 // until it returns. A line longer than limit is passed over, never held
 // whole, and counted in long. A last line without a newline is left
 // unread: the harness may still be writing it. size is the read buffer's.
-func scanLines(r io.Reader, limit, size int, f func([]byte)) (n int64, long int, err error) {
+func scanLines(r io.Reader, limit, size int, f func([]byte, int64)) (n int64, long int, err error) {
 	br := bufio.NewReaderSize(r, size)
 	var buf []byte // a line longer than the read buffer, so far
 	var part int64 // bytes of the current line read so far
@@ -237,9 +266,9 @@ func scanLines(r io.Reader, limit, size int, f func([]byte)) (n int64, long int,
 		case over:
 			long++
 		case len(buf) > 0:
-			f(append(buf, chunk...))
+			f(append(buf, chunk...), n)
 		default:
-			f(chunk)
+			f(chunk, n)
 		}
 		n, part, buf, over = n+part, 0, buf[:0], false
 	}

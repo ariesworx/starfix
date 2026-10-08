@@ -83,14 +83,15 @@ func (h *hookFlag) Set(s string) error {
 
 // hookInput is the part of a hook's stdin that prime and usage use.
 // Harnesses send session_id; VS Code may send sessionId instead. Claude
-// Code sends transcript_path to every hook, and agent_transcript_path,
-// the subagent's own, on SubagentStop.
+// Code sends transcript_path and hook_event_name to every hook, and
+// agent_transcript_path, the subagent's own, on SubagentStop.
 type hookInput struct {
 	SessionID           string `json:"session_id"`
 	SessionIDCamel      string `json:"sessionId"`
 	Cwd                 string `json:"cwd"`
 	TranscriptPath      string `json:"transcript_path"`
 	AgentTranscriptPath string `json:"agent_transcript_path"`
+	HookEventName       string `json:"hook_event_name"`
 }
 
 // primeHook prints prime as the agent's SessionStart hook output, whose

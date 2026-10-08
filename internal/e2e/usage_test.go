@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,10 +135,8 @@ func (u *user) usageHook(cache string, input map[string]string) result {
 	return result{code: code, stdout: out.String(), stderr: errb.String()}
 }
 
-// writeClaudeResponse appends one API response to a Claude Code
-// transcript, as Claude Code writes it: a line per content block, each
-// with the response's usage.
-func writeClaudeResponse(t *testing.T, path, session, id string, blocks int, usage map[string]any) {
+// writeClaudeLines appends lines to a Claude Code transcript.
+func writeClaudeLines(t *testing.T, path string, lines ...map[string]any) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -148,22 +147,42 @@ func writeClaudeResponse(t *testing.T, path, session, id string, blocks int, usa
 	}
 	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
-	at := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	for i := range blocks {
-		if err := enc.Encode(map[string]any{"type": "assistant", "sessionId": session, "requestId": "req_" + id,
-			"timestamp": at, "version": "2.1.300", "uuid": fmt.Sprintf("%s-%d", id, i),
-			"message": map[string]any{"id": "msg_" + id, "model": "claude-opus-4-5-20251101", "role": "assistant",
-				"content": []any{map[string]any{"type": "text", "text": "Fixture reply."}}, "usage": usage}}); err != nil {
+	for _, l := range lines {
+		if err := enc.Encode(l); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
+// claudeResponse is one API response as Claude Code writes it: a line
+// per content block, each with the response's usage, its output count
+// growing to the last line's. req is the requestId, which some lines
+// lack ("").
+func claudeResponse(session, id, req string, outputs []int, usage map[string]any) []map[string]any {
+	at := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	var lines []map[string]any
+	for i, o := range outputs {
+		u := maps.Clone(usage)
+		u["output_tokens"] = o
+		l := map[string]any{"type": "assistant", "sessionId": session, "timestamp": at, "uuid": fmt.Sprintf("%s-%d", id, i),
+			"message": map[string]any{"id": id, "model": "claude-opus-4-5-20251101", "role": "assistant",
+				"content": []any{map[string]any{"type": "text", "text": "Fixture reply."}}, "usage": u}}
+		if req != "" {
+			l["requestId"], l["version"] = req, "2.1.300"
+		}
+		lines = append(lines, l)
+	}
+	return lines
+}
+
 // A Claude Code hook run reads the session's transcripts, its subagent's
 // included, and sends their tokens through the SSH server to the daemon;
-// show on the issue the session held then shows them, counted once. The
-// records go to the session the connection names: the hook's session_id,
-// unless STARFIX_SESSION is set, as for prime --hook and sfx mcp.
+// show on the issue the session held then shows them, counted once. A
+// response is sent once finished, with its last line's output: at Stop
+// the subagent's last response, which nothing follows yet, waits, and
+// SessionEnd sends it. The records go to the session the connection
+// names: the hook's session_id, unless STARFIX_SESSION is set, as for
+// prime --hook and sfx mcp.
 func TestUsageHookCapture(t *testing.T) {
 	w := newWorld(t, daemonOpts{})
 	tests := []struct {
@@ -183,23 +202,26 @@ func TestUsageHookCapture(t *testing.T) {
 
 			dir := t.TempDir()
 			main := filepath.Join(dir, sess+".jsonl")
-			writeClaudeResponse(t, main, sess, "01Main", 3, map[string]any{"input_tokens": 1200, "output_tokens": 280,
-				"cache_creation_input_tokens": 5000, "cache_read_input_tokens": 90000,
-				"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 1000, "ephemeral_5m_input_tokens": 4000}})
-			writeClaudeResponse(t, filepath.Join(dir, sess, "subagents", "agent-a1.jsonl"), sess, "01Sub", 2,
-				map[string]any{"input_tokens": 1200, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
-					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}})
-			input := map[string]string{"session_id": sess, "transcript_path": main, "cwd": filepath.Join(u.repo, "src"),
-				"hook_event_name": "Stop"}
+			writeClaudeLines(t, main, claudeResponse(sess, "msg_01Main", "req_01Main", []int{5, 100, 280},
+				map[string]any{"input_tokens": 1200, "cache_creation_input_tokens": 5000, "cache_read_input_tokens": 90000,
+					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 1000, "ephemeral_5m_input_tokens": 4000}})...)
+			writeClaudeLines(t, main, map[string]any{"type": "user", "sessionId": sess,
+				"message": map[string]any{"role": "user", "content": "Fixture prompt."}})
+			writeClaudeLines(t, filepath.Join(dir, sess, "subagents", "agent-a1.jsonl"), claudeResponse(sess, "msg_01Sub", "", []int{2, 20},
+				map[string]any{"input_tokens": 1200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}})...)
 
 			cache := t.TempDir()
-			want := "tokens claude-opus-4-5-20251101: 2.4k in, 300 out, 5k cache write (1k 1h), 90k cache read\n"
-			for run := range 2 {
-				if r := u.usageHook(cache, input); r.code != 0 || r.stdout != "" || r.stderr != "" {
-					t.Fatalf("usage --hook run %d: exit %d, stdout %q, stderr %q; want 0 and nothing", run+1, r.code, r.stdout, r.stderr)
+			mainOnly := "tokens claude-opus-4-5-20251101: 1.2k in, 280 out, 5k cache write (1k 1h), 90k cache read\n"
+			both := "tokens claude-opus-4-5-20251101: 2.4k in, 300 out, 5k cache write (1k 1h), 90k cache read\n"
+			for i, run := range []struct{ event, want string }{{"Stop", mainOnly}, {"SessionEnd", both}, {"SessionEnd", both}} {
+				r := u.usageHook(cache, map[string]string{"session_id": sess, "transcript_path": main,
+					"cwd": filepath.Join(u.repo, "src"), "hook_event_name": run.event})
+				if r.code != 0 || r.stdout != "" || r.stderr != "" {
+					t.Fatalf("usage --hook run %d (%s): exit %d, stdout %q, stderr %q; want 0 and nothing", i+1, run.event, r.code, r.stdout, r.stderr)
 				}
-				if shown := u.ok("show", task); !strings.Contains(shown, want) {
-					t.Fatalf("show after usage --hook run %d lacks %q:\n%s", run+1, want, shown)
+				if shown := u.ok("show", task); !strings.Contains(shown, run.want) {
+					t.Fatalf("show after usage --hook run %d (%s) lacks %q:\n%s", i+1, run.event, run.want, shown)
 				}
 			}
 		})

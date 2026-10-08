@@ -63,17 +63,22 @@ func TestUsageHookNeverFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(broken, ".starfix.yaml"), []byte("colour: blue\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	records := writeTranscript(t, transcriptLine(t, "msg_01A", false))
+	user := `{"type":"user","sessionId":"` + hookSession + `","message":{"role":"user","content":"Fixture prompt."}}` + "\n"
+	records := writeTranscript(t, transcriptLine(t, "msg_01A", false)+user)
+	// open ends with a response that may still grow: a Stop run holds it
+	// back, so has nothing to send; a SessionEnd run sends it.
+	open := writeTranscript(t, transcriptLine(t, "msg_01O", false))
 	empty := writeTranscript(t, "")
 	unknown := writeTranscript(t, transcriptLine(t, "msg_01U", true))
-	input := func(cwd, transcript string) string {
+	inputAt := func(cwd, transcript, event string) string {
 		b, err := json.Marshal(map[string]string{"session_id": hookSession, "transcript_path": transcript, "cwd": cwd,
-			"hook_event_name": "Stop"})
+			"hook_event_name": event})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return string(b)
 	}
+	input := func(cwd, transcript string) string { return inputAt(cwd, transcript, "Stop") }
 	tests := []struct {
 		name, stdin string
 		args        []string
@@ -83,6 +88,8 @@ func TestUsageHookNeverFails(t *testing.T) {
 		{name: "not a starfix repository", stdin: input(t.TempDir(), records)},
 		{name: "-C not a repository", args: []string{"-C", t.TempDir()}, stdin: input("", records)},
 		{name: "nothing new to send", stdin: input(repo, empty)},
+		{name: "an open response waits at Stop", stdin: input(repo, open)},
+		{name: "an open response is sent at SessionEnd", stdin: inputAt(repo, open, "SessionEnd"), note: "starfix: token usage not sent: "},
 		{name: "cannot connect", stdin: input(repo, records), note: "starfix: token usage not sent: "},
 		{name: "bad config", stdin: input(broken, records), note: "starfix: token usage not sent: "},
 		{name: "unknown format", stdin: input(repo, unknown),

@@ -3,7 +3,7 @@
 // (design §12.1).
 //
 // Only counts leave the machine: for each API request, the harness, its
-// request id, the model, the time and the token counts. The conversation
+// message id, the model, the time and the token counts. The conversation
 // in a transcript is never kept: each line is decoded into a struct that
 // holds those fields alone, and a line is dropped once read.
 //

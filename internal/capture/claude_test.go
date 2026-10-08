@@ -2,6 +2,7 @@ package capture
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,15 +48,15 @@ func TestParseClaudeLine(t *testing.T) {
 		rec        proto.UsageRecord
 	}{
 		{name: "every field", line: claudeLine("msg_01A", "req_01A", "claude-opus-4-5-20251101", full), want: lineUsage,
-			rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A:req_01A", Model: "claude-opus-4-5-20251101",
+			rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A", Model: "claude-opus-4-5-20251101",
 				At: at, Granularity: "request", Tokens: proto.Tokens{Input: n(10), Output: n(200), CacheWrite: n(3000),
 					CacheWrite1h: n(1000), CacheRead: n(15000)}}},
 		{name: "missing counts are unknown, not 0", line: claudeLine("msg_01A", "req_01A", "claude-sonnet-4-5", `{"input_tokens":7,"output_tokens":30}`),
-			want: lineUsage, rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A:req_01A", Model: "claude-sonnet-4-5",
+			want: lineUsage, rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A", Model: "claude-sonnet-4-5",
 				At: at, Granularity: "request", Tokens: proto.Tokens{Input: n(7), Output: n(30)}}},
 		{name: "a one-hour part larger than the cache write is unknown", want: lineUsage,
 			line: claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":1,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":9}}`),
-			rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A:req_01A", Model: "claude-x",
+			rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A", Model: "claude-x",
 				At: at, Granularity: "request", Tokens: proto.Tokens{Input: n(1), CacheWrite: n(5)}}},
 		{name: "synthetic model", line: claudeLine("msg_01A", "req_01A", "<synthetic>", `{"input_tokens":0,"output_tokens":0}`), want: lineOther},
 		{name: "user line", line: `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":"x"},"toolUseResult":{"usage":{"input_tokens":9}}}`, want: lineOther},
@@ -66,11 +67,15 @@ func TestParseClaudeLine(t *testing.T) {
 		{name: "no usage", line: claudeLine("msg_01A", "req_01A", "claude-x", ""), want: lineBad},
 		{name: "usage with no count", line: claudeLine("msg_01A", "req_01A", "claude-x", `{"tokens":{"in":5}}`), want: lineBad},
 		{name: "no session", line: strings.Replace(claudeLine("msg_01A", "req_01A", "claude-x", full), session, "", 1), want: lineBad},
-		{name: "no request id", line: claudeLine("msg_01A", "", "claude-x", full), want: lineBad},
+		// Lines from remote_projects sessions have no requestId (or version):
+		// the message id alone names the response.
+		{name: "no request id", line: claudeLine("msg_01A", "", "claude-x", `{"input_tokens":7}`), want: lineUsage,
+			rec: proto.UsageRecord{Harness: "claude-code", RequestID: "msg_01A", Model: "claude-x",
+				At: at, Granularity: "request", Tokens: proto.Tokens{Input: n(7)}}},
 		{name: "no message id", line: claudeLine("", "req_01A", "claude-x", full), want: lineBad},
 		{name: "no model", line: claudeLine("msg_01A", "req_01A", "", full), want: lineBad},
 		{name: "model out of shape", line: claudeLine("msg_01A", "req_01A", "claude x\u202e", full), want: lineBad},
-		{name: "request id out of shape", line: claudeLine("msg_01A", "req 01A", "claude-x", full), want: lineBad},
+		{name: "message id out of shape", line: claudeLine("msg 01A", "req_01A", "claude-x", full), want: lineBad},
 		{name: "count as a string", line: claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":"10"}`), want: lineBad},
 		{name: "count with a fraction", line: claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":1.5}`), want: lineBad},
 		{name: "negative count", line: claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":-1}`), want: lineBad},
@@ -134,7 +139,7 @@ func TestReadClaudeFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	got, err := readClaude(f, session)
+	got, err := readClaude(f, session, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,17 +147,21 @@ func TestReadClaudeFixture(t *testing.T) {
 	for _, r := range got.recs {
 		ids = append(ids, r.RequestID)
 	}
-	want := []string{"msg_01FixtureAlpha:req_01FixtureAlpha", "msg_01FixtureBravo:req_01FixtureBravo", "msg_01FixtureCharlie:req_01FixtureCharlie"}
+	want := []string{"msg_01FixtureAlpha", "msg_01FixtureBravo", "msg_01FixtureCharlie", "msg_01FixtureEcho"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("readClaude(session.jsonl) request ids = %v, want %v", ids, want)
 	}
-	// Response B is on seven lines: counted once, not seven times.
+	// Response B is on seven lines: counted once, not seven times, with
+	// the output of its last line, which grew from 5 to 120.
 	b := got.recs[1]
 	if *b.Input != 4 || *b.Output != 120 || *b.CacheWrite != 500 || *b.CacheWrite1h != 0 || *b.CacheRead != 18000 {
 		t.Errorf("response on seven lines = %s, want its counts once", show(b))
 	}
 	if c := got.recs[2]; c.Input == nil || *c.Input != 7 || c.CacheWrite != nil || c.CacheWrite1h != nil || c.CacheRead != nil {
 		t.Errorf("response without cache fields = %s, want them unknown", show(c))
+	}
+	if e := got.recs[3]; *e.Input != 6 || *e.Output != 50 || *e.CacheRead != 4000 {
+		t.Errorf("response with no requestId = %s, want its counts, output 50", show(e))
 	}
 	st, err := f.Stat()
 	if err != nil {
@@ -169,7 +178,7 @@ func TestReadClaudeKeepsLargestOutput(t *testing.T) {
 	lines := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":1}`) + "\n" +
 		claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":90}`) + "\n" +
 		claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":1}`) + "\n"
-	got, err := readClaude(strings.NewReader(lines), session)
+	got, err := readClaude(strings.NewReader(lines), session, true)
 	if err != nil || len(got.recs) != 1 || *got.recs[0].Output != 90 {
 		t.Fatalf("readClaude(growing output) = %+v, %v; want one record with output 90", got.recs, err)
 	}
@@ -180,7 +189,7 @@ func TestReadClaudeKeepsLargestOutput(t *testing.T) {
 func TestReadClaudePartialLine(t *testing.T) {
 	first := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5}`) + "\n"
 	second := claudeLine("msg_01B", "req_01B", "claude-x", `{"input_tokens":6}`)
-	got, err := readClaude(strings.NewReader(first+second[:len(second)/2]), session)
+	got, err := readClaude(strings.NewReader(first+second[:len(second)/2]), session, true)
 	if err != nil || len(got.recs) != 1 || got.end != int64(len(first)) {
 		t.Fatalf("readClaude(partial last line) = %d records, end %d, %v; want 1 record, end %d", len(got.recs), got.end, err, len(first))
 	}
@@ -190,7 +199,7 @@ func TestReadClaudePartialLine(t *testing.T) {
 func TestReadClaudeLongLine(t *testing.T) {
 	long := `{"type":"user","message":"` + strings.Repeat("x", maxLine) + `"}` + "\n"
 	ok := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5}`) + "\n"
-	got, err := readClaude(strings.NewReader(long+ok), session)
+	got, err := readClaude(strings.NewReader(long+ok), session, true)
 	if err != nil || len(got.recs) != 1 || got.long != 1 || got.end != int64(len(long)+len(ok)) {
 		t.Fatalf("readClaude(long line) = %d records, %d long, end %d, %v; want 1, 1, %d", len(got.recs), got.long, got.end, err, len(long)+len(ok))
 	}
@@ -216,10 +225,10 @@ func TestScanLinesBound(t *testing.T) {
 			in += "\n"
 		}
 		var seen int
-		n, long, err := scanLines(strings.NewReader(in), 16, 16, func(b []byte) {
+		n, long, err := scanLines(strings.NewReader(in), 16, 16, func(b []byte, at int64) {
 			seen++
-			if len(b) != tc.size {
-				t.Errorf("scanLines(%d bytes) passed a line of %d", tc.size, len(b))
+			if len(b) != tc.size || at != 0 {
+				t.Errorf("scanLines(%d bytes) passed a line of %d at %d, want %d at 0", tc.size, len(b), at, tc.size)
 			}
 		})
 		wantN := int64(len(in))
@@ -229,6 +238,61 @@ func TestScanLinesBound(t *testing.T) {
 		if err != nil || seen != tc.lines || long != tc.long || n != wantN {
 			t.Errorf("scanLines(%d bytes, bound 16) = %d lines, %d long, n %d, %v; want %d, %d, %d", tc.size, seen, long, n, err, tc.lines, tc.long, wantN)
 		}
+	}
+}
+
+// scanLines gives each line's offset, counting lines passed over.
+func TestScanLinesOffsets(t *testing.T) {
+	in := "ab\n" + strings.Repeat("x", 20) + "\ncde\n\nf\n"
+	var got []int64
+	if _, _, err := scanLines(strings.NewReader(in), 16, 16, func(_ []byte, at int64) { got = append(got, at) }); err != nil {
+		t.Fatal(err)
+	}
+	if want := []int64{0, 24, 28, 29}; !slices.Equal(got, want) {
+		t.Errorf("scanLines(%q) offsets = %v, want %v", in, got, want)
+	}
+}
+
+// A response's output grows from line to line, so a response is sent
+// only once a later line shows it finished: a line of another message,
+// or of another type. Until then the read ends before its first line,
+// so the next read takes it whole. A final read, at session end, sends
+// it as it is.
+func TestReadClaudeHoldsOpenResponse(t *testing.T) {
+	a1 := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":5}`) + "\n"
+	a2 := claudeLine("msg_01A", "req_01A", "claude-x", `{"input_tokens":5,"output_tokens":197}`) + "\n"
+	b1 := claudeLine("msg_01B", "req_01B", "claude-x", `{"input_tokens":6,"output_tokens":3}`) + "\n"
+	user := `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":"x"}}` + "\n"
+	other := strings.Replace(b1, session, "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d", 1)
+	tests := []struct {
+		name  string
+		in    string
+		final bool
+		// want is each record as id=output; end is where the read stops.
+		want []string
+		end  int
+	}{
+		{name: "open at the end", in: a1 + a2, end: 0},
+		{name: "after a finished one", in: user + a1 + b1, want: []string{"msg_01A=5"}, end: len(user + a1)},
+		{name: "closed by another message", in: a1 + a2 + b1, want: []string{"msg_01A=197"}, end: len(a1 + a2)},
+		{name: "closed by a user line", in: a1 + a2 + user, want: []string{"msg_01A=197"}, end: len(a1 + a2 + user)},
+		{name: "closed by another session's line", in: a1 + other, want: []string{"msg_01A=5"}, end: len(a1 + other)},
+		{name: "closed by a bad line", in: a1 + "{\"type\":\"assistant\",\n", want: []string{"msg_01A=5"}, end: len(a1) + 21},
+		{name: "a partial line does not close it", in: a1 + b1[:10], end: 0},
+		{name: "final read sends it", in: a1 + a2, final: true, want: []string{"msg_01A=197"}, end: len(a1 + a2)},
+		{name: "final read sends every one", in: a1 + b1, final: true, want: []string{"msg_01A=5", "msg_01B=3"}, end: len(a1 + b1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := readClaude(strings.NewReader(tc.in), session, tc.final)
+			var recs []string
+			for _, r := range got.recs {
+				recs = append(recs, fmt.Sprintf("%s=%d", r.RequestID, *r.Output))
+			}
+			if err != nil || !slices.Equal(recs, tc.want) || got.end != int64(tc.end) {
+				t.Errorf("readClaude(final=%v) = %v, end %d, %v; want %v, end %d", tc.final, recs, got.end, err, tc.want, tc.end)
+			}
+		})
 	}
 }
 

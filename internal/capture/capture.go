@@ -42,6 +42,8 @@ type Input struct {
 	// Send sends one batch of at most MaxBatch records; it returns once
 	// the server has accepted them.
 	Send func(context.Context, []proto.UsageRecord) error
+	// Final says the session has stopped writing (SessionEnd).
+	Final bool
 }
 
 // Result is what a run did.
@@ -60,7 +62,9 @@ type Result struct {
 
 // Claude sends what a Claude Code session's transcripts hold that earlier
 // runs did not send. Each file is read from the offset the state file
-// keeps for it, up to its last complete line, and the offset moves only
+// keeps for it, up to its last complete line, or unless in.Final up to
+// its last response, which may still be growing (readClaude). The offset
+// always lies on a line boundary, and it moves only
 // once the server has accepted every record read from the file, so a
 // failed send is retried by the next run. The server keeps one record per
 // request, so a record sent twice, by runs at once or after a lost state
@@ -84,7 +88,7 @@ func Claude(ctx context.Context, in Input) (Result, error) {
 	var done []pending
 	var recs []proto.UsageRecord
 	for _, path := range in.Files {
-		fr, m, err := readFile(path, marks[path], in.Session)
+		fr, m, err := readFile(path, marks[path], in.Session, in.Final)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -93,7 +97,7 @@ func Claude(ctx context.Context, in Input) (Result, error) {
 			continue
 		}
 		res.Skipped += fr.bad + fr.long
-		if len(fr.recs) == 0 && fr.bad > 0 {
+		if fr.good == 0 && fr.bad > 0 {
 			res.Unrecognized = true
 			res.Version = cmp.Or(res.Version, fr.version)
 			continue
@@ -139,7 +143,7 @@ type mark struct {
 // readFile reads path from where m left it, up to the file's size as
 // opened, and returns what it found and the mark to keep once that is
 // sent.
-func readFile(path string, m mark, session string) (fileRead, mark, error) {
+func readFile(path string, m mark, session string, final bool) (fileRead, mark, error) {
 	f, err := os.Open(path) //nolint:gosec // a transcript the harness named
 	if err != nil {
 		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: %w", path, err)
@@ -158,7 +162,7 @@ func readFile(path string, m mark, session string) (fileRead, mark, error) {
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: %w", path, err)
 	}
-	fr, err := readClaude(io.LimitReader(f, st.Size()-start), session)
+	fr, err := readClaude(io.LimitReader(f, st.Size()-start), session, final)
 	if err != nil {
 		return fileRead{}, mark{}, fmt.Errorf("read transcript %s: %w", path, err)
 	}

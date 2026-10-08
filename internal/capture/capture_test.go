@@ -21,6 +21,8 @@ type sink struct {
 	mu      sync.Mutex
 	batches [][]proto.UsageRecord
 	fail    error
+	// output is the output count last sent for each request id.
+	output map[string]int64
 }
 
 func (s *sink) send(_ context.Context, recs []proto.UsageRecord) error {
@@ -30,6 +32,14 @@ func (s *sink) send(_ context.Context, recs []proto.UsageRecord) error {
 		return s.fail
 	}
 	s.batches = append(s.batches, slices.Clone(recs))
+	if s.output == nil {
+		s.output = map[string]int64{}
+	}
+	for _, r := range recs {
+		if r.Output != nil {
+			s.output[r.RequestID] = *r.Output
+		}
+	}
 	return nil
 }
 
@@ -92,46 +102,69 @@ func appendTo(t *testing.T, path, s string) {
 	}
 }
 
-// run captures the layout's session once.
+// run captures the layout's session once, as a Stop hook would.
 func (l layout) run(t *testing.T, s *sink) (Result, error) {
+	t.Helper()
+	return l.capture(t, s, false)
+}
+
+// capture captures the layout's session once; final is a SessionEnd run.
+func (l layout) capture(t *testing.T, s *sink, final bool) (Result, error) {
 	t.Helper()
 	files, err := ClaudeFiles(l.main, session, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Claude(t.Context(), Input{Session: session, Files: files, StateDir: l.state, Send: s.send})
+	return Claude(t.Context(), Input{Session: session, Files: files, StateDir: l.state, Send: s.send, Final: final})
 }
 
-var fixtureIDs = []string{"msg_01FixtureAlpha:req_01FixtureAlpha", "msg_01FixtureBravo:req_01FixtureBravo",
-	"msg_01FixtureCharlie:req_01FixtureCharlie", "msg_01FixtureDelta:req_01FixtureDelta"}
+// mainIDs are the responses in the main fixture, all finished. The
+// subagent's one response, deltaID, is its file's last: still open until
+// a later line or the session's end.
+var mainIDs = []string{"msg_01FixtureAlpha", "msg_01FixtureBravo", "msg_01FixtureCharlie", "msg_01FixtureEcho"}
 
-// Each run sends only what earlier runs did not; a line still being
-// written waits for the next run.
+const deltaID = "msg_01FixtureDelta"
+
+// Each run sends only what earlier runs did not. A line still being
+// written waits for the next run, and so does a response whose last
+// line may be yet to come, so its final output is the one sent.
 func TestClaudeAcrossRuns(t *testing.T) {
 	l := newLayout(t)
 	s := &sink{}
-	half := claudeLine("msg_01Half", "req_01Half", "claude-x", `{"input_tokens":1}`)
+	newFirst := claudeLine("msg_01New", "req_01New", "claude-x", `{"input_tokens":1,"output_tokens":5}`) + "\n"
+	newLast := claudeLine("msg_01New", "req_01New", "claude-x", `{"input_tokens":1,"output_tokens":90}`) + "\n"
+	user := `{"type":"user","sessionId":"` + session + `","message":{"role":"user","content":"Fixture prompt."}}` + "\n"
+	half := claudeLine("msg_01Half", "", "claude-x", `{"input_tokens":1}`)
 	steps := []struct {
 		name   string
 		before func()
+		final  bool
 		want   []string
 	}{
-		{name: "first run sends the main and subagent transcripts", want: fixtureIDs},
+		{name: "first run sends the main transcript; the subagent's response is open", want: mainIDs},
 		{name: "second run sends nothing"},
-		{name: "a new response", want: []string{"msg_01New:req_01New"}, before: func() {
-			appendTo(t, l.main, claudeLine("msg_01New", "req_01New", "claude-x", `{"input_tokens":1}`)+"\n")
-		}},
+		{name: "a new response's first line waits", before: func() { appendTo(t, l.main, newFirst) }},
+		{name: "its last line, then a user line, send it once", want: []string{"msg_01New"},
+			before: func() { appendTo(t, l.main, newLast+user) }},
 		{name: "half a line waits", before: func() { appendTo(t, l.sub, half[:len(half)/2]) }},
-		{name: "the rest of it", want: []string{"msg_01Half:req_01Half"}, before: func() { appendTo(t, l.sub, half[len(half)/2:]+"\n") }},
+		{name: "the rest of it closes the subagent's response", want: []string{deltaID},
+			before: func() { appendTo(t, l.sub, half[len(half)/2:]+"\n") }},
+		{name: "session end sends the open response", final: true, want: []string{"msg_01Half"}},
+		{name: "another session end sends nothing", final: true},
 	}
 	for _, st := range steps {
 		if st.before != nil {
 			st.before()
 		}
-		res, err := l.run(t, s)
+		res, err := l.capture(t, s, st.final)
 		if got := s.ids(); err != nil || !slices.Equal(got, st.want) || res.Sent != len(st.want) {
 			t.Fatalf("%s: sent %v (Sent %d), %v; want %v", st.name, got, res.Sent, err, st.want)
 		}
+	}
+	// The new response straddled two runs and was sent once, with the
+	// output of its last line.
+	if got := s.output["msg_01New"]; got != 90 {
+		t.Errorf("response across two runs sent output %d, want 90, its last line's", got)
 	}
 }
 
@@ -148,8 +181,8 @@ func TestClaudeRetriesAfterFailedSend(t *testing.T) {
 	if _, err := l.run(t, s); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.ids(); !slices.Equal(got, fixtureIDs) {
-		t.Fatalf("run after the failure sent %v, want %v", got, fixtureIDs)
+	if got := s.ids(); !slices.Equal(got, mainIDs) {
+		t.Fatalf("run after the failure sent %v, want %v", got, mainIDs)
 	}
 }
 
@@ -169,7 +202,7 @@ func TestClaudeBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := filepath.Join(t.TempDir(), "starfix")
-	in := Input{Session: session, Files: []string{small, big}, StateDir: state}
+	in := Input{Session: session, Files: []string{small, big}, StateDir: state, Final: true}
 	// small fills batch 1 with 499 of big's; batch 2 holds big's last 2.
 	calls := 0
 	in.Send = func(_ context.Context, recs []proto.UsageRecord) error {
@@ -190,8 +223,8 @@ func TestClaudeBatches(t *testing.T) {
 	if _, err := Claude(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.ids(); len(got) != MaxBatch+1 || slices.Contains(got, "msg_small:req_01") {
-		t.Fatalf("rerun sent %d records (small's included: %v), want big's %d again and not small's", len(got), slices.Contains(got, "msg_small:req_01"), MaxBatch+1)
+	if got := s.ids(); len(got) != MaxBatch+1 || slices.Contains(got, "msg_small") {
+		t.Fatalf("rerun sent %d records (small's included: %v), want big's %d again and not small's", len(got), slices.Contains(got, "msg_small"), MaxBatch+1)
 	}
 }
 
@@ -202,12 +235,12 @@ func TestClaudeTruncatedOrReplaced(t *testing.T) {
 		replace func(t *testing.T, l layout)
 		want    []string
 	}{
-		{name: "truncated", want: []string{"msg_01T:req_01T"}, replace: func(t *testing.T, l layout) {
+		{name: "truncated", want: []string{"msg_01T"}, replace: func(t *testing.T, l layout) {
 			if err := os.WriteFile(l.main, []byte(claudeLine("msg_01T", "req_01T", "claude-x", `{"input_tokens":1}`)+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "replaced by a longer file", want: []string{"msg_01R:req_01R"}, replace: func(t *testing.T, l layout) {
+		{name: "replaced by a longer file", want: []string{"msg_01R"}, replace: func(t *testing.T, l layout) {
 			line := claudeLine("msg_01R", "req_01R", "claude-x", `{"input_tokens":1}`) + "\n"
 			if err := os.WriteFile(l.main+".new", []byte(strings.Repeat(line, 100)), 0o600); err != nil {
 				t.Fatal(err)
@@ -219,14 +252,15 @@ func TestClaudeTruncatedOrReplaced(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// Session-end runs: each file's last response is sent.
 			l := newLayout(t)
 			s := &sink{}
-			if _, err := l.run(t, s); err != nil {
+			if _, err := l.capture(t, s, true); err != nil {
 				t.Fatal(err)
 			}
 			s.ids()
 			tc.replace(t, l)
-			if _, err := l.run(t, s); err != nil {
+			if _, err := l.capture(t, s, true); err != nil {
 				t.Fatal(err)
 			}
 			if got := s.ids(); !slices.Equal(got, tc.want) {
@@ -328,7 +362,7 @@ func TestStatePruneAndCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendTo(t, l.main, claudeLine("msg_01P", "req_01P", "claude-x", `{"input_tokens":1}`)+"\n")
-	if _, err := l.run(t, &sink{}); err != nil {
+	if _, err := l.capture(t, &sink{}, true); err != nil {
 		t.Fatal(err)
 	}
 	marks := loadState(l.state)
@@ -340,11 +374,11 @@ func TestStatePruneAndCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &sink{}
-	if _, err := l.run(t, s); err != nil {
+	if _, err := l.capture(t, s, true); err != nil {
 		t.Fatalf("run over a corrupt state file: %v", err)
 	}
-	if got := s.ids(); len(got) != 4 {
-		t.Errorf("run over a corrupt state file sent %v, want the main transcript again", got)
+	if got, want := s.ids(), append(slices.Clone(mainIDs), "msg_01P"); !slices.Equal(got, want) {
+		t.Errorf("run over a corrupt state file sent %v, want the main transcript again: %v", got, want)
 	}
 	if len(loadState(l.state)) != 1 {
 		t.Errorf("corrupt state file was not rewritten")
@@ -376,8 +410,8 @@ func TestClaudeConcurrentRuns(t *testing.T) {
 	}
 	got := s.ids()
 	slices.Sort(got)
-	if got = slices.Compact(got); !slices.Equal(got, fixtureIDs) {
-		t.Errorf("concurrent runs sent %v, want %v (each at least once)", got, fixtureIDs)
+	if got = slices.Compact(got); !slices.Equal(got, mainIDs) {
+		t.Errorf("concurrent runs sent %v, want %v (each at least once)", got, mainIDs)
 	}
 	if len(loadState(l.state)) != 2 {
 		t.Errorf("state after concurrent runs = %v, want both files", loadState(l.state))
