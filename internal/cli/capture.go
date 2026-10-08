@@ -93,7 +93,7 @@ func (r *runner) captureClaude(ctx context.Context, in hookInput) (capture.Resul
 	}
 	cache, err := r.env.UserCacheDir()
 	if err != nil {
-		return capture.Result{}, proto.Errf(proto.CodeInvalid, "set HOME, or XDG_CACHE_HOME, so sfx can keep its offsets",
+		return capture.Result{}, proto.Errf(proto.CodeInvalid, "set HOME (XDG_CACHE_HOME on Linux, LocalAppData on Windows) so sfx can keep its offsets",
 			"cannot find the cache directory: "+err.Error())
 	}
 	files, err := capture.ClaudeFiles(in.TranscriptPath, in.SessionID, in.AgentTranscriptPath)

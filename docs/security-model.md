@@ -125,10 +125,32 @@ care:
   anything else in the entry, such as `cwd` or `LD_PRELOAD`, and `--write`
   drops it. A JSON file with a duplicate key is refused ([What setup
   writes](agents.md#what-setup-writes-and-what-it-leaves-alone)).
-- **Global hooks run everywhere.** A session-start hook set up with
-  `--global` runs in every repository that has a `.starfix.yaml`, and
-  connects to the server that file names. Prefer per-project setup
+- **Global hooks run everywhere.** A hook set up with `--global` runs in
+  every repository that has a `.starfix.yaml`, and connects to the server
+  that file names; Claude Code's usage hooks send it the session's token
+  counts. Prefer per-project setup
   ([`--global`](agents.md#setting-agents-up-for-every-repository---global)).
+
+## Transcripts stay on your machine
+
+Token capture reads Claude Code's transcripts, which hold the whole
+conversation, so it is built to take only counts from them
+([Token usage hooks](agents.md#token-usage-hooks-claude-code)):
+
+- **Read locally.** `sfx usage --hook` reads the transcript files on your
+  machine. Nothing else reads them, and there is no other network call:
+  records go over the same SSH connection as every `sfx` command.
+- **Only counts leave.** Each record is the harness name, its request
+  id, the model, the request's time and the token counts. The server
+  checks every field against a fixed pattern or range. Prompts, replies,
+  tool inputs and file contents are never sent, stored or printed.
+- **Not held in memory.** Each line is decoded into a structure that has
+  only those fields, and is dropped once read. A line over 4 MiB is
+  passed over, not buffered.
+- **The offsets file** (`starfix/usage-offsets.json` in your user cache
+  directory) holds transcript paths, byte offsets and a hash of each
+  file's first 4 KiB, nothing of their content. It is mode 0600 in a 0700
+  directory.
 
 ## Limits
 
