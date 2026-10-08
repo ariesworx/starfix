@@ -38,13 +38,13 @@ func (u *user) board() *boardView {
 		t.Fatal(err)
 	}
 	b := &boardView{t: t, m: board.New("e2e"), updates: make(chan board.Update)}
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		live.Run(ctx, conn, nil, b.updates)
+		live.Run(t.Context(), conn, nil, b.updates)
 	}()
-	t.Cleanup(func() { cancel(); <-done })
+	// t.Context ends before cleanups run, which ends Run.
+	t.Cleanup(func() { <-done })
 	return b
 }
 
