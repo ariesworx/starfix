@@ -148,3 +148,38 @@ func TestRunInputEnds(t *testing.T) {
 		}
 	})
 }
+
+// Keys pressed while a read is slow do not pile up: refreshes pending
+// collapse into one, and only the latest open or close of a detail is
+// kept.
+func TestRunCoalescesActions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv, sc := &fakeServer{}, newScreen(80, 12)
+		wait := runBoard(t, srv, sc, sc.terminal())
+		synctest.Wait()
+		srv.took()
+
+		gate := make(chan struct{})
+		srv.mu.Lock()
+		srv.gate = gate
+		srv.mu.Unlock()
+		_, _ = sc.keys.Write([]byte("r")) // Live is now held in this refresh
+		synctest.Wait()
+		_, _ = sc.keys.Write([]byte(strings.Repeat("r", 50) + "\r\x1b[D\r\x1b[D\r"))
+		synctest.Wait()
+		srv.mu.Lock()
+		srv.gate = nil
+		srv.mu.Unlock()
+		close(gate)
+		synctest.Wait()
+
+		want := append(append(slices.Clone(refresh), refresh...), "show sf-r1")
+		if got := srv.took(); !slices.Equal(got, want) {
+			t.Errorf("after 50 r and three opens and two closes during a slow read, calls = %v, want %v", got, want)
+		}
+		_, _ = sc.keys.Write([]byte("q"))
+		if err := wait(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

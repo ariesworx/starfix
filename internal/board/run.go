@@ -114,7 +114,7 @@ func Run(ctx context.Context, title string, t Terminal, live *Live, conn Conn) e
 					return nil
 				case DoNothing:
 				default:
-					pending = append(pending, a)
+					pending = enqueue(pending, a)
 				}
 			}
 			draw()
@@ -124,6 +124,22 @@ func Run(ctx context.Context, title string, t Terminal, live *Live, conn Conn) e
 			draw()
 		}
 	}
+}
+
+// enqueue adds a to the actions waiting for Live, keeping the queue
+// short however fast keys come while Live is busy: a refresh already
+// waiting covers another, and only the latest open or close of a detail
+// matters.
+func enqueue(pending []Action, a Action) []Action {
+	switch a.Do {
+	case DoRefresh:
+		if slices.Contains(pending, Action{Do: DoRefresh}) {
+			return pending
+		}
+	case DoShow, DoHide:
+		pending = slices.DeleteFunc(pending, func(p Action) bool { return p.Do == DoShow || p.Do == DoHide })
+	}
+	return append(pending, a)
 }
 
 // readKeys sends what in delivers to keys, until in ends, which closes
