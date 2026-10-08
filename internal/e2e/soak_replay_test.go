@@ -458,3 +458,16 @@ func TestReplaySilentRelease(t *testing.T) {
 		t.Errorf("replay of a silent release found %q, want one violation containing %q", got, want)
 	}
 }
+
+// topIDs reads 0 from an empty inbox, where Dolt's COALESCE in a scalar
+// subquery gives NULL: a session can drop its connection before anyone
+// was sent an inbox item.
+func TestTopIDsEmpty(t *testing.T) {
+	db := openCheckerDB(t, newWorld(t, daemonOpts{}).dsn)
+	for range 20 {
+		top, err := topIDs(t.Context(), db)
+		if err != nil || top != (bound{}) {
+			t.Fatalf("topIDs of an empty store = %+v, %v; want zeros", top, err)
+		}
+	}
+}

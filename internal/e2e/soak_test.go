@@ -172,7 +172,16 @@ func newSoak(t *testing.T, cfg soakConfig) *soak {
 		s.users[p] = s.w.newUser(p, "")
 	}
 	s.eve = s.w.newUser("eve", "")
-	dc, err := mysql.ParseDSN(s.w.dsn)
+	s.db = openCheckerDB(t, s.w.dsn)
+	s.baseline = runtime.NumGoroutine()
+	return s
+}
+
+// openCheckerDB opens the checker's own connection to the store's
+// database, which it only reads.
+func openCheckerDB(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	dc, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +190,10 @@ func newSoak(t *testing.T, cfg soakConfig) *soak {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.db = sql.OpenDB(conn)
-	s.db.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = s.db.Close() })
-	s.baseline = runtime.NumGoroutine()
-	return s
+	db := sql.OpenDB(conn)
+	db.SetMaxOpenConns(2)
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 // run starts every session, the chaos and the sampler, lets them work for

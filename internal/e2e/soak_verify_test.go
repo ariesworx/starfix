@@ -289,14 +289,22 @@ func (s *soak) awaitReaped() {
 // for every inbox item and issue event committed so far that its watch is
 // owed.
 func (s *soak) checkWindow(ss *session, ln *line, c *mcpserver.RepoConn) {
-	var top bound
-	err := scan(context.Background(), s.db, `SELECT (SELECT COALESCE(MAX(id), 0) FROM inbox), (SELECT COALESCE(MAX(seq), 0) FROM events)`, nil,
-		func(rows *sql.Rows) error { return rows.Scan(&top.item, &top.seq) })
+	top, err := topIDs(context.Background(), s.db)
 	if err != nil {
 		s.t.Errorf("read inbox: %v", err)
 		return
 	}
 	s.awaitWindow(ss, ln, c, top)
+}
+
+// topIDs returns the highest inbox id and event seq, 0 for none. Dolt
+// answers COALESCE(MAX(id), 0) in a scalar subquery over an empty table
+// with NULL, so the maxima are read as they are and NULL taken as 0.
+func topIDs(ctx context.Context, q querier) (bound, error) {
+	var item, seq sql.NullInt64
+	err := scan(ctx, q, `SELECT (SELECT MAX(id) FROM inbox), (SELECT MAX(seq) FROM events)`, nil,
+		func(rows *sql.Rows) error { return rows.Scan(&item, &seq) })
+	return bound{item: item.Int64, seq: seq.Int64}, err
 }
 
 // bound is how far a check of a window reaches: inbox items up to id
