@@ -628,11 +628,11 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 
 // CloseIssue closes an issue, ends any claim on it and returns it; when
 // the claim, live or lapsed, was another session's, that session gets a
-// claim.lost inbox item. expected 0 skips the revision check: close wins over concurrent
-// edits (design §8). An issue with acceptance items neither ticked nor
-// waived is refused with an [*AcceptanceError], one another principal
-// holds with a [*ForbiddenError] unless the actor is an admin, and one
-// already closed with ErrInvalid.
+// claim.lost inbox item. expected 0 skips the revision check: close wins
+// over concurrent edits (design §8). An issue with acceptance items
+// neither ticked nor waived is refused with an [*AcceptanceError], one
+// another principal holds with a [*ForbiddenError] unless the actor is an
+// admin, and one already closed with ErrInvalid.
 func (s *Store) CloseIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
 	return s.closeIssue(ctx, actor, id, expected, reason, false)
 }
