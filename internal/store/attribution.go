@@ -76,6 +76,10 @@ type ModelUsage struct {
 // usageScanRows bounds the usage rows one read takes.
 const usageScanRows = 100_000
 
+// ctxEvery is how many rows a long loop takes between checks that its
+// context is still live.
+const ctxEvery = 1024
+
 // sessionKey names a session: the principal and the client's session id.
 type sessionKey struct{ principal, session string }
 
@@ -147,7 +151,12 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 		out.Capped = out.Capped || capped
 	}
 	var sum usageSum
-	for _, r := range rows {
+	for i, r := range rows {
+		if i%ctxEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return IssueUsage{}, err
+			}
+		}
 		d := divide(r, holds[r.key])
 		i := d.part(id)
 		if i < 0 {
@@ -281,9 +290,9 @@ func lapsedAt(at, expires time.Time) time.Time {
 	return at
 }
 
-// sessionHolds returns every hold of the sessions keys, on any issue, by
-// session.
-func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Time) (map[sessionKey][]hold, error) {
+// sessionHolds returns every hold of the sessions keys, on any issue,
+// indexed by session.
+func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Time) (map[sessionKey]*holdIndex, error) {
 	var issues []IssueID
 	seen := map[IssueID]bool{}
 	for _, k := range keys {
@@ -315,11 +324,15 @@ func sessionHolds(ctx context.Context, q querier, keys []sessionKey, now time.Ti
 	for _, k := range keys {
 		want[k] = true
 	}
-	out := map[sessionKey][]hold{}
+	byKey := map[sessionKey][]hold{}
 	for _, h := range all {
 		if want[h.key] {
-			out[h.key] = append(out[h.key], h)
+			byKey[h.key] = append(byKey[h.key], h)
 		}
+	}
+	out := map[sessionKey]*holdIndex{}
+	for k, hs := range byKey {
+		out[k] = newHoldIndex(hs)
 	}
 	return out, nil
 }
@@ -379,49 +392,138 @@ type division struct {
 	weights []float64
 }
 
-// divide divides r among holds, its session's.
-func divide(r usageRow, holds []hold) division {
+// holdIndex finds which of a session's holds overlap a time, in time
+// logarithmic in the holds plus linear in those found.
+type holdIndex struct {
+	holds []hold // by start
+	// last is a segment tree over holds: last[n] is the latest end in
+	// node n's range, with node 1 the root and node n's children 2n and
+	// 2n+1.
+	last []time.Time
+}
+
+// newHoldIndex indexes holds, which it sorts.
+func newHoldIndex(holds []hold) *holdIndex {
+	slices.SortFunc(holds, func(a, b hold) int {
+		return cmp.Or(a.start.Compare(b.start), strings.Compare(string(a.issue), string(b.issue)))
+	})
+	x := &holdIndex{holds: holds, last: make([]time.Time, 4*len(holds))}
+	if len(holds) > 0 {
+		x.build(1, 0, len(holds))
+	}
+	return x
+}
+
+func (x *holdIndex) build(node, lo, hi int) time.Time {
+	if hi-lo == 1 {
+		x.last[node] = x.holds[lo].end
+		return x.last[node]
+	}
+	mid := (lo + hi) / 2
+	x.last[node] = maxTime(x.build(2*node, lo, mid), x.build(2*node+1, mid, hi))
+	return x.last[node]
+}
+
+// overlapping calls f with each hold that starts at or before to and
+// ends after from. A nil index has no holds.
+func (x *holdIndex) overlapping(from, to time.Time, f func(hold)) {
+	if x == nil || len(x.holds) == 0 {
+		return
+	}
+	n, _ := slices.BinarySearchFunc(x.holds, to, func(h hold, t time.Time) int {
+		if h.start.After(t) {
+			return 1
+		}
+		return -1
+	})
+	x.visit(1, 0, len(x.holds), n, from, f)
+}
+
+// visit calls f with the holds in node's range [lo, hi), and before n,
+// that end after from, skipping every subtree that ends no later.
+func (x *holdIndex) visit(node, lo, hi, n int, from time.Time, f func(hold)) {
+	if lo >= n || !x.last[node].After(from) {
+		return
+	}
+	if hi-lo == 1 {
+		f(x.holds[lo])
+		return
+	}
+	mid := (lo + hi) / 2
+	x.visit(2*node, lo, mid, n, from, f)
+	x.visit(2*node+1, mid, hi, n, from, f)
+}
+
+// divide divides r among its session's holds, x.
+//
+// A span is swept once over the start and end of each hold inside it.
+// S(t) accumulates, over the time from the span's start to t, each
+// stretch's length divided by the number of holds then, so a hold's
+// share of the span is S at its end less S at its start, and stretches
+// held by none are unheld. That is O(k log k) for k holds overlapping
+// the span.
+func divide(r usageRow, x *holdIndex) division {
 	w := map[IssueID]float64{}
 	var unheld float64
 	if !r.from.Before(r.to) {
-		for _, h := range holds {
-			if !r.to.Before(h.start) && r.to.Before(h.end) {
-				w[h.issue] = 1
-			}
-		}
+		x.overlapping(r.to, r.to, func(h hold) { w[h.issue] = 1 })
 		if len(w) == 0 {
 			unheld = 1
 		}
 		return newDivision(w, unheld)
 	}
-	// Cut the span at every hold boundary inside it; each piece is then
-	// wholly held, or not, by each hold.
-	cuts := []time.Time{r.from, r.to}
-	for _, h := range holds {
-		for _, t := range []time.Time{h.start, h.end} {
-			if t.After(r.from) && t.Before(r.to) {
-				cuts = append(cuts, t)
-			}
+	// pieces are the holds clipped to the span, with their weights.
+	type piece struct {
+		issue IssueID
+		w     float64
+	}
+	type edge struct {
+		at    time.Duration // from the span's start
+		piece int
+		open  bool
+	}
+	var pieces []piece
+	var edges []edge
+	x.overlapping(r.from, r.to, func(h hold) {
+		a, b := maxTime(h.start, r.from).Sub(r.from), minTime(h.end, r.to).Sub(r.from)
+		if a < b {
+			edges = append(edges, edge{a, len(pieces), true}, edge{b, len(pieces), false})
+			pieces = append(pieces, piece{issue: h.issue})
+		}
+	})
+	slices.SortFunc(edges, func(a, b edge) int { return cmp.Compare(a.at, b.at) })
+	var sum float64 // S at prev
+	var prev time.Duration
+	active := 0
+	for _, e := range edges {
+		if d := float64(e.at - prev); active > 0 {
+			sum += d / float64(active)
+		} else {
+			unheld += d
+		}
+		prev = e.at
+		if e.open {
+			pieces[e.piece].w -= sum
+			active++
+		} else {
+			pieces[e.piece].w += sum
+			active--
 		}
 	}
-	slices.SortFunc(cuts, time.Time.Compare)
-	cuts = slices.CompactFunc(cuts, time.Time.Equal)
-	for i := range len(cuts) - 1 {
-		a, b := cuts[i], cuts[i+1]
-		var held []IssueID
-		for _, h := range holds {
-			if !h.start.After(a) && !h.end.Before(b) {
-				held = append(held, h.issue)
-			}
+	unheld += float64(r.to.Sub(r.from) - prev)
+	// An issue's weight is its pieces'.
+	slices.SortStableFunc(pieces, func(a, b piece) int { return strings.Compare(string(a.issue), string(b.issue)) })
+	var d division
+	for i, p := range pieces {
+		if i > 0 && p.issue == pieces[i-1].issue {
+			d.weights[len(d.weights)-1] += p.w
+			continue
 		}
-		if len(held) == 0 {
-			unheld += float64(b.Sub(a))
-		}
-		for _, id := range held {
-			w[id] += float64(b.Sub(a)) / float64(len(held))
-		}
+		d.issues = append(d.issues, p.issue)
+		d.weights = append(d.weights, p.w)
 	}
-	return newDivision(w, unheld)
+	d.weights = append(d.weights, unheld)
+	return d
 }
 
 // newDivision orders weights by issue and puts unheld last.
@@ -613,8 +715,8 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 	counts := func(IssueID) bool { return true }
 	if q.f.Label != "" {
 		ids := slices.Clone(issues)
-		for _, hs := range bySession {
-			for _, h := range hs {
+		for _, x := range bySession {
+			for _, h := range x.holds {
 				ids = append(ids, h.issue)
 			}
 		}
@@ -634,7 +736,12 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 		}
 	}
 	var total, loose usageSum
-	for _, r := range rows {
+	for i, r := range rows {
+		if i%ctxEvery == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		d := divide(r, bySession[r.key])
 		if q.f.Label == "" {
 			total.add(r, whole)
