@@ -107,6 +107,9 @@ skip without it too.
    issue (its fields, status, handoffs or acceptance) first calls
    `wtx.guard` with the issue's claim (`store/authz.go`), so only the
    holder's principal or an admin may change an issue someone holds.
+   `ImportIssue`, which only the operator's `starfixd import-bd` reaches,
+   is exempt: it writes an issue whoever holds it, and ends the claim,
+   telling the holder, when it closes one.
 6. **Every `UPDATE` sets `write_id = ?`** to a value unique to that write.
    Dolt detects conflicts per cell, not per row, so `rev = rev + 1` alone
    lets two concurrent writers both succeed silently (stage 0,

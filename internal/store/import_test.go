@@ -138,6 +138,57 @@ func TestImportIssueNewerOlder(t *testing.T) {
 	}
 }
 
+// Import is the operator's, so it writes an issue whoever holds it. An
+// import that closes a held issue ends the claim and tells the holder's
+// session, as any other close does; one that leaves it open leaves the
+// claim alone.
+func TestImportIssueHeld(t *testing.T) {
+	tests := []struct {
+		name   string
+		mod    func(*Issue)
+		closes bool
+	}{
+		{"closes it", func(is *Issue) {
+			is.Status, is.ClosedAt, is.CloseReason = StatusClosed, ptr(is.UpdatedAt), "done in bd"
+		}, true},
+		{"edits it", func(is *Issue) {
+			is.Status, is.Assignee, is.Title = StatusInProgress, "alice", "retitled in bd"
+		}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clk := clockStore(t)
+			ctx := t.Context()
+			in := importedIssue("bd-h1", nil)
+			if _, err := s.ImportIssue(ctx, importer, in); err != nil {
+				t.Fatal(err)
+			}
+			mustStart(t, s, alice, in.ID)
+			clk.add(time.Minute)
+			in.UpdatedAt = clk.now() // edited in bd after alice started it
+			tc.mod(&in)
+			if res, err := s.ImportIssue(ctx, importer, in); err != nil || res.Outcome != ImportUpdated {
+				t.Fatalf("ImportIssue over alice's claim = %+v, %v; want %s", res, err, ImportUpdated)
+			}
+			c, err := s.ClaimOf(ctx, in.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if held := c != nil; held == tc.closes {
+				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.closes)
+			}
+			var want []item
+			if tc.closes {
+				want = []item{{"alice", "sess-a", InboxClaimLost, in.ID, importer.Principal}}
+			}
+			if got := items(t, s, alice); !slices.Equal(got, want) {
+				t.Errorf("Inbox(alice) = %+v, want %+v", got, want)
+			}
+			assertGapless(t, s)
+		})
+	}
+}
+
 func TestImportIssueInvalid(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
