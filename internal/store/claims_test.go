@@ -254,8 +254,10 @@ func TestClaimEndsAreRecorded(t *testing.T) {
 		name string
 		// end ends alice's claim on id, taken at epoch 1, as by.
 		end func(t *testing.T, s *Store, clk *clock, id IssueID) Actor
-		// ends is false for a change that keeps the claim.
+		// ends is false for a change that ends no claim.
 		ends bool
+		// unclaimed skips alice's start, for an issue never claimed.
+		unclaimed bool
 	}{
 		{name: "a close by an admin", ends: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
 			if _, err := s.CloseIssue(t.Context(), dana, id, 0, "dup"); err != nil {
@@ -314,6 +316,22 @@ func TestClaimEndsAreRecorded(t *testing.T) {
 			}
 			return bob
 		}},
+		{name: "a close after the reaper's claim.expire", end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			if _, err := s.ReapClaims(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "a close of an issue never claimed", unclaimed: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
 		{name: "a handoff that keeps the claim", end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
 			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "progress"}, false, "", nil); err != nil {
 				t.Fatal(err)
@@ -326,9 +344,12 @@ func TestClaimEndsAreRecorded(t *testing.T) {
 			s, clk := clockStore(t)
 			ctx := t.Context()
 			is := mustCreate(t, s, NewIssue{Title: "work"})
-			_, c, err := s.StartIssue(ctx, alice, is.ID, 0, false)
-			if err != nil {
-				t.Fatal(err)
+			var c Claim
+			if !tc.unclaimed {
+				var err error
+				if _, c, err = s.StartIssue(ctx, alice, is.ID, 0, false); err != nil {
+					t.Fatal(err)
+				}
 			}
 			by := tc.end(t, s, clk, is.ID)
 			evs, err := s.History(ctx, is.ID)

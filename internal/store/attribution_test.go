@@ -195,6 +195,21 @@ func TestIssueUsageEndAfterLapse(t *testing.T) {
 		name string
 		end  func(t *testing.T, s *Store, id IssueID)
 	}{
+		{name: "the holder's close", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, err := s.CloseIssue(t.Context(), alice, id, 0, "done"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "the holder's finish", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, _, err := s.FinishIssue(t.Context(), alice, id, 1, Finish{Reason: "done"}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "another principal's close", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{name: "another principal's update out of progress, then the holder's release", end: func(t *testing.T, s *Store, id IssueID) {
 			is, err := s.GetIssue(t.Context(), id)
 			if err != nil {
