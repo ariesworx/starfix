@@ -326,3 +326,31 @@ func TestLiveDetail(t *testing.T) {
 		}
 	})
 }
+
+// A server that refuses to push events leaves the board readable but not
+// live, and the header keeps saying so after each read, not only until
+// the first.
+func TestLiveWatchRefused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := &fakeServer{refuse: map[string]*proto.Error{
+			proto.OpWatch: proto.Errf(proto.CodeInvalid, "ask the admin to run `starfixd upgrade`", "bad arguments")}}
+		r := startLive(t, srv)
+		r.actions <- Action{Do: DoRefresh}
+		synctest.Wait()
+		var last Status
+		for {
+			select {
+			case u := <-r.updates:
+				if s, ok := u.(Status); ok {
+					last = s
+				}
+				continue
+			default:
+			}
+			break
+		}
+		if want := "bad arguments; fix: ask the admin to run `starfixd upgrade`"; last.Note != want {
+			t.Errorf("status after a refresh = %+v, want the watch's refusal %q kept", last, want)
+		}
+	})
+}

@@ -114,6 +114,9 @@ type runner struct {
 	open string
 	// status is the last Status sent.
 	status Status
+	// unwatched is why the connection pushes no events, when the server
+	// refused the watch: every status says so while it lasts.
+	unwatched string
 }
 
 // send hands u to the board, unless Run is ending. A Status is sent only
@@ -232,9 +235,11 @@ func (r *runner) serve(conn Conn) error {
 // falls between the read and the pushes.
 func (r *runner) watch(conn Conn) error {
 	err := conn.Call(r.ctx, proto.OpWatch, proto.WatchArgs{Events: true}, nil)
+	r.unwatched = ""
 	if err != nil && conn.Err() == nil {
-		// Refused: the board cannot follow this server live.
-		r.send(Status{State: StateLive, Note: note(err)})
+		// Refused: the board can read this server but not follow it.
+		r.unwatched = note(err)
+		r.send(Status{State: StateLive, Note: r.unwatched})
 		return nil
 	}
 	return err
@@ -248,7 +253,7 @@ func (r *runner) refresh(conn Conn, detail bool) error {
 	switch {
 	case err == nil:
 		r.send(snap)
-		r.send(Status{State: StateLive})
+		r.send(Status{State: StateLive, Note: r.unwatched})
 	case conn.Err() != nil || r.ctx.Err() != nil:
 		return err
 	default:
