@@ -423,8 +423,11 @@ starfixd logs to stderr, which systemd sends to the journal
 |---|---|
 | `debug` | Connections and each successful request |
 | `info` | Startup, refusals, handshake failures and expired claims. Refusals are capped at `refusal_logs` a minute per principal |
-| `warn` | Connections refused at the connection cap, socket peers refused, and how many refusal lines the cap left out |
+| `warn` | Connections refused at the connection cap, socket peers refused, how many refusal lines the cap left out, and failures to accept a connection that may pass, such as running out of file descriptors, which starfixd retries after a pause of up to a second |
 | `error` | Internal errors |
+
+Any other failure to accept connections stops starfixd: it prints the
+error and exits 1, and the unit's `Restart=on-failure` starts it again.
 
 ## Upgrades
 

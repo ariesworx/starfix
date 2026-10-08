@@ -11,6 +11,7 @@ import (
 	"net"
 	"regexp"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -123,10 +124,15 @@ func New(cfg Config) (*Server, error) {
 
 // Serve accepts connections on l until ctx is done, then closes l and every
 // open connection, waits for their handlers and the reaper to return, and
-// returns nil. If Accept fails for another reason, Serve returns that
-// error once the handlers and the reaper have returned.
+// returns nil. An Accept error that may pass, such as running out of file
+// descriptors, is logged at warn and retried after a pause that doubles
+// from 5ms to at most a second. Any other Accept error ends Serve the same
+// way, and Serve returns it.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	stop := context.AfterFunc(ctx, func() {
+	ctx, cancel := context.WithCancel(ctx)
+	closed := make(chan struct{})
+	context.AfterFunc(ctx, func() {
+		defer close(closed)
 		_ = l.Close()
 		s.mu.Lock()
 		for c := range s.conns {
@@ -134,19 +140,37 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		}
 		s.mu.Unlock()
 	})
-	defer stop()
-	defer s.wg.Wait()
+	// However Serve returns, cancel closes l and the connections, which
+	// ends the handlers, and stops the reaper; only then can they be
+	// waited for.
+	defer func() {
+		cancel()
+		<-closed
+		s.wg.Wait()
+	}()
 	if s.cfg.ReapInterval > 0 {
 		s.wg.Go(func() { s.reapLoop(ctx) })
 	}
+	var pause time.Duration
 	for {
 		c, err := l.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("accept: %w", err)
+			if !transient(err) {
+				return fmt.Errorf("accept: %w", err)
+			}
+			pause = min(max(2*pause, 5*time.Millisecond), time.Second)
+			s.cfg.Logger.Warn("accept failed; retrying", "err", err, "after", pause)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(pause):
+			}
+			continue
 		}
+		pause = 0
 		s.mu.Lock()
 		full := len(s.conns) >= 2*s.cfg.Limits.Conns
 		if !full {
@@ -170,6 +194,20 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 			s.handle(ctx, c)
 		})
 	}
+}
+
+// transient reports whether an Accept error may pass: the process or the
+// system is out of file descriptors or memory, or a connection went away
+// while it waited to be accepted. net.Error's Temporary, which net/http
+// asks, is deprecated, so the errors are named.
+func transient(err error) bool {
+	for _, errno := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM,
+		syscall.ECONNABORTED, syscall.ECONNRESET} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 // pruneEvery is how often the reaper also prunes the registry and the
@@ -397,8 +435,9 @@ func (s *Server) busyWrites(principal string, wait time.Duration) *proto.Error {
 // handshake reads the bridge frame and the client's hello, and answers with
 // a welcome, or a refusal and an error. On success the session holds a
 // connection slot (sess.slot). A refusal after a valid bridge frame also
-// returns the session, so the caller can say whose it was; other failures
-// return nil.
+// returns the session, so the caller can say whose it was, and so does a
+// welcome that could not be written, so the caller frees its slot; other
+// failures return nil.
 func (s *Server) handshake(c net.Conn) (*session, error) {
 	sess := &session{enc: proto.NewEncoder(c), dec: proto.NewDecoder(c)}
 	_ = c.SetReadDeadline(time.Now().Add(bridgeTimeout))
@@ -457,7 +496,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	w.Session = sess.actor.Session
 	w.Principal = sess.actor.Principal
 	if err := sess.enc.Encode(w); err != nil {
-		return nil, err
+		return sess, err // sess holds a slot, which the caller frees
 	}
 	return sess, nil
 }

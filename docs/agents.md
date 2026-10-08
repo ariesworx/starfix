@@ -51,9 +51,10 @@ Setup prints the "you still" step after it adds a part.
   (`cwd`, `PATH`, `LD_PRELOAD` and the like), and `--write` drops them.
 - **Existing files** keep their other keys, their order and their mode, and
   a second run changes nothing. A JSON file with a duplicate key is refused,
-  since the harness would run the last copy. Setup edits only starfix's
-  own tables in Codex's `config.toml`; if it cannot read the file safely,
-  it refuses and prints the snippet to add by hand.
+  since the harness would run the last copy, and so is one with comments
+  or text after the closing brace, which a rewrite would lose. Setup edits
+  only starfix's own tables in Codex's `config.toml`; if it cannot read the
+  file safely, it refuses and prints the snippet to add by hand.
 - **`--remove`** takes starfix's parts out. A pointer file left empty is
   deleted, and so is VS Code's hook file; an MCP config or a shared hook
   file stays, even when empty.

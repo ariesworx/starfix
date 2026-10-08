@@ -200,6 +200,9 @@ func TestUpdateCloseReopen(t *testing.T) {
 	if _, err := s.UpdateIssue(ctx, alice, "tst-missing", 1, IssuePatch{Title: ptr("x")}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing: %v, want ErrNotFound", err)
 	}
+	if _, err := s.UpdateIssue(ctx, alice, is.ID, is.Rev, IssuePatch{ParentID: ptr[IssueID]("tst-nope")}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing parent: %v, want ErrNotFound", err)
+	}
 	if _, err := s.UpdateIssue(ctx, alice, is.ID, is.Rev, IssuePatch{Status: ptr(StatusClosed)}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("status closed via update: %v, want ErrInvalid", err)
 	}

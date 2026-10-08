@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 )
 
@@ -57,7 +58,9 @@ func parseObject(b []byte) (object, error) {
 	if _, err := dec.Token(); err != nil {
 		return nil, fmt.Errorf("not JSON: %w", err)
 	}
-	if _, err := dec.Token(); err == nil {
+	// Only the end may follow: text that is not JSON makes Token fail
+	// with an error other than io.EOF, and would be lost on rewrite.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("not JSON: text after the object")
 	}
 	return o, nil
