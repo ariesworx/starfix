@@ -186,3 +186,34 @@ func TestModelDetailScrollStops(t *testing.T) {
 		t.Errorf("after scrolling past the end and back one, the first row is %q, want %q\n%s", got, "line 5", strings.Join(frame, "\n"))
 	}
 }
+
+// A detail that arrives while help is open over it is kept, and shows
+// once help closes.
+func TestModelDetailDuringHelp(t *testing.T) {
+	m := New("demo")
+	m.Apply(snapshot())
+	m.Key(KeyEnter)
+	m.Key(KeyHelp)
+	m.Apply(&Detail{ID: "sf-r1", Show: &proto.ShowResult{Issue: proto.Issue{ID: "sf-r1"}}})
+	m.Key(KeyHelp)
+	if d := m.Detail(); m.View() != ViewDetail || d == nil || d.ID != "sf-r1" {
+		t.Errorf("after help closed, view %v and Detail() = %+v; want the detail of sf-r1", m.View(), d)
+	}
+}
+
+// End jumps to the end of a detail, as G does.
+func TestModelDetailEnd(t *testing.T) {
+	m := New("demo")
+	m.Apply(snapshot())
+	m.Resize(40, 6)
+	m.Key(KeyEnter)
+	body := ""
+	for i := range 10 {
+		body += fmt.Sprintf("line %d\n", i)
+	}
+	m.Apply(&Detail{ID: "sf-r1", Show: &proto.ShowResult{Issue: proto.Issue{ID: "sf-r1", Title: "t", Body: body}}})
+	m.Key(KeyEnd)
+	if got := m.Frame(40, 6, t0, false)[4]; got != "line 9" {
+		t.Errorf("after End the last body row is %q, want %q", got, "line 9")
+	}
+}

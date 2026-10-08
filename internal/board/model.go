@@ -171,8 +171,10 @@ func (s *Snapshot) apply(m *Model) {
 	m.sel = max(0, min(m.sel, len(m.rows)-1))
 }
 
+// apply keeps d if its issue is the one open, whether the detail or the
+// help over it is showing; a reply for an issue since closed is dropped.
 func (d *Detail) apply(m *Model) {
-	if m.view == ViewDetail && d.ID == m.open {
+	if m.open != "" && d.ID == m.open {
 		m.detail = d
 	}
 }
@@ -283,6 +285,8 @@ func (m *Model) detailKey(k Key) Action {
 		m.scroll = min(m.scroll+pageStep, m.lastScroll())
 	case KeyHome:
 		m.scroll = 0
+	case KeyEnd:
+		m.scroll = m.lastScroll()
 	case KeyBack:
 		m.view, m.open, m.detail = ViewBoard, "", nil
 		return Action{Do: DoHide}
