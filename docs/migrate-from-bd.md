@@ -105,7 +105,9 @@ its IDs, and the rest of the file still imports.
 
 `starfixd export-bd -o back.jsonl` writes the store in bd's JSONL format,
 for bd or for a later import. A handoff note exports as a plain comment,
-because bd has no comment kinds.
+because bd has no comment kinds. An issue's account is not exported,
+because bd has no field for it. Importing the file again keeps each
+issue's account and reports the issue unchanged.
 
 The full mapping, field by field, is in
 [internal/bdimport](../internal/bdimport/doc.go).

@@ -319,3 +319,41 @@ func TestImportDepAndComment(t *testing.T) {
 		t.Errorf("comments = %+v, %v", cs, err)
 	}
 }
+
+// bd has no account, so export-bd drops it and import-bd brings the issue
+// back without one. That round trip must read as unchanged and keep the
+// account the issue already has, not report the issue stale.
+func TestImportIssueKeepsAccount(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	in := importedIssue("bd-acct", nil)
+	if _, err := s.ImportIssue(ctx, importer, in); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetIssue(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.UpdateIssue(ctx, alice, in.ID, stored.Rev, IssuePatch{Account: ptr("acme")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported := stored // what export-bd writes, less the account bd cannot carry
+	exported.Account = ""
+
+	plan, err := s.PlanImportIssue(ctx, exported)
+	if err != nil || plan.Outcome != ImportUnchanged {
+		t.Errorf("PlanImportIssue(%s without its account) = %+v, %v; want %s", in.ID, plan, err, ImportUnchanged)
+	}
+	res, err := s.ImportIssue(ctx, importer, exported)
+	if err != nil || res.Outcome != ImportUnchanged {
+		t.Errorf("ImportIssue(%s without its account) = %+v, %v; want %s", in.ID, res, err, ImportUnchanged)
+	}
+	got, err := s.GetIssue(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Account != "acme" {
+		t.Errorf("account after re-import = %q, want acme", got.Account)
+	}
+}

@@ -137,12 +137,15 @@ func sameJSON(a, b []byte) bool {
 	return oka && okb && reflect.DeepEqual(va, vb)
 }
 
-// sameIssue compares every stored field except rev and labels.
+// sameIssue compares every field bd carries: all but rev, labels (merged
+// separately) and the account, which bd has no field for. An import never
+// writes the account, so the issue keeps the one it has.
 func sameIssue(a, b Issue) bool {
 	if !sameJSON(a.Metadata, b.Metadata) {
 		return false
 	}
 	a.Rev, b.Rev = 0, 0
+	a.Account, b.Account = "", ""
 	a.Labels, b.Labels = nil, nil
 	a.Metadata, b.Metadata = nil, nil
 	ja, erra := json.Marshal(a)
