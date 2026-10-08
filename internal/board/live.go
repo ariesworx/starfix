@@ -3,6 +3,7 @@ package board
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -20,8 +21,11 @@ type Conn interface {
 // Dialer opens a connection whose pushed events go to onPush.
 type Dialer func(ctx context.Context, onPush func(proto.Push)) (Conn, error)
 
-// Timing. A burst of events is read once, debounce after its first; a
-// lost connection is redialed after retryFirst, doubling to retryLongest.
+// Timing. A burst of events is read once, debounce after its first. A
+// lost connection is redialed after a random wait up to a ceiling that
+// starts at retryFirst and doubles to retryLongest; it starts over only
+// once a new connection has read the lists, so a server that accepts
+// and then drops every connection is not dialed once a second.
 const (
 	debounce     = 250 * time.Millisecond
 	retryFirst   = time.Second
@@ -49,11 +53,24 @@ type Live struct {
 	pushes chan proto.Push
 	// lost holds a signal that pushes were dropped.
 	lost chan struct{}
+	// jitter picks a redial wait up to its ceiling.
+	jitter func(ceiling time.Duration) time.Duration
 }
 
 // NewLive returns a Live that connects with dial.
 func NewLive(dial Dialer) *Live {
-	return &Live{dial: dial, pushes: make(chan proto.Push, pushQueue), lost: make(chan struct{}, 1)}
+	return &Live{
+		dial:   dial,
+		pushes: make(chan proto.Push, pushQueue),
+		lost:   make(chan struct{}, 1),
+		jitter: fullJitter,
+	}
+}
+
+// fullJitter spreads redials over the whole of [0, ceiling), so boards
+// that lost one server together do not all dial it again at once.
+func fullJitter(ceiling time.Duration) time.Duration {
+	return rand.N(ceiling) //nolint:gosec // spreading retries needs no secrecy
 }
 
 // Connect opens a connection for Run, with its pushes going to l. Call it
@@ -80,17 +97,21 @@ func (l *Live) push(p proto.Push) {
 // the caller reads them until Run returns.
 func (l *Live) Run(ctx context.Context, conn Conn, actions <-chan Action, updates chan<- Update) {
 	r := &runner{l: l, ctx: ctx, actions: actions, updates: updates}
-	wait := time.Duration(0)
+	ceiling := time.Duration(0)
 	for {
+		r.fresh = false
 		err := r.serve(conn)
 		_ = conn.Close()
 		if ctx.Err() != nil {
 			return
 		}
+		if r.fresh {
+			ceiling = 0
+		}
 		r.send(Status{State: StateReconnecting, Note: note(err)})
 		for {
-			wait = min(max(2*wait, retryFirst), retryLongest)
-			if !r.sleep(wait) {
+			ceiling = min(max(2*ceiling, retryFirst), retryLongest)
+			if !r.sleep(l.jitter(ceiling)) {
 				return
 			}
 			c, err := l.dial(ctx, l.push)
@@ -100,7 +121,6 @@ func (l *Live) Run(ctx context.Context, conn Conn, actions <-chan Action, update
 			}
 			r.send(Status{State: StateReconnecting, Note: note(err)})
 		}
-		wait = 0
 	}
 }
 
@@ -117,6 +137,8 @@ type runner struct {
 	// unwatched is why the connection pushes no events, when the server
 	// refused the watch: every status says so while it lasts.
 	unwatched string
+	// fresh is set once the connection being served has read the lists.
+	fresh bool
 }
 
 // send hands u to the board, unless Run is ending. A Status is sent only
@@ -252,6 +274,7 @@ func (r *runner) refresh(conn Conn, detail bool) error {
 	snap, err := read(r.ctx, conn)
 	switch {
 	case err == nil:
+		r.fresh = true
 		r.send(snap)
 		r.send(Status{State: StateLive, Note: r.unwatched})
 	case conn.Err() != nil || r.ctx.Err() != nil:

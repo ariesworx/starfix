@@ -187,8 +187,9 @@ an issue, and reads the lists again only when a change can alter them,
 once per burst; an open issue is read again when a change names it. It
 never polls: the only timer redraws relative times each second. If the
 connection drops, the header says `reconnecting`, and the board redials
-(after 1 s, then doubling to 30 s) and reads everything afresh. The board
-is read-only.
+and reads everything afresh. Each redial waits a random time up to a
+limit that starts at 1 s and doubles to 30 s; the limit starts over only
+once a new connection has read the lists. The board is read-only.
 
 `sfx tui` needs a terminal on standard input and output. Anywhere else it
 refuses and points at `sfx ready`, `sfx blocked` and `sfx list`. It

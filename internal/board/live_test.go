@@ -22,12 +22,26 @@ type fakeServer struct {
 	push   func(proto.Push)
 	// gate, when set, holds every call until it is closed.
 	gate chan struct{}
+	// failDials fails that many dials; drops drops that many of the
+	// connections dialed next at their first call.
+	failDials, drops int
+	// dials are the times of every dial, failed ones included.
+	dials []time.Time
 }
 
 func (f *fakeServer) dial(_ context.Context, onPush func(proto.Push)) (Conn, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.dials = append(f.dials, time.Now())
+	if f.failDials > 0 {
+		f.failDials--
+		return nil, errLost
+	}
 	c := &fakeConn{srv: f, done: make(chan struct{})}
+	if f.drops > 0 {
+		f.drops--
+		c.dropFirst = true
+	}
 	f.conns, f.push = append(f.conns, c), onPush
 	return c, nil
 }
@@ -57,9 +71,10 @@ func (f *fakeServer) last() *fakeConn {
 var errLost = errors.New("the server closed the connection")
 
 type fakeConn struct {
-	srv  *fakeServer
-	done chan struct{}
-	once sync.Once
+	srv       *fakeServer
+	done      chan struct{}
+	once      sync.Once
+	dropFirst bool // drop at the first call
 }
 
 func (c *fakeConn) Done() <-chan struct{} { return c.done }
@@ -78,6 +93,9 @@ func (c *fakeConn) Close() error { c.drop(); return nil }
 func (c *fakeConn) drop() { c.once.Do(func() { close(c.done) }) }
 
 func (c *fakeConn) Call(_ context.Context, op string, args, result any) error {
+	if c.dropFirst {
+		c.drop()
+	}
 	if err := c.Err(); err != nil {
 		return err
 	}
@@ -122,9 +140,12 @@ type liveRun struct {
 	updates chan Update
 }
 
-func startLive(t *testing.T, srv *fakeServer) *liveRun {
+func startLive(t *testing.T, srv *fakeServer, configure ...func(*Live)) *liveRun {
 	t.Helper()
 	l := NewLive(srv.dial)
+	for _, c := range configure {
+		c(l)
+	}
 	conn, err := l.Connect(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -351,6 +372,81 @@ func TestLiveWatchRefused(t *testing.T) {
 		}
 		if want := "bad arguments; fix: ask the admin to run `starfixd upgrade`"; last.Note != want {
 			t.Errorf("status after a refresh = %+v, want the watch's refusal %q kept", last, want)
+		}
+	})
+}
+
+// jitterLog makes Live's jitter record each ceiling and wait half of it.
+type jitterLog struct {
+	mu       sync.Mutex
+	ceilings []time.Duration
+}
+
+func (j *jitterLog) set(l *Live) {
+	l.jitter = func(d time.Duration) time.Duration {
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		j.ceilings = append(j.ceilings, d)
+		return d / 2
+	}
+}
+
+func (j *jitterLog) got() []time.Duration {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return slices.Clone(j.ceilings)
+}
+
+// Redialing waits a random part of a ceiling that doubles with each
+// failed dial: full jitter, so many boards that lost one server do not
+// all come back at once.
+func TestLiveBackoffJitters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		j := &jitterLog{}
+		r := startLive(t, &fakeServer{}, j.set)
+		start := time.Now()
+		r.srv.mu.Lock()
+		r.srv.failDials = 3
+		r.srv.mu.Unlock()
+		r.srv.last().drop()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+		if got := j.got(); !slices.Equal(got, want) {
+			t.Errorf("ceilings = %v, want %v", got, want)
+		}
+		r.srv.mu.Lock()
+		dials := r.srv.dials[1:] // the first is startLive's
+		r.srv.mu.Unlock()
+		var at []time.Duration
+		for _, d := range dials {
+			at = append(at, d.Sub(start))
+		}
+		// Half of each ceiling, one after another: 0.5s, 1.5s, 3.5s, 7.5s.
+		if wantAt := []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond, 3500 * time.Millisecond, 7500 * time.Millisecond}; !slices.Equal(at, wantAt) {
+			t.Errorf("dials at %v after the drop, want %v", at, wantAt)
+		}
+	})
+}
+
+// The backoff starts over only once a new connection has read the board,
+// not when a dial merely succeeds: a server that accepts and drops at
+// once is still backed off.
+func TestLiveBackoffResetsAfterARead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		j := &jitterLog{}
+		r := startLive(t, &fakeServer{}, j.set)
+		r.srv.mu.Lock()
+		r.srv.drops = 1 // the next connection drops before it reads anything
+		r.srv.mu.Unlock()
+		r.srv.last().drop()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		r.srv.last().drop() // after a good read
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if got, want := j.got(), []time.Duration{time.Second, 2 * time.Second, time.Second}; !slices.Equal(got, want) {
+			t.Errorf("ceilings = %v, want %v", got, want)
 		}
 	})
 }
