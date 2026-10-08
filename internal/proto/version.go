@@ -21,10 +21,17 @@ import (
 // authorization review). Everything after claims was added before protocol 2
 // shipped in a release (v0.1.0 speaks 1), so without another bump. A
 // protocol 1 client sends none of them and gets the default lease.
+//
+// Protocol 3 adds token capture (design §12.1): the usage op, and account
+// on create and update. Protocol 2 shipped in v0.2.x, so ProtoMin moves
+// to 2 and protocol 1 clients are refused. A protocol 2 client never
+// sends usage and omits account, which leaves an issue inheriting its
+// account; show's usage and digest's usage are result fields, which it
+// ignores.
 const (
-	Proto    = 2
-	ProtoMin = 1
-	ProtoMax = 2
+	Proto    = 3
+	ProtoMin = 2
+	ProtoMax = 3
 )
 
 // CheckProto returns nil when the client protocol version p is in

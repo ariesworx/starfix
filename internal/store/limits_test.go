@@ -17,7 +17,8 @@ func TestLimitsDefaultsAndValidate(t *testing.T) {
 	if got := (Limits{Labels: 7}).withDefaults().Labels; got != 7 {
 		t.Errorf("withDefaults kept Labels = %d, want 7", got)
 	}
-	for _, l := range []Limits{{Labels: -1}, {AcceptanceItems: -1}, {Deps: -1}, {Sessions: -1}, {InboxUnread: -1}, {Notices: -1}} {
+	for _, l := range []Limits{{Labels: -1}, {AcceptanceItems: -1}, {Deps: -1}, {Sessions: -1}, {InboxUnread: -1}, {Notices: -1},
+		{UsageRecords: -1}, {UsagePerDay: -1}} {
 		if err := l.Validate(); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v.Validate() = %v, want ErrInvalid", l, err)
 		}

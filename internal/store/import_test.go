@@ -139,18 +139,23 @@ func TestImportIssueNewerOlder(t *testing.T) {
 }
 
 // Import is the operator's, so it writes an issue whoever holds it. An
-// import that closes a held issue ends the claim and tells the holder's
-// session, as any other close does; one that leaves it open leaves the
-// claim alone.
+// import that leaves a held issue anything but in progress with its
+// holder (closed, open, blocked, or assigned to someone else) ends the
+// claim and tells the holder's session, as close and a releasing handoff
+// do, and the holder's time on it stops there. One that leaves it in
+// progress with the holder leaves the claim alone.
 func TestImportIssueHeld(t *testing.T) {
 	tests := []struct {
-		name   string
-		mod    func(*Issue)
-		closes bool
+		name string
+		mod  func(*Issue)
+		ends bool
 	}{
 		{"closes it", func(is *Issue) {
 			is.Status, is.ClosedAt, is.CloseReason = StatusClosed, ptr(is.UpdatedAt), "done in bd"
 		}, true},
+		{"reopens it", func(is *Issue) { is.Status, is.Assignee = StatusOpen, "" }, true},
+		{"blocks it", func(is *Issue) { is.Status, is.Assignee = StatusBlocked, "alice" }, true},
+		{"reassigns it", func(is *Issue) { is.Status, is.Assignee = StatusInProgress, "bob" }, true},
 		{"edits it", func(is *Issue) {
 			is.Status, is.Assignee, is.Title = StatusInProgress, "alice", "retitled in bd"
 		}, false},
@@ -174,15 +179,23 @@ func TestImportIssueHeld(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if held := c != nil; held == tc.closes {
-				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.closes)
+			if held := c != nil; held == tc.ends {
+				t.Errorf("after the import, alice's claim held = %v, want %v", held, !tc.ends)
 			}
 			var want []item
-			if tc.closes {
+			if tc.ends {
 				want = []item{{"alice", "sess-a", InboxClaimLost, in.ID, importer.Principal}}
 			}
 			if got := items(t, s, alice); !slices.Equal(got, want) {
 				t.Errorf("Inbox(alice) = %+v, want %+v", got, want)
+			}
+			clk.add(10 * time.Minute)
+			wantHeld := 11 * time.Minute
+			if tc.ends {
+				wantHeld = time.Minute
+			}
+			if u := mustUsage(t, s, in.ID); u.Held != wantHeld {
+				t.Errorf("IssueUsage(%s).Held = %s, want %s", in.ID, u.Held, wantHeld)
 			}
 			assertGapless(t, s)
 		})
@@ -317,5 +330,43 @@ func TestImportDepAndComment(t *testing.T) {
 	cs, err := s.AllComments(ctx)
 	if err != nil || len(cs) != 1 || cs[0].Body != "hello" || cs[0].Author != "frank" || !cs[0].CreatedAt.Equal(at) {
 		t.Errorf("comments = %+v, %v", cs, err)
+	}
+}
+
+// bd has no account, so export-bd drops it and import-bd brings the issue
+// back without one. That round trip must read as unchanged and keep the
+// account the issue already has, not report the issue stale.
+func TestImportIssueKeepsAccount(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	in := importedIssue("bd-acct", nil)
+	if _, err := s.ImportIssue(ctx, importer, in); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetIssue(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.UpdateIssue(ctx, alice, in.ID, stored.Rev, IssuePatch{Account: ptr("acme")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported := stored // what export-bd writes, less the account bd cannot carry
+	exported.Account = ""
+
+	plan, err := s.PlanImportIssue(ctx, exported)
+	if err != nil || plan.Outcome != ImportUnchanged {
+		t.Errorf("PlanImportIssue(%s without its account) = %+v, %v; want %s", in.ID, plan, err, ImportUnchanged)
+	}
+	res, err := s.ImportIssue(ctx, importer, exported)
+	if err != nil || res.Outcome != ImportUnchanged {
+		t.Errorf("ImportIssue(%s without its account) = %+v, %v; want %s", in.ID, res, err, ImportUnchanged)
+	}
+	got, err := s.GetIssue(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Account != "acme" {
+		t.Errorf("account after re-import = %q, want acme", got.Account)
 	}
 }

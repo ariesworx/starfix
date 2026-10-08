@@ -69,6 +69,7 @@ func (l Limits) WithDefaults() Limits {
 	for _, f := range []struct{ v, d *int }{
 		{&l.Labels, &d.Labels}, {&l.AcceptanceItems, &d.AcceptanceItems}, {&l.Deps, &d.Deps},
 		{&l.Sessions, &d.Sessions}, {&l.InboxUnread, &d.InboxUnread}, {&l.Notices, &d.Notices},
+		{&l.UsageRecords, &d.UsageRecords}, {&l.UsagePerDay, &d.UsagePerDay},
 		{&l.Conns, &d.Conns}, {&l.ConnsPerPrincipal, &d.ConnsPerPrincipal}, {&l.WriteBurst, &d.WriteBurst},
 		{&l.RefusalLogs, &d.RefusalLogs},
 	} {

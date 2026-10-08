@@ -153,4 +153,36 @@ date or a time): what closed, started, is in progress or stalled, is
 blocked, was handed off, created or discovered. An issue in progress with
 no activity for 48 hours counts as stalled. The digest is structured data
 for a standup or a status report. starfix runs no model; the agent writes
-any narrative.
+any narrative. It also totals the time issues were held in the window and
+the tokens reported in it ([below](#accounts-time-and-tokens)).
+
+## Accounts, time and tokens
+
+Every issue reports its time and tokens against an **account**: a
+client's engagement code name or an internal department, never a real
+client name. Set one with `sfx create --account NAME` or `sfx update ID
+--account NAME`; an issue without one inherits its parent's, up the chain,
+and then the server's `account:` setting, `internal` by default. Account
+names are lowercase letters, digits and inner hyphens.
+
+**Time** is the time an issue was held under claims: from `start` until
+`finish`, close, a releasing handoff, a takeover, or the lease running
+out. Every harness gets it, even one that reports no tokens.
+
+**Tokens** come from the harness, never from the model's own account of
+them: the client sends what the harness recorded for each request (model,
+input, output, cache write and cache read), keyed by the harness's own
+request id, so sending a record twice stores it once. A count the harness
+did not report stays unknown, which `show` leaves out rather than printing
+0. (The client side that reads harness transcripts and hooks is not built
+yet; the server accepts records through the `usage` operation.)
+
+**Attribution** is worked out when you read it, from the claim history,
+and never stored. A request goes to the issue its session held at that
+moment. A turn or session record that spans several issues is split by
+time held, and `show` and `digest` say some tokens were split; a stretch
+when the session held nothing stays unattributed, and `digest` counts it
+apart.
+Splitting by time is an estimate when a session switches issues. A
+record is split in whole tokens, so the parts add up to the record: the
+issues' tokens plus the unattributed ones are the total.

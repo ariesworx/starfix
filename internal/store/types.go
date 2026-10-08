@@ -174,6 +174,9 @@ type Issue struct {
 	ClosedAt    *time.Time      `json:"closed_at,omitempty"`
 	Rev         Rev             `json:"rev"`
 	Labels      []string        `json:"labels,omitempty"`
+	// Account is the issue's own account, empty when it inherits one
+	// ([Store.ResolveAccount]).
+	Account string `json:"account,omitempty"`
 }
 
 // NewIssue is the input to CreateIssue. Zero values take defaults: a
@@ -202,10 +205,12 @@ type NewIssue struct {
 	Template       bool
 	Metadata       json.RawMessage
 	Labels         []string
+	// Account is empty to inherit the parent's, or the project default.
+	Account string
 }
 
 // IssuePatch lists the fields UpdateIssue changes; nil leaves a field alone.
-// An empty string clears Assignee, Owner and ParentID; a zero time clears a
+// An empty string clears Assignee, Owner, ParentID and Account; a zero time clears a
 // timestamp; Metadata "null" clears it. Status cannot be set to or from
 // closed here: use CloseIssue and ReopenIssue.
 type IssuePatch struct {
@@ -227,6 +232,7 @@ type IssuePatch struct {
 	Pinned     *bool
 	Template   *bool
 	Metadata   json.RawMessage
+	Account    *string
 }
 
 // Dep is a dependency edge: From depends on To.

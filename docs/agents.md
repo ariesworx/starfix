@@ -141,6 +141,12 @@ server settings stay on the command line.
   ([Security](security-model.md#untrusted-text)).
 - **`digest` is data.** It returns structured facts from the event log;
   the agent writes any narrative.
+- **`show` and `digest` carry time and tokens.** `show` gives the issue's
+  `account` and a one-line `usage`: time held, tokens for the five largest
+  models, and whether any were split by time with other work. `digest`
+  gives the window's `usage` line, with the tokens no issue was held for
+  and whether any were split by time.
+  No tool sets an account; people do that with `sfx update --account`.
 
 One SSH connection serves an MCP session. It opens on the first tool call
 and is redialed if it drops. Reads, `create`, `comment`, `finish`,

@@ -303,6 +303,10 @@ type Issue struct {
 	DepsMore int `json:"deps_more,omitempty"`
 	// Similar names similar closed issues: "ID title; ID title".
 	Similar string `json:"similar,omitempty"`
+	// Account is the account the issue's time and tokens report against.
+	Account string `json:"account,omitempty"`
+	// Usage is the time held and tokens by model, in one line.
+	Usage string `json:"usage,omitempty"`
 	// Truncated: long text was cut; full: true returns more.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -408,6 +412,8 @@ type Digest struct {
 	HandedOff  []DigestItem       `json:"handed_off,omitempty"`
 	Created    []DigestItem       `json:"created,omitempty"`
 	Discovered []DigestItem       `json:"discovered,omitempty"`
+	// Usage is the window's time held and tokens by model, in one line.
+	Usage string `json:"usage,omitempty"`
 	// Truncated: items were left out to fit, or a total is a lower bound.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -651,6 +657,10 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 		Parent: is.ParentID, Assignee: is.Assignee, Owner: is.Owner, Labels: is.Labels, Body: is.Body,
 		Design: is.Design, Acceptance: is.Acceptance, Notes: is.Notes, CloseReason: is.CloseReason, Truncated: is.Truncated,
 		Items: itemLines(r.Items), Similar: similarLine(r.Similar), DepsMore: r.DepsMore}
+	if u := r.Usage; u != nil {
+		out.Account = u.Account
+		out.Usage = issueUsageLine(*u)
+	}
 	if len(out.Items) > 0 {
 		out.Acceptance = ""
 	}
@@ -771,6 +781,9 @@ func digest(ctx context.Context, c Conn, in DigestIn) (Digest, error) {
 		Closed: conv(r.Closed, false), Started: conv(r.Started, false), InProgress: conv(r.InProgress, true),
 		Stalled: conv(r.Stalled, true), Blocked: conv(r.Blocked, false), HandedOff: conv(r.HandedOff, false),
 		Created: conv(r.Created, false), Discovered: conv(r.Discovered, false)}
+	if u := r.Usage; u != nil {
+		out.Usage = digestUsageLine(*u)
+	}
 	out.fit()
 	return out, nil
 }

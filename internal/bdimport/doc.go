@@ -37,6 +37,9 @@
 //     finds the same comment; an ID already in that form is kept, so a
 //     starfix export re-imports unchanged. bd has no comment kinds, so a
 //     starfix handoff note exports as a plain comment.
+//   - An issue's account is starfix's own and bd has no field for it, so
+//     export leaves it out and import never writes it. Re-importing an
+//     export keeps each issue's stored account and reads as unchanged.
 //
 // Everything else is reported, never dropped silently: other dependency
 // types (replies-to, tracks, authored-by and the rest), external:

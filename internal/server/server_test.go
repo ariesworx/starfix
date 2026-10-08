@@ -309,14 +309,14 @@ func TestHandshake(t *testing.T) {
 		closed  bool       // no reply at all
 		session string
 	}{
-		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(2, project, "s-mine")}, session: "s-mine"},
-		{name: "protocol 1 still welcome", frames: []*proto.Frame{bridge, hello(1, project, "s-old")}, session: "s-old"},
-		{name: "welcome assigns a session", frames: []*proto.Frame{bridge, hello(1, project, "")}, session: "s-"},
-		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(3, project, "")}, code: proto.CodeVersion},
-		{name: "protocol too old", frames: []*proto.Frame{bridge, hello(0, project, "")}, code: proto.CodeVersion},
-		{name: "other project", frames: []*proto.Frame{bridge, hello(1, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
+		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(3, project, "s-mine")}, session: "s-mine"},
+		{name: "protocol 2 still welcome", frames: []*proto.Frame{bridge, hello(2, project, "s-old")}, session: "s-old"},
+		{name: "welcome assigns a session", frames: []*proto.Frame{bridge, hello(2, project, "")}, session: "s-"},
+		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(4, project, "")}, code: proto.CodeVersion},
+		{name: "protocol 1 too old", frames: []*proto.Frame{bridge, hello(1, project, "")}, code: proto.CodeVersion},
+		{name: "other project", frames: []*proto.Frame{bridge, hello(2, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
 		{name: "request before hello", frames: []*proto.Frame{bridge, {T: proto.FrameReq, ID: 1, Op: "show"}}, code: proto.CodeInvalid},
-		{name: "no bridge frame", frames: []*proto.Frame{hello(1, project, "")}, closed: true},
+		{name: "no bridge frame", frames: []*proto.Frame{hello(2, project, "")}, closed: true},
 		{name: "C1 control in the machine", frames: []*proto.Frame{bridge,
 			{T: proto.FrameHello, Proto: 2, Project: project, Session: "s", Machine: "m\u009b2J"}}, code: proto.CodeInvalid},
 		{name: "bidi control in the session", frames: []*proto.Frame{bridge, hello(2, project, "s\u202e")}, code: proto.CodeInvalid},
@@ -342,7 +342,7 @@ func TestHandshake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 1 || f.Max != 2 {
+			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 2 || f.Max != 3 {
 				t.Fatalf("welcome: %+v", f)
 			}
 			if tc.code == "" {
@@ -612,7 +612,7 @@ func TestBridgeFrameOnlyFirst(t *testing.T) {
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
 	wg.Go(func() {
 		_ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "alice"})
-		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 1, Project: project})
+		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project})
 	})
 	if f, err := dec.Decode(); err != nil || f.Err != nil {
 		t.Fatalf("welcome: %v %+v", err, f)
@@ -757,6 +757,8 @@ func TestResolveSettings(t *testing.T) {
 	logs := write("logs.yaml", "log_level: warn\nlog_format: json\n", 0o600)
 	admins := write("admins.yaml", "admins: [alice, bob]\n", 0o600)
 	reserved := write("reserved.yaml", "admins: [starfixd]\n", 0o600)
+	account := write("account.yaml", "account: acme-2026\n", 0o600)
+	badAccount := write("badaccount.yaml", "account: Acme Corp\n", 0o600)
 	// Cases that set no file name this one, so that a DefaultConfigFile
 	// on the host cannot change their outcome.
 	empty := write("empty.yaml", "", 0o600)
@@ -803,6 +805,9 @@ func TestResolveSettings(t *testing.T) {
 		{name: "reserved admin in env refused", path: empty, env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
 		{name: "probe principal as admin refused", path: empty, env: map[string]string{EnvAdmins: ProbePrincipal}, err: `admin "starfixd-upgrade"`},
 		{name: "invalid admin refused", path: empty, env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
+		{name: "account defaults to internal", path: empty, check: func(s Settings) bool { return s.Account == "internal" }},
+		{name: "account from file", path: account, check: func(s Settings) bool { return s.Account == "acme-2026" }},
+		{name: "account not a code name refused", path: badAccount, err: `account "Acme Corp" is not a code name`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

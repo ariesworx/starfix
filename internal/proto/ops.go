@@ -3,6 +3,7 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -30,6 +31,7 @@ const (
 	OpRenew    = "renew"     // RenewArgs → ClaimsResult (protocol 2)
 	OpWho      = "who"       // WhoArgs → WhoResult (protocol 2)
 	OpAccept   = "accept"    // AcceptArgs → AcceptResult (protocol 2)
+	OpUsage    = "usage"     // UsageArgs → UsageResult (protocol 3)
 )
 
 // WhoArgs selects the agents seen within Since, a duration such as 5m,
@@ -87,6 +89,9 @@ type Issue struct {
 	ClosedAt    *time.Time      `json:"closed_at,omitempty"`
 	Rev         int64           `json:"rev"`
 	Labels      []string        `json:"labels,omitempty"`
+	// Account is the issue's own account, empty when it inherits one;
+	// ShowResult.Usage has the one that applies.
+	Account string `json:"account,omitempty"`
 	// Truncated is set when compact show cut a long text field.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -148,6 +153,9 @@ type CreateArgs struct {
 	Assignee   string   `json:"assignee,omitempty"`
 	Owner      string   `json:"owner,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
+	// Account is a code name for the issue's time and tokens; empty
+	// inherits the parent's, then the server's default (protocol 3).
+	Account string `json:"account,omitempty"`
 }
 
 // WriteResult is what every issue write returns (design §9).
@@ -185,6 +193,78 @@ type ShowResult struct {
 	// DepsMore counts the edges left out of Deps, which holds at most
 	// MaxShowDeps (protocol 2).
 	DepsMore int `json:"deps_more,omitempty"`
+	// Usage is the time and tokens attributed to the issue and the account
+	// they report against (protocol 3).
+	Usage *IssueUsage `json:"usage,omitempty"`
+}
+
+// Tokens are token counts. A count left out is unknown, which is not 0.
+// CacheWrite1h is the part of CacheWrite written with a one-hour
+// lifetime.
+type Tokens struct {
+	Input        *int64 `json:"input,omitempty"`
+	Output       *int64 `json:"output,omitempty"`
+	CacheWrite   *int64 `json:"cache_write,omitempty"`
+	CacheWrite1h *int64 `json:"cache_write_1h,omitempty"`
+	CacheRead    *int64 `json:"cache_read,omitempty"`
+}
+
+// ModelTokens are one model's tokens. A count is left out when no record
+// reported it.
+type ModelTokens struct {
+	Model string `json:"model"`
+	Tokens
+}
+
+// MaxUsageModels is the most models show and digest list; the rest are
+// summed into one entry named OtherModels, which no model can be named,
+// since model names hold no parentheses.
+const (
+	MaxUsageModels = 20
+	OtherModels    = "(other)"
+)
+
+// IssueUsage is what is attributed to one issue: HeldSeconds under
+// claims, and tokens by model. Split says part of the tokens came from
+// records shared by time with other issues, or with time nothing was
+// held. Account is the account that applies: the issue's own, the
+// nearest ancestor's (AccountFrom names it), or the server's default.
+// Capped says more records matched than the server reads, so the tokens
+// are a lower bound.
+type IssueUsage struct {
+	Account     string        `json:"account"`
+	AccountFrom string        `json:"account_from,omitempty"`
+	HeldSeconds int64         `json:"held_seconds"`
+	Split       bool          `json:"split,omitempty"`
+	Models      []ModelTokens `json:"models,omitempty"`
+	Capped      bool          `json:"capped,omitempty"`
+}
+
+// UsageRecord is what a harness reported for one request, or for a turn
+// or session ("granularity": request, turn or session). RequestID is the
+// harness's id for it: the server keeps one record per session and id,
+// so sending it again changes nothing. At is the time the source gives;
+// SpanStart starts a turn's or session's span, at most 7 days before At.
+type UsageRecord struct {
+	Harness     string     `json:"harness"`
+	RequestID   string     `json:"request_id"`
+	Model       string     `json:"model"`
+	At          time.Time  `json:"at"`
+	Granularity string     `json:"granularity"`
+	SpanStart   *time.Time `json:"span_start,omitempty"`
+	Tokens
+}
+
+// UsageArgs reports usage records for the caller's session; the
+// principal, session and machine come from the connection.
+type UsageArgs struct {
+	Records []UsageRecord `json:"records"`
+}
+
+// UsageResult counts the records stored and those already stored.
+type UsageResult struct {
+	Added      int `json:"added"`
+	Duplicates int `json:"duplicates"`
 }
 
 // MaxShowDeps is the most edges show returns; MaxBlockers the most
@@ -279,6 +359,9 @@ type UpdateArgs struct {
 	Assignee   *string `json:"assignee,omitempty"`
 	Owner      *string `json:"owner,omitempty"`
 	Parent     *string `json:"parent,omitempty"`
+	// Account sets the issue's account; empty clears it, to inherit
+	// (protocol 3).
+	Account *string `json:"account,omitempty"`
 }
 
 // CloseArgs closes an issue. Rev 0 skips the revision check: close wins
@@ -508,9 +591,24 @@ type DigestResult struct {
 	HandedOff  []DigestItem `json:"handed_off,omitempty"`
 	Created    []DigestItem `json:"created,omitempty"`
 	Discovered []DigestItem `json:"discovered,omitempty"`
+	// Usage totals the window's time and tokens (protocol 3).
+	Usage *DigestUsage `json:"usage,omitempty"`
 	// Truncated: a total is a lower bound, or items were left out to fit
 	// a budget.
 	Truncated bool `json:"truncated,omitempty"`
+}
+
+// DigestUsage is a digest window's time and tokens: HeldSeconds that
+// issues were held within it, the tokens reported in it by model, and the
+// part of those no issue was held for (Unattributed). A label filter
+// keeps only labeled issues' time and tokens.
+type DigestUsage struct {
+	HeldSeconds  int64         `json:"held_seconds"`
+	Models       []ModelTokens `json:"models,omitempty"`
+	Unattributed []ModelTokens `json:"unattributed,omitempty"`
+	// Split is set when a record in the window was split by time, among
+	// issues or with time none was held, so the parts are estimates.
+	Split bool `json:"split,omitempty"`
 }
 
 // Span formats a duration compactly for people and agents: 45m, 5h, 3d4h.
@@ -527,6 +625,20 @@ func Span(d time.Duration) string {
 		return fmt.Sprintf("%dd", days)
 	}
 	return fmt.Sprintf("%dd%dh", days, hours)
+}
+
+// TokenCount formats a token count compactly for people and agents: 950,
+// 12.3k, 1.5M, 2B, cut rather than rounded.
+func TokenCount(n int64) string {
+	for _, u := range []struct {
+		div    int64
+		suffix string
+	}{{1e9, "B"}, {1e6, "M"}, {1e3, "k"}} {
+		if n >= u.div {
+			return strconv.FormatFloat(float64(n/(u.div/10))/10, 'f', -1, 64) + u.suffix
+		}
+	}
+	return strconv.FormatInt(n, 10)
 }
 
 // Empty is the result of writes that have nothing to report.

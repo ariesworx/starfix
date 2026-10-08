@@ -32,6 +32,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var unmet *store.AcceptanceError
 	var forbidden *store.ForbiddenError
 	var state *store.StateError
+	var batch *store.UsageBatchError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
@@ -72,6 +73,21 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	case errors.Is(err, store.ErrStatusInProgress):
 		return proto.Errf(proto.CodeInvalid, fmt.Sprintf(proto.FixStart+" `sfx start %s`, which claims it", id),
 			"status in_progress is set only by start")
+
+	case errors.Is(err, store.ErrBusy):
+		fix := "retry later"
+		if op == proto.OpUsage {
+			fix = "retry later: the cap counts the last 24 hours; the server admin can raise usage_per_day under limits: in starfixd's config"
+		}
+		return proto.Errf(proto.CodeBusy, fix, strings.TrimPrefix(text, store.ErrBusy.Error()+": "))
+
+	case errors.As(err, &batch):
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("send at most %d records per call; nothing from the batch was stored", batch.Max),
+			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
+
+	case errors.Is(err, store.ErrInvalid) && op == proto.OpUsage:
+		return proto.Errf(proto.CodeInvalid, "correct or drop that record and send the batch again; nothing from the batch was stored",
+			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
 
 	case errors.Is(err, store.ErrInvalid):
 		if errors.As(err, &state) {

@@ -19,6 +19,11 @@ paths or environment variables.
   principal. Never add one for the account.
 - A session id, which comes from the client's environment, only tells one
   principal's sessions apart. It grants nothing.
+- Token usage records carry no identity: the server stamps each with the
+  connection's principal, session and machine, and keys them by
+  principal, so one principal's records cannot shadow another's. A
+  principal can still report false counts for its own sessions; usage is
+  for reporting, not billing proof.
 - To revoke someone, delete their key lines and stop their open sessions
   ([Principals](server.md#principals)).
 
@@ -128,7 +133,8 @@ care:
 ## Limits
 
 Every principal is bounded: write rates, connections, sessions, inbox
-size, labels, dependencies and acceptance items each have a cap, and text
+size, labels, dependencies, acceptance items and token usage records each
+have a cap, and text
 fields and replies have fixed sizes. [Limits](server.md#limits) lists the
 caps, their settings and what a refusal past each one says.
 

@@ -95,9 +95,10 @@ its IDs, and the rest of the file still imports.
 
 - An issue already stored is overwritten only when the file's `updated_at`
   is later. An issue edited in starfix after the export keeps the edit.
-- An overwrite applies whoever holds the issue. One that closes an issue
-  someone has started ends their claim and tells their session, as
-  `close` does.
+- An overwrite applies whoever holds the issue. One that leaves an issue
+  someone has started anything but in progress with them (closed, open,
+  blocked or assigned to someone else) ends their claim and tells their
+  session, as `close` does. Their time on the issue stops there.
 - Labels merge. Dependencies and comments are never rewritten.
 - Identical rows are left alone.
 
@@ -105,7 +106,9 @@ its IDs, and the rest of the file still imports.
 
 `starfixd export-bd -o back.jsonl` writes the store in bd's JSONL format,
 for bd or for a later import. A handoff note exports as a plain comment,
-because bd has no comment kinds.
+because bd has no comment kinds. An issue's account is not exported,
+because bd has no field for it. Importing the file again keeps each
+issue's account and reports the issue unchanged.
 
 The full mapping, field by field, is in
 [internal/bdimport](../internal/bdimport/doc.go).

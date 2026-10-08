@@ -66,6 +66,6 @@ func wireDigest(d store.Digest) proto.DigestResult {
 			HandedOff: d.HandedOff.Total, Created: d.Created.Total, Discovered: d.Discovered.Total},
 		Closed: items(d.Closed), Started: items(d.Started), InProgress: items(d.InProgress),
 		Stalled: items(d.Stalled), Blocked: items(d.Blocked), HandedOff: items(d.HandedOff),
-		Created: items(d.Created), Discovered: items(d.Discovered), Truncated: d.Capped,
+		Created: items(d.Created), Discovered: items(d.Discovered), Usage: wireDigestUsage(d.Usage), Truncated: d.Capped,
 	}
 }

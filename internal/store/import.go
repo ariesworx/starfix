@@ -137,12 +137,15 @@ func sameJSON(a, b []byte) bool {
 	return oka && okb && reflect.DeepEqual(va, vb)
 }
 
-// sameIssue compares every stored field except rev and labels.
+// sameIssue compares every field bd carries: all but rev, labels (merged
+// separately) and the account, which bd has no field for. An import never
+// writes the account, so the issue keeps the one it has.
 func sameIssue(a, b Issue) bool {
 	if !sameJSON(a.Metadata, b.Metadata) {
 		return false
 	}
 	a.Rev, b.Rev = 0, 0
+	a.Account, b.Account = "", ""
 	a.Labels, b.Labels = nil, nil
 	a.Metadata, b.Metadata = nil, nil
 	ja, erra := json.Marshal(a)
@@ -168,6 +171,35 @@ func planIssue(before Issue, in Issue) (ImportOutcome, []string) {
 		return ImportUpdated, add
 	}
 	return ImportStale, add
+}
+
+// importEndsClaim ends the claim on is, as an import just wrote it, unless
+// is is still in progress with the claim's holder, and tells the holder,
+// as close and a releasing handoff do: a claim never outlives the work it
+// stands for. It returns what the import event records of the claim it
+// ended, so attribution can end the hold there, or nil.
+func importEndsClaim(ctx context.Context, w *wtx, is Issue) (map[string]any, error) {
+	c, err := loadClaim(ctx, w.tx, is.ID)
+	if err != nil {
+		return nil, err
+	}
+	if c.Holder.Principal == "" || is.Status == StatusInProgress && is.Assignee == c.Holder.Principal {
+		return nil, nil
+	}
+	why := "reassigned"
+	if is.Status != StatusInProgress {
+		why = "moved to " + string(is.Status)
+	}
+	if is.Status == StatusClosed {
+		why = "closed"
+	}
+	if err := w.ended(ctx, c, why); err != nil {
+		return nil, err
+	}
+	if err := releaseClaim(ctx, w, c); err != nil {
+		return nil, err
+	}
+	return map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil
 }
 
 // PlanImportIssue reports what ImportIssue would do with in, without
@@ -205,9 +237,11 @@ func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, er
 // The parent, when set, must exist (ErrNotFound) and must not make a
 // cycle (ErrCycle). ImportIssue is for the server's operator, not for
 // clients: it skips the hold check, so it writes an issue whoever holds
-// it. An import that closes an issue ends any claim on it, and when a live
-// claim was another session's, that session gets a claim.lost inbox item,
-// as with [Store.CloseIssue].
+// it. An import that leaves an issue anything but in progress with its
+// claim's holder (closed, open, blocked or assigned to someone else) ends
+// the claim, and when the claim was live, its session gets a claim.lost
+// inbox item, as with [Store.CloseIssue]. The import event's after state
+// then records the ended claim as claim_released.
 func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)
 	if err != nil {
@@ -278,25 +312,18 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 				if err := tickInText(ctx, w, in.ID, in.Acceptance); err != nil {
 					return err
 				}
-				if before.Status != StatusClosed && in.Status == StatusClosed {
-					// Closing ends the claim and tells its holder, as closeTx
-					// does, so a closed issue is never left held.
-					c, err := loadClaim(ctx, w.tx, in.ID)
-					if err != nil {
-						return err
-					}
-					if err := w.ended(ctx, c, "closed"); err != nil {
-						return err
-					}
-					if err := releaseClaim(ctx, w, c); err != nil {
-						return err
-					}
-				}
 				after, err := loadIssue(ctx, w.tx, in.ID)
 				if err != nil {
 					return err
 				}
 				b, a := diff(before, after)
+				released, err := importEndsClaim(ctx, w, after)
+				if err != nil {
+					return err
+				}
+				if released != nil {
+					a["claim_released"] = released
+				}
 				w.closedChanged = true
 				if err := w.event(ctx, OpIssueImport, string(in.ID), b, a); err != nil {
 					return err

@@ -120,12 +120,12 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 
 | Command | Does |
 |---|---|
-| `create TITLE` | Create an issue and print its id: `-p N` priority, `-t TYPE`, `--body TEXT` (or `-` for stdin), `--parent ID`, `--label L`. Similar closed issues, if any, are listed on stderr |
-| `show ID` | Show an issue with its dependencies, claim, acceptance checklist, latest handoff and similar closed issues. `--compact` is shorter |
+| `create TITLE` | Create an issue and print its id: `-p N` priority, `-t TYPE`, `--body TEXT` (or `-` for stdin), `--parent ID`, `--account NAME`, `--label L`. Similar closed issues, if any, are listed on stderr |
+| `show ID` | Show an issue with its dependencies, claim, account, time held and tokens by model ([Accounts, time and tokens](concepts.md#accounts-time-and-tokens)), acceptance checklist, latest handoff and similar closed issues. `--compact` is shorter |
 | `list` | List issues that are not closed, oldest first, 50 at a time. `-n N` sets the page size (up to 500); `--cursor C` continues, as the `more:` line on stderr shows. Filters: `--status S,S`, `--all` (closed too), `-t TYPE`, `-p N,N`, `--assignee A`, `--parent ID`, `--label L` |
 | `ready` | List issues nothing holds back, best first |
 | `blocked` | List issues held back by open blockers |
-| `update ID` | Change fields (`--title`, `--body`, `--status`, `-p`, `-t`, `--assignee`, `--parent`, …). `--rev N` applies the change only if the issue is still at revision N. It cannot set `in_progress` (claim with `start`), change the status or assignee of a claimed issue, or drop an acceptance item that is still open |
+| `update ID` | Change fields (`--title`, `--body`, `--status`, `-p`, `-t`, `--assignee`, `--parent`, `--account`, …). `--account NAME` sets the account the issue's time and tokens report against; `--account ""` clears it, to inherit the parent's. `--rev N` applies the change only if the issue is still at revision N. It cannot set `in_progress` (claim with `start`), change the status or assignee of a claimed issue, or drop an acceptance item that is still open |
 | `close ID`, `reopen ID` | Close (with `--reason`) or reopen an issue. Close is refused while an acceptance item is open; `--force`, for admins only, closes anyway |
 | `dep add\|rm FROM TO` | Add or remove a dependency: FROM depends on TO. `--type T` (default `blocks`) |
 | `label add\|rm ID LABEL...` | Add or remove labels |
@@ -139,7 +139,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `inbox` | List your unread inbox, newest first: 20 items, or `-n N` (at most 100). `--all` includes read items; `--ack ID` (repeatable or comma-separated) or `--ack-all` marks items read |
 | `watch` | Print inbox items as they arrive, until ctrl-c (exit 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it missed items (`sfx inbox` lists them) |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d) and the issues each holds; at most 100 (`-n N`, up to 500), then a count of the rest |
-| `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L` |
+| `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L`. Under its header it prints the time issues were held (saying when some tokens were split by time), the tokens reported by model, and those no issue was held for |
 | `prime` | Orient a session: your issues in progress, your inbox, the top ready work and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
 
 ### Agents and maintenance

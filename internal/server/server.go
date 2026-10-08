@@ -50,6 +50,9 @@ type Config struct {
 	// principal; zero fields take DefaultLimits. Its store limits are the
 	// store's to apply (store.Options.Limits), and only shown here.
 	Limits Limits
+	// Account is the project's default account, shown for an issue that
+	// neither sets one nor inherits one. Empty takes DefaultAccount.
+	Account string
 }
 
 // Server serves the protocol. Create it with New.
@@ -114,6 +117,12 @@ func New(cfg Config) (*Server, error) {
 	}
 	if err := cfg.Limits.Validate(); err != nil {
 		return nil, fmt.Errorf("server: %w", err)
+	}
+	if cfg.Account == "" {
+		cfg.Account = DefaultAccount
+	}
+	if !store.ValidAccount(cfg.Account) {
+		return nil, fmt.Errorf("server: account %q is not a code name", cfg.Account)
 	}
 	cfg.Limits = cfg.Limits.WithDefaults()
 	s := &Server{cfg: cfg, conns: map[net.Conn]struct{}{}, now: time.Now}

@@ -109,7 +109,8 @@ skip without it too.
    holder's principal or an admin may change an issue someone holds.
    `ImportIssue`, which only the operator's `starfixd import-bd` reaches,
    is exempt: it writes an issue whoever holds it, and ends the claim,
-   telling the holder, when it closes one.
+   telling the holder, when it leaves the issue anything but in progress
+   with the holder (closed, open, blocked or reassigned).
 6. **Every `UPDATE` sets `write_id = ?`** to a value unique to that write.
    Dolt detects conflicts per cell, not per row, so `rev = rev + 1` alone
    lets two concurrent writers both succeed silently (stage 0,

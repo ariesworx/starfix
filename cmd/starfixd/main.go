@@ -159,7 +159,7 @@ func serve(ctx context.Context, args []string) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	srv, err := server.New(server.Config{Store: st, Project: s.Project, Version: version.Version,
-		Latest: s.Latest, Logger: log, Limits: s.Limits})
+		Latest: s.Latest, Logger: log, Limits: s.Limits, Account: s.Account})
 	if err != nil {
 		return errors.Join(err, st.Close())
 	}

@@ -17,7 +17,7 @@ import (
 const issueCols = `i.id, i.parent_id, i.title, i.body, i.design, i.acceptance, i.notes,
   i.status, i.priority, i.type, i.assignee, i.owner, i.due_at, i.defer_until,
   i.ephemeral, i.expires_at, i.pinned, i.template, i.metadata, i.close_reason,
-  i.created_by, i.created_at, i.updated_at, i.closed_at, i.rev`
+  i.created_by, i.created_at, i.updated_at, i.closed_at, i.rev, i.account`
 
 // scanner is a *sql.Row or *sql.Rows.
 type scanner interface{ Scan(dest ...any) error }
@@ -28,13 +28,14 @@ func scanIssue(sc scanner, extra ...any) (Issue, error) {
 	var (
 		is                               Issue
 		parent, assignee, owner, reason  sql.NullString
+		account                          sql.NullString
 		due, deferUntil, expires, closed sql.NullTime
 		meta                             []byte
 	)
 	dest := []any{&is.ID, &parent, &is.Title, &is.Body, &is.Design, &is.Acceptance, &is.Notes,
 		&is.Status, &is.Priority, &is.Type, &assignee, &owner, &due, &deferUntil,
 		&is.Ephemeral, &expires, &is.Pinned, &is.Template, &meta, &reason,
-		&is.CreatedBy, &is.CreatedAt, &is.UpdatedAt, &closed, &is.Rev}
+		&is.CreatedBy, &is.CreatedAt, &is.UpdatedAt, &closed, &is.Rev, &account}
 	if err := sc.Scan(append(dest, extra...)...); err != nil {
 		return Issue{}, err
 	}
@@ -42,6 +43,7 @@ func scanIssue(sc scanner, extra ...any) (Issue, error) {
 	is.Assignee = assignee.String
 	is.Owner = owner.String
 	is.CloseReason = reason.String
+	is.Account = account.String
 	is.DueAt = timePtr(due)
 	is.DeferUntil = timePtr(deferUntil)
 	is.ExpiresAt = timePtr(expires)
@@ -225,6 +227,9 @@ func (n *NewIssue) normalize() error {
 			return err
 		}
 	}
+	if err := validAccount(n.Account); err != nil {
+		return err
+	}
 	if n.ID != "" {
 		return n.ID.Validate()
 	}
@@ -316,12 +321,12 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 	wid := randomInt63()
 	if _, err := w.exec(ctx, `INSERT INTO issues (id, parent_id, title, body, design, acceptance, notes,
   status, priority, type, assignee, owner, due_at, defer_until, ephemeral, expires_at, pinned, template,
-  metadata, created_by, created_at, updated_at, rev, write_id)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+  metadata, account, created_by, created_at, updated_at, rev, write_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
 		string(id), nullStr(in.ParentID), in.Title, in.Body, in.Design, in.Acceptance, in.Notes,
 		string(in.Status), int(*in.Priority), string(in.Type), nullStr(in.Assignee), nullStr(in.Owner),
 		nullTime(in.DueAt), nullTime(in.DeferUntil), in.Ephemeral, nullTime(in.ExpiresAt), in.Pinned, in.Template,
-		meta, w.actor.Principal, w.now, w.now, wid); err != nil {
+		meta, nullStr(in.Account), w.actor.Principal, w.now, w.now, wid); err != nil {
 		if isDuplicate(err) {
 			return Issue{}, fmt.Errorf("issue %s: %w", id, ErrExists)
 		}
@@ -550,6 +555,12 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 		if f.v != nil {
 			add(f.col, *f.v)
 		}
+	}
+	if p.Account != nil {
+		if err := validAccount(*p.Account); err != nil {
+			return nil, nil, err
+		}
+		add("account", nullStr(*p.Account))
 	}
 	if p.Metadata != nil {
 		m, err := nullJSON(p.Metadata)

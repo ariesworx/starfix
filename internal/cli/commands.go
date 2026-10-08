@@ -34,7 +34,7 @@ func (r *runner) text(v string) (string, error) {
 
 // fields are the issue fields create and update share.
 type fields struct {
-	title, body, design, acceptance, notes, status, typ, assignee, owner, parent, prio string
+	title, body, design, acceptance, notes, status, typ, assignee, owner, parent, prio, account string
 }
 
 // register adds the field flags to fs. withTitle adds --title, for
@@ -55,6 +55,7 @@ func (f *fields) register(fs *flag.FlagSet, withTitle bool) {
 	fs.StringVar(&f.assignee, "assignee", "", "assignee (empty clears)")
 	fs.StringVar(&f.owner, "owner", "", "owner (empty clears)")
 	fs.StringVar(&f.parent, "parent", "", "parent issue id (empty clears)")
+	fs.StringVar(&f.account, "account", "", "account code name for time and tokens (empty inherits the parent's)")
 }
 
 // readTexts resolves "-" in the long text fields; only one may use it.
@@ -77,7 +78,7 @@ func (r *runner) readTexts(f *fields) error {
 }
 
 func cmdCreate(ctx context.Context, r *runner, args []string) error {
-	const usage = "create TITLE... [-p N] [-t TYPE] [--body TEXT|-] [--parent ID] [--label L]..."
+	const usage = "create TITLE... [-p N] [-t TYPE] [--body TEXT|-] [--parent ID] [--account NAME] [--label L]..."
 	fs := r.newFlags("create")
 	var f fields
 	f.register(fs, false)
@@ -99,7 +100,7 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 	idem := proto.NewIdem("cli")
 	in := proto.CreateArgs{ID: id, Idem: idem, Title: strings.Join(pos, " "), Body: f.body, Design: f.design,
 		Acceptance: f.acceptance, Notes: f.notes, Status: f.status, Type: f.typ, Assignee: f.assignee,
-		Owner: f.owner, Parent: f.parent, Labels: labels}
+		Owner: f.owner, Parent: f.parent, Labels: labels, Account: f.account}
 	if f.prio != "" {
 		p, err := priority(f.prio)
 		if err != nil {
@@ -187,6 +188,7 @@ func cmdShow(ctx context.Context, r *runner, args []string) error {
 		return nil
 	}
 	printIssue(r.env.Stdout, out)
+	printIssueUsage(r.env.Stdout, out.Issue.Account, out.Usage)
 	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
 	if len(out.Similar) > 0 {
@@ -394,7 +396,7 @@ func printBlocked(w io.Writer, issues []proto.BlockedIssue) {
 }
 
 func cmdUpdate(ctx context.Context, r *runner, args []string) error {
-	const usage = "update ID [--rev N] [--title T] [--body TEXT|-] [--status S] [-p N] [-t TYPE] [--assignee A] [--parent ID] ..."
+	const usage = "update ID [--rev N] [--title T] [--body TEXT|-] [--status S] [-p N] [-t TYPE] [--assignee A] [--parent ID] [--account NAME] ..."
 	fs := r.newFlags("update")
 	var f fields
 	f.register(fs, true)
@@ -432,6 +434,7 @@ func cmdUpdate(ctx context.Context, r *runner, args []string) error {
 	str([]string{"assignee"}, f.assignee, &in.Assignee)
 	str([]string{"owner"}, f.owner, &in.Owner)
 	str([]string{"parent"}, f.parent, &in.Parent)
+	str([]string{"account"}, f.account, &in.Account)
 	if set(fs, "p") || set(fs, "priority") {
 		p, err := priority(f.prio)
 		if err != nil {
