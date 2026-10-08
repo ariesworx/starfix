@@ -358,6 +358,7 @@ the config file (`/etc/starfix/starfixd.yaml`, or `--config FILE`, or
 | `log_level` | `debug`, `info`, `warn` or `error` ([Logs](#logs)) | `info` | `--log-level`, `STARFIXD_LOG_LEVEL` |
 | `log_format` | `text` (key=value) or `json`, for a log shipper | `text` | `--log-format`, `STARFIXD_LOG_FORMAT` |
 | `latest` | The newest starfix release, set by hand. Clients' `prime` notes when this server is older | none | |
+| `account` | The project's account: what an issue's time and tokens report against when neither it nor an ancestor sets one ([Accounts, time and tokens](concepts.md#accounts-time-and-tokens)). A code name: lowercase letters, digits and inner hyphens | `internal` | |
 | `limits` | [Limits](#limits) | defaults | |
 
 - **A password never goes on the command line.** `--dsn` with a password is
@@ -397,9 +398,13 @@ limits:
 | `idle_timeout` | `10m` | A connection that sends nothing this long is closed with a note, unless it watches its inbox (`sfx mcp` and `sfx watch` do) |
 | `write_rate`, `write_burst` | 10, 100 | Each principal's write token bucket: writes a second, and how many at once. Reads are not counted |
 | `refusal_logs` | 20 | Refusal log lines per principal a minute |
+| `usage_records` | 500 | Token usage records in one `usage` call |
+| `usage_per_day` | 50000 | Token usage records one principal may add in 24 hours, counted by when the server stored them. Per principal, because a client can name any number of sessions |
 
 A request past a per-request cap is refused with `invalid`. A write past
-the write rate is refused with `busy`, and its fix says how long to wait. A
+the write rate is refused with `busy`, and its fix says how long to wait.
+A `usage` call past `usage_per_day` is refused with `busy`, and stores
+none of its records. A
 connection past a connection cap is also refused with `busy`, and its fix
 asks you to close other starfix sessions or wait for them to end.
 
@@ -411,7 +416,10 @@ Fixed caps that no setting changes:
   of text) and a cursor to the page before, which `sfx` follows.
 - **Lists:** `who` lists at most 100 sessions and counts the rest; `show`
   lists at most 200 edges and `blocked` 50 blockers an issue, each with a
-  count of the rest.
+  count of the rest. `show` and `digest` list tokens for at most 20
+  models, summing the rest as `(other)`.
+- **Usage records:** each count is at most 10¹² tokens, and a record's time
+  at most an hour past the server's clock.
 - **Similar issues:** lookups read closed titles from a cache refreshed on
   close and reopen, or after a minute.
 
@@ -435,7 +443,8 @@ error and exits 1, and the unit's `Restart=on-failure` starts it again.
 Upgrade the server first, then the clients. A newer server accepts older
 clients. A newer client that needs a newer protocol is refused by an older
 server at the handshake, with exit code 3 and a fix that says to upgrade
-the server.
+the server. This release speaks protocol 3 (token capture) and accepts
+clients that speak 2 or 3, so v0.1.x clients, which speak 1, must upgrade.
 
 On the server, as the `starfix` user:
 
@@ -516,6 +525,10 @@ version of it. An event keeps a text over 8 KiB as its first 512 bytes,
 its length and its SHA-256, so an edit loop over long fields grows the log
 by about a kilobyte a write, not by the text. The write rate limit bounds
 how fast one principal can grow it.
+
+Token usage is one row per harness request in `token_usage`, about 200
+bytes each, also never pruned; a `usage` call adds one summary event, not
+one per row. `usage_per_day` bounds how fast one principal can grow it.
 
 Watch the size of `/var/lib/dolt/data`. If it grows, run `dolt gc` in a
 quiet hour: `cd /var/lib/dolt/data/starfix && sudo -u dolt -H dolt gc`.
