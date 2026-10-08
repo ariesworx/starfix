@@ -40,6 +40,21 @@ func (e Event) Changed() string {
 		return fmt.Sprintf("item %v", pick["n"])
 	case "issue.create":
 		return fmt.Sprintf("%q", pick["title"])
+	case "issue.paths":
+		out := fmt.Sprint(pick["source"])
+		for _, k := range []struct{ key, sign string }{{"added", "+"}, {"removed", "-"}} {
+			n := 0
+			if l, ok := pick[k.key].([]any); ok {
+				n = len(l)
+			}
+			if c, ok := pick[k.key+"_count"].(float64); ok {
+				n = int(c)
+			}
+			if n > 0 {
+				out += fmt.Sprintf(" %s%d", k.sign, n)
+			}
+		}
+		return out
 	case "claim.take", "claim.expire":
 		if h, ok := pick["holder"].(map[string]any); ok {
 			return fmt.Sprintf("epoch %v, %v/%v", pick["epoch"], h["principal"], h["session"])

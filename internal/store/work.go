@@ -2,8 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -47,13 +45,14 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 	err := s.write(ctx, actor, func(w *wtx) error {
 		target := id
 		if target == "" {
-			err := w.tx.QueryRowContext(ctx, blockedCTE+`SELECT i.id FROM issues i `+readyWhere, w.now, 1).Scan(&target)
-			if errors.Is(err, sql.ErrNoRows) {
+			ids, _, err := rankReady(ctx, w.tx, w.actor, w.now, 1)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
 				return ErrNothingReady
 			}
-			if err != nil {
-				return fmt.Errorf("ready: %w", err)
-			}
+			target = ids[0]
 		}
 		before, err := loadIssue(ctx, w.tx, target)
 		if err != nil {
@@ -108,6 +107,9 @@ type Finish struct {
 	Accept Acceptance
 	// IdempotencyKey makes a retried finish return the first result.
 	IdempotencyKey string
+	// Paths are the paths the issue's work touched, most recent first,
+	// recorded as its commit paths.
+	Paths []string
 }
 
 // finished is FinishIssue's result, as its idempotency stamp stores it
@@ -149,6 +151,14 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if len(f.Discovered) > MaxDiscovered {
 		return Issue{}, nil, fmt.Errorf("%w: at most %d discovered issues", ErrInvalid, MaxDiscovered)
 	}
+	paths, err := checkPaths(f.Paths, false)
+	if err != nil {
+		return Issue{}, nil, err
+	}
+	// Paths are what the client's git showed when it sent the request,
+	// so a retry may carry others; they are not part of the request an
+	// idempotency key stands for.
+	f.Paths = nil
 	// normalize fills in defaults in place, so work on a copy: the
 	// caller's slice shares its backing array with f.Discovered.
 	f.Discovered = slices.Clone(f.Discovered)
@@ -177,7 +187,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 		F     Finish
 	}{id, epoch, f}
 	var out finished
-	err := s.write(ctx, actor, func(w *wtx) error {
+	err = s.write(ctx, actor, func(w *wtx) error {
 		if done, err := replay(ctx, w, f.IdempotencyKey, "finish", req, &out); done || err != nil {
 			return err
 		}
@@ -196,6 +206,9 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 			return err
 		}
 		if err := checkEpoch(c, epoch); err != nil {
+			return err
+		}
+		if err := recordCommitPaths(ctx, w, id, paths); err != nil {
 			return err
 		}
 		if !f.Accept.empty() {
@@ -233,8 +246,10 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 // without closing it, telling the principal it is handed to and those its
 // note mentions. With release it also lets the issue go, so another can
 // start it: the claim ends, in_progress becomes open and the assignee is
-// cleared. With an idempotency key (idem), a repeat returns the first
-// result and writes nothing. HandoffIssue refuses:
+// cleared. paths, the paths the issue's work touched, most recent first,
+// are recorded as its commit paths. With an idempotency key (idem), a
+// repeat returns the first result and writes nothing. HandoffIssue
+// refuses:
 //   - a handoff on an issue another principal holds, with a
 //     [*ForbiddenError], unless the actor is an admin ([Store.AddComment]
 //     needs no hold);
@@ -242,7 +257,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 //   - an idempotency key reused for another request, with an
 //     [*IdemError];
 //   - a release of a closed issue, or invalid input, with ErrInvalid.
-func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool, idem string) (Issue, error) {
+func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch int64, h HandoffNote, release bool, idem string, paths []string) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
@@ -261,8 +276,12 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 	if err := h.HandoffFields.validate(); err != nil {
 		return Issue{}, err
 	}
+	paths, err := checkPaths(paths, false)
+	if err != nil {
+		return Issue{}, err
+	}
 	var out Issue
-	err := s.write(ctx, actor, func(w *wtx) error {
+	err = s.write(ctx, actor, func(w *wtx) error {
 		if done, err := replay(ctx, w, idem, "handoff", req, &out); done || err != nil {
 			return err
 		}
@@ -275,6 +294,9 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 			return err
 		}
 		if err := w.guard(ctx, c, "handoff"); err != nil {
+			return err
+		}
+		if err := recordCommitPaths(ctx, w, id, paths); err != nil {
 			return err
 		}
 		if release {

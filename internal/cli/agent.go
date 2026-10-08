@@ -197,7 +197,7 @@ func cmdMCP(ctx context.Context, r *runner, args []string) error {
 	// Serve can dial, so a push never finds it nil.
 	var srv *mcpserver.Server
 	opts.OnPush = func(p proto.Push) { srv.Push(p) }
-	srv = mcpserver.New(mcpserver.Options{Version: r.env.Version,
+	srv = mcpserver.New(mcpserver.Options{Version: r.env.Version, Dir: r.dir,
 		Dial: func(ctx context.Context) (mcpserver.Conn, error) {
 			return mcpserver.DialRepo(ctx, r.dir, opts)
 		}})

@@ -107,7 +107,7 @@ func TestIssueUsageAcrossHandoffAndTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.add(10 * time.Minute)
-	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "yours"}, true, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "yours"}, true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	clk.add(5 * time.Minute) // nobody holds it
@@ -468,7 +468,7 @@ func TestIssueUsageReadsOnlyItsHolds(t *testing.T) {
 			}
 			release := func(id IssueID) func() error {
 				return func() error {
-					_, err := s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "later"}, true, "")
+					_, err := s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "later"}, true, "", nil)
 					return err
 				}
 			}

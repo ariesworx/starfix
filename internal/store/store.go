@@ -302,6 +302,10 @@ type wtx struct {
 	// quiet allows a mutation with no event, for bookkeeping that is not
 	// history: a lease renewal, a registry touch, an inbox ack, a prune.
 	quiet bool
+	// touched is set once a statement run by touch changed a row: a
+	// change the store must commit to Dolt, but that leaves mutated, and
+	// so the event check, alone.
+	touched bool
 	// inbox are the items this attempt wrote, pushed once it commits.
 	inbox []InboxItem
 	// pending are the events recorded, written by flush.
@@ -319,6 +323,28 @@ type wtx struct {
 // exec runs a mutating statement. It refuses an UPDATE that does not set
 // write_id: without it Dolt merges concurrent writes silently (stage 0).
 func (w *wtx) exec(ctx context.Context, q string, args ...any) (int64, error) {
+	n, err := w.run(ctx, q, args...)
+	if n > 0 {
+		w.mutated = true
+	}
+	return n, err
+}
+
+// touch runs a statement that is bookkeeping within a write that may
+// also make history, such as refreshing the time of an issue's paths
+// during a finish. Unlike setting quiet, it exempts only its own change
+// from the event check: anything else the write changes still needs an
+// event.
+func (w *wtx) touch(ctx context.Context, q string, args ...any) error {
+	n, err := w.run(ctx, q, args...)
+	if n > 0 {
+		w.touched = true
+	}
+	return err
+}
+
+// run executes q for exec and touch, refusing an UPDATE without write_id.
+func (w *wtx) run(ctx context.Context, q string, args ...any) (int64, error) {
 	if strings.HasPrefix(strings.TrimSpace(q), "UPDATE") && !strings.Contains(q, "write_id = ?") {
 		return 0, errors.New("store: UPDATE without write_id")
 	}
@@ -326,14 +352,7 @@ func (w *wtx) exec(ctx context.Context, q string, args ...any) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	if n > 0 {
-		w.mutated = true
-	}
-	return n, nil
+	return res.RowsAffected()
 }
 
 // event records an event for op on target, with the before and after
@@ -558,7 +577,7 @@ func (s *Store) writeOnce(ctx context.Context, actor Actor, fn func(*wtx) error)
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
-	if w.mutated {
+	if w.mutated || w.touched {
 		s.dirty.Store(true)
 	}
 	if w.closedChanged {

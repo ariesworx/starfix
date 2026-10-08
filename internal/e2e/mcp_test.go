@@ -42,7 +42,7 @@ func (u *user) mcp(version string) *agent {
 	if u.w.fixedClock {
 		renew = -1 // renewals would not move the test's clock
 	}
-	a.srv = mcpserver.New(mcpserver.Options{Version: version, RenewEvery: renew, Dial: func(ctx context.Context) (mcpserver.Conn, error) {
+	a.srv = mcpserver.New(mcpserver.Options{Version: version, RenewEvery: renew, Dir: u.repo, Dial: func(ctx context.Context) (mcpserver.Conn, error) {
 		a.dials++
 		return mcpserver.DialRepo(ctx, u.repo, opts)
 	}})

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Claims (design §7). Taking an issue leases it to the actor: the holder
@@ -253,13 +255,34 @@ func (s *Store) claims(ctx context.Context, q querier, where string, args ...any
 // left is extended to now+lease; one with more is not rewritten, so an
 // agent renewing every minute writes about every lease/2, and a lease is
 // never shortened. Renewals record no event.
-func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duration, allSessions bool) ([]Claim, error) {
+//
+// paths maps an issue to the paths its work touched, most recent first:
+// they are recorded as commit paths of the claims renewed, at most the
+// paths_per_issue limit in all, taken in the order of the claims
+// returned; issues it does not renew are ignored. Paths for more than
+// proto.MaxPathIssues issues, or more than proto.MaxPaths for one, are
+// refused with ErrInvalid before anything is renewed. A renewal that adds
+// paths records an issue.paths event for each issue it adds them to.
+func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duration, allSessions bool, paths map[IssueID][]string) ([]Claim, error) {
 	most := MaxClaimLease
 	if allSessions {
 		most = MaxLease
 	}
 	if err := checkLease(lease, most); err != nil {
 		return nil, err
+	}
+	if len(paths) > proto.MaxPathIssues {
+		return nil, fmt.Errorf("%w: send paths for at most %d issues in one renew, not %d", ErrInvalid, proto.MaxPathIssues, len(paths))
+	}
+	checked := make(map[IssueID][]string, len(paths))
+	for id, ps := range paths {
+		if err := id.Validate(); err != nil {
+			return nil, err
+		}
+		var err error
+		if checked[id], err = checkPaths(ps, false); err != nil {
+			return nil, err
+		}
 	}
 	var out []Claim
 	err := s.write(ctx, actor, func(w *wtx) error {
@@ -287,6 +310,16 @@ func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duratio
 			}
 			out[i].ExpiresAt = want
 			w.quiet = true
+		}
+		// The claims are the actor's own, so wtx.guard would pass each.
+		budget := w.lim.Paths
+		for _, c := range held {
+			ps := checked[c.Issue]
+			ps = ps[:min(len(ps), budget)]
+			budget -= len(ps)
+			if err := recordCommitPaths(ctx, w, c.Issue, ps); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

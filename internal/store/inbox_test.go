@@ -160,8 +160,7 @@ func TestInboxKinds(t *testing.T) {
 				register(t, s, bob, carol)
 				is := mustCreate(t, s, NewIssue{Title: "work"})
 				mustStart(t, s, alice, is.ID)
-				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0,
-					HandoffNote{Note: "over to @bob, ask @carol", HandoffFields: HandoffFields{To: "bob"}}, true, ""); err != nil {
+				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0, HandoffNote{Note: "over to @bob, ask @carol", HandoffFields: HandoffFields{To: "bob"}}, true, "", nil); err != nil {
 					t.Fatal(err)
 				}
 				return is.ID
@@ -187,8 +186,7 @@ func TestInboxKinds(t *testing.T) {
 			name: "a handoff to yourself is not news",
 			do: func(t *testing.T, s *Store, _ *clock) IssueID {
 				is := mustCreate(t, s, NewIssue{Title: "work"})
-				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0,
-					HandoffNote{Note: "note to self", HandoffFields: HandoffFields{To: "alice"}}, false, ""); err != nil {
+				if _, err := s.HandoffIssue(t.Context(), alice, is.ID, 0, HandoffNote{Note: "note to self", HandoffFields: HandoffFields{To: "alice"}}, false, "", nil); err != nil {
 					t.Fatal(err)
 				}
 				return is.ID
@@ -424,7 +422,7 @@ func TestStructuredHandoff(t *testing.T) {
 	mustStart(t, s, alice, is.ID)
 	f := HandoffFields{State: HandoffPartial, Next: "wire the CLI", Branch: "feature/tst-ab12-work",
 		Worktree: "/home/alice/src/work", To: "bob"}
-	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "half done", HandoffFields: f}, false, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "half done", HandoffFields: f}, false, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	h, err := s.LastHandoff(ctx, is.ID)
@@ -432,7 +430,7 @@ func TestStructuredHandoff(t *testing.T) {
 		t.Fatalf("LastHandoff = %+v, %v; want the note with %+v", h, err, f)
 	}
 	// A later plain handoff has no fields of its own.
-	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "later"}, false, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "later"}, false, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if h, err := s.LastHandoff(ctx, is.ID); err != nil || h.Body != "later" || h.HandoffFields != (HandoffFields{}) {
@@ -457,7 +455,7 @@ func TestStructuredHandoff(t *testing.T) {
 	}
 	seq := lastSeq(t, s)
 	for _, tc := range bad {
-		if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, tc.h, false, ""); !errors.Is(err, ErrInvalid) {
+		if _, err := s.HandoffIssue(ctx, alice, is.ID, 0, tc.h, false, "", nil); !errors.Is(err, ErrInvalid) {
 			t.Errorf("HandoffIssue(%s) = %v, want ErrInvalid", tc.name, err)
 		}
 		if _, _, err := s.FinishIssue(ctx, alice, is.ID, 0, Finish{Handoff: tc.h}); !errors.Is(err, ErrInvalid) {

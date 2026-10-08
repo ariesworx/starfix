@@ -276,16 +276,16 @@ func TestHandoff(t *testing.T) {
 
 	// A note alone changes nothing about who holds the issue; only the
 	// holder's principal may add one while it is held.
-	got, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "first"}, false, "")
+	got, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "first"}, false, "", nil)
 	if err != nil || got.Rev != 2 || got.Assignee != "alice" {
 		t.Fatalf("note: %+v, %v", got, err)
 	}
 	for _, release := range []bool{false, true} {
-		if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "mine now"}, release, ""); !errors.Is(err, ErrForbidden) {
+		if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "mine now"}, release, "", nil); !errors.Is(err, ErrForbidden) {
 			t.Fatalf("handoff (release %v) by a non-holder: %v", release, err)
 		}
 	}
-	got, err = s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "second"}, true, "")
+	got, err = s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "second"}, true, "", nil)
 	if err != nil || got.Status != StatusOpen || got.Assignee != "" || got.Rev != 3 {
 		t.Fatalf("release: %+v, %v", got, err)
 	}
@@ -321,12 +321,12 @@ func TestHandoff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: tc.note}, tc.release, ""); !errors.Is(err, tc.want) {
+			if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: tc.note}, tc.release, "", nil); !errors.Is(err, tc.want) {
 				t.Errorf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
-	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "after close"}, false, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, bob, is.ID, 0, HandoffNote{Note: "after close"}, false, "", nil); err != nil {
 		t.Errorf("note on a closed issue: %v", err)
 	}
 	assertGapless(t, s)

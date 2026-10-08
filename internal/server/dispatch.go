@@ -83,7 +83,7 @@ func create(ctx context.Context, s *Server, a store.Actor, in proto.CreateArgs) 
 		ID: store.IssueID(in.ID), IdempotencyKey: in.Idem, ParentID: store.IssueID(in.Parent),
 		Title: in.Title, Body: in.Body, Design: in.Design, Acceptance: in.Acceptance, Notes: in.Notes,
 		Status: store.Status(in.Status), Type: store.IssueType(in.Type),
-		Assignee: in.Assignee, Owner: in.Owner, Labels: in.Labels, Account: in.Account,
+		Assignee: in.Assignee, Owner: in.Owner, Labels: in.Labels, Account: in.Account, Paths: in.Paths,
 	}
 	if in.Priority != nil {
 		p := store.Priority(*in.Priority)
@@ -159,7 +159,12 @@ func show(ctx context.Context, s *Server, a store.Actor, in proto.ShowArgs) (any
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
 	}
-	out := proto.ShowResult{Issue: wireIssue(is), Items: items, Similar: s.similar(ctx, is), Usage: s.wireIssueUsage(u)}
+	files, err := s.cfg.Store.IssueFiles(ctx, a, id, proto.MaxShowPaths)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
+	out := proto.ShowResult{Issue: wireIssue(is), Items: items, Similar: s.similar(ctx, is), Usage: s.wireIssueUsage(u),
+		Files: wireFiles(files)}
 	if claim != nil {
 		c := wireClaim(*claim)
 		out.Claim = &c
@@ -217,12 +222,36 @@ func list(ctx context.Context, s *Server, _ store.Actor, in proto.ListArgs) (any
 	return proto.ListResult{Issues: summaries(page.Issues), Next: string(page.Next)}, nil
 }
 
-func ready(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) (any, *proto.Error) {
-	issues, err := s.cfg.Store.Ready(ctx, in.Limit)
+func ready(ctx context.Context, s *Server, a store.Actor, in proto.LimitArgs) (any, *proto.Error) {
+	rs, err := s.cfg.Store.Ready(ctx, a, in.Limit)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpReady, "", 0, err)
 	}
-	return proto.ListResult{Issues: summaries(issues)}, nil
+	out := proto.ListResult{Issues: make([]proto.Summary, 0, len(rs))}
+	for _, r := range rs {
+		sm := summary(r.Issue)
+		for _, id := range r.Overlaps {
+			sm.Overlaps = append(sm.Overlaps, string(id))
+		}
+		out.Issues = append(out.Issues, sm)
+	}
+	return out, nil
+}
+
+// wireFiles is show's files, or nil when the issue has no paths and
+// overlaps nothing.
+func wireFiles(f store.Files) *proto.Files {
+	if len(f.Paths) == 0 && len(f.Overlaps) == 0 {
+		return nil
+	}
+	out := &proto.Files{More: f.More}
+	for _, p := range f.Paths {
+		out.Paths = append(out.Paths, proto.FilePath{Path: p.Path, Source: string(p.Source)})
+	}
+	for _, o := range f.Overlaps {
+		out.Overlaps = append(out.Overlaps, proto.Overlap{ID: string(o.Issue), By: o.Holder.Principal, Session: o.Holder.Session})
+	}
+	return out
 }
 
 func blocked(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) (any, *proto.Error) {
@@ -263,6 +292,7 @@ func update(ctx context.Context, s *Server, a store.Actor, in proto.UpdateArgs) 
 		pid := store.IssueID(*in.Parent)
 		p.ParentID = &pid
 	}
+	p.Paths = in.Paths
 	is, err := s.cfg.Store.UpdateIssue(ctx, a, store.IssueID(in.ID), store.Rev(in.Rev), p)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpUpdate, in.ID, in.Rev, err)
@@ -396,6 +426,9 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 		return nil, proto.Errf(proto.CodeNotFound, proto.FixSeeBlocked+" with `sfx blocked`, or create an issue",
 			"nothing is ready to start")
 	}
+	if held, ok := errors.AsType[*store.HeldError](err); ok {
+		return nil, s.held(ctx, a, held)
+	}
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpStart, in.ID, 0, err)
 	}
@@ -418,7 +451,7 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 
 func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) (any, *proto.Error) {
 	f := store.Finish{Reason: in.Reason, Handoff: storeHandoff(in.Handoff, in.HandoffFields), IdempotencyKey: in.Idem,
-		Accept: store.Acceptance{Tick: in.Ticked, Waive: in.Waived}}
+		Accept: store.Acceptance{Tick: in.Ticked, Waive: in.Waived}, Paths: in.Paths}
 	for _, d := range in.Discovered {
 		n := store.NewIssue{Title: d.Title, Type: store.IssueType(d.Type)}
 		if d.Priority != nil {
@@ -439,7 +472,7 @@ func finish(ctx context.Context, s *Server, a store.Actor, in proto.FinishArgs) 
 }
 
 func handoff(ctx context.Context, s *Server, a store.Actor, in proto.HandoffArgs) (any, *proto.Error) {
-	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, storeHandoff(in.Note, in.HandoffFields), in.Release, in.Idem)
+	is, err := s.cfg.Store.HandoffIssue(ctx, a, store.IssueID(in.ID), in.Epoch, storeHandoff(in.Note, in.HandoffFields), in.Release, in.Idem, in.Paths)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHandoff, in.ID, 0, err)
 	}
@@ -477,7 +510,14 @@ func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (a
 	if perr != nil {
 		return nil, perr
 	}
-	cs, err := s.cfg.Store.RenewClaims(ctx, a, d, in.All)
+	var paths map[store.IssueID][]string
+	if len(in.Paths) > 0 {
+		paths = make(map[store.IssueID][]string, len(in.Paths))
+		for id, ps := range in.Paths {
+			paths[store.IssueID(id)] = ps
+		}
+	}
+	cs, err := s.cfg.Store.RenewClaims(ctx, a, d, in.All, paths)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpRenew, "", 0, err)
 	}

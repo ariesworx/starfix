@@ -52,7 +52,7 @@ func TestStateErrors(t *testing.T) {
 		}, StateClosed, "invalid input: issue %s is closed; reopen it first"},
 		{"release of a closed issue", func(t *testing.T) (IssueID, error) {
 			id := closed(t).ID
-			_, err := s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "over to you"}, true, "")
+			_, err := s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "over to you"}, true, "", nil)
 			return id, err
 		}, StateClosed, "invalid input: issue %s is closed; reopen it first"},
 		{"acceptance change on a closed issue", func(t *testing.T) (IssueID, error) {

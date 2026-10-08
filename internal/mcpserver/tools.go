@@ -307,6 +307,14 @@ type Issue struct {
 	Account string `json:"account,omitempty"`
 	// Usage is the time held and tokens by model, in one line.
 	Usage string `json:"usage,omitempty"`
+	// Files are the likely files: declared paths (a trailing / is a
+	// directory), then those its commits touched, most recent first.
+	// FilesMore counts the rest.
+	Files     []string `json:"files,omitempty"`
+	FilesMore int      `json:"files_more,omitempty"`
+	// Overlaps are the issues others hold now whose files overlap these:
+	// "ID by principal/session".
+	Overlaps []string `json:"overlaps,omitempty"`
 	// Truncated: long text was cut; full: true returns more.
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -457,7 +465,7 @@ func (s *Server) register() {
 		enums: enums{"discovered.type": issueTypes, "state": states}},
 		func(ctx context.Context, c Conn, in FinishIn) (proto.FinishResult, error) {
 			args := proto.FinishArgs{ID: in.ID, Epoch: s.claims.epoch(in.ID), Reason: in.Reason, Handoff: in.Handoff,
-				HandoffFields: in.wire(), Ticked: in.Ticked, Idem: in.idem}
+				HandoffFields: in.wire(), Ticked: in.Ticked, Idem: in.idem, Paths: s.paths(ctx, in.ID)}
 			for k, r := range in.Waived {
 				n, _ := strconv.Atoi(k) // checked by prepare
 				if args.Waived == nil {
@@ -469,7 +477,14 @@ func (s *Server) register() {
 				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
 			}
 			var out proto.FinishResult
-			err := c.Call(ctx, proto.OpFinish, args, &out)
+			paths := args.Paths
+			err := proto.RetryWithoutPaths(paths != nil, func(withPaths bool) error {
+				args.Paths = nil
+				if withPaths {
+					args.Paths = paths
+				}
+				return c.Call(ctx, proto.OpFinish, args, &out)
+			})
 			if err == nil {
 				s.claims.drop(in.ID)
 			}
@@ -479,11 +494,19 @@ func (s *Server) register() {
 		enums: enums{"state": states}},
 		func(ctx context.Context, c Conn, in HandoffIn) (proto.WriteResult, error) {
 			var out proto.WriteResult
-			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release, HandoffFields: in.wire(), Idem: in.idem}
+			args := proto.HandoffArgs{ID: in.ID, Note: in.Note, Release: in.Release, HandoffFields: in.wire(), Idem: in.idem,
+				Paths: s.paths(ctx, in.ID)}
 			if in.Release {
 				args.Epoch = s.claims.epoch(in.ID)
 			}
-			err := c.Call(ctx, proto.OpHandoff, args, &out)
+			paths := args.Paths
+			err := proto.RetryWithoutPaths(paths != nil, func(withPaths bool) error {
+				args.Paths = nil
+				if withPaths {
+					args.Paths = paths
+				}
+				return c.Call(ctx, proto.OpHandoff, args, &out)
+			})
 			if err == nil && in.Release {
 				s.claims.drop(in.ID)
 			}
@@ -661,6 +684,15 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 		out.Account = u.Account
 		out.Usage = issueUsageLine(*u)
 	}
+	if f := r.Files; f != nil {
+		for _, p := range f.Paths {
+			out.Files = append(out.Files, p.Path)
+		}
+		out.FilesMore = f.More
+		for _, o := range f.Overlaps {
+			out.Overlaps = append(out.Overlaps, o.ID+" by "+o.By+"/"+o.Session)
+		}
+	}
 	if len(out.Items) > 0 {
 		out.Acceptance = ""
 	}
@@ -677,6 +709,9 @@ func show(ctx context.Context, c Conn, in ShowIn) (Issue, error) {
 	for size(out) > MaxResultTokens && len(out.NeededBy) > 0 {
 		out.NeededBy = out.NeededBy[:len(out.NeededBy)-1]
 		out.Truncated = true
+	}
+	for size(out) > MaxResultTokens && len(out.Files) > 0 {
+		out.Files, out.FilesMore = out.Files[:len(out.Files)-1], out.FilesMore+1
 	}
 	return out, nil
 }

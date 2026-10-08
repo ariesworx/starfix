@@ -230,6 +230,9 @@ func (n *NewIssue) normalize() error {
 	if err := validAccount(n.Account); err != nil {
 		return err
 	}
+	if _, err := checkPaths(n.Paths, true); err != nil {
+		return err
+	}
 	if n.ID != "" {
 		return n.ID.Validate()
 	}
@@ -245,6 +248,9 @@ func (s *Store) checkNew(in NewIssue) error {
 	}
 	if len(distinct) > s.opts.Limits.Labels {
 		return fmt.Errorf("%w: an issue has at most %d labels, not %d", ErrInvalid, s.opts.Limits.Labels, len(distinct))
+	}
+	if _, err := checkDeclared(in.Paths, s.opts.Limits.Paths); err != nil {
+		return err
 	}
 	return checkItems(in.Acceptance, s.opts.Limits.AcceptanceItems)
 }
@@ -263,8 +269,8 @@ func checkTitle(t string) error {
 // nothing, and the key reused for another request is refused with an
 // [*IdemError]. An assignee other than the actor gets an inbox item.
 //
-// Invalid input, or more labels or acceptance items than the store's
-// [Limits] allow, is refused with ErrInvalid; an ID in use with
+// Invalid input, or more labels, acceptance items or paths than the
+// store's [Limits] allow, is refused with ErrInvalid; an ID in use with
 // ErrExists; a parent that does not exist with ErrNotFound.
 func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issue, error) {
 	if err := in.normalize(); err != nil {
@@ -274,6 +280,10 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 		return Issue{}, err
 	}
 	meta, err := nullJSON(in.Metadata)
+	if err != nil {
+		return Issue{}, err
+	}
+	declared, err := checkDeclared(in.Paths, s.opts.Limits.Paths)
 	if err != nil {
 		return Issue{}, err
 	}
@@ -290,6 +300,9 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 		}
 		var err error
 		if out, err = insertIssue(ctx, w, id, in, meta); err != nil {
+			return err
+		}
+		if _, err := setDeclaredPaths(ctx, w, id, declared); err != nil {
 			return err
 		}
 		if err := w.settle(out); err != nil {
@@ -363,7 +376,10 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // make a cycle with ErrCycle. New acceptance text cannot tick items ("[x]"
 // counts only at create), and text that drops an item still open is
 // refused with an [*AcceptanceError] (Dropped): tick or waive it first,
-// so the change is on the record.
+// so the change is on the record. Paths replaces the declared paths, and
+// moves the rev when that changes them, so two replaces made at one rev
+// conflict rather than merge; more than the paths_per_issue limit is
+// refused with ErrInvalid.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -380,6 +396,12 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return Issue{}, err
 		}
 	}
+	var declared []string
+	if patch.Paths != nil {
+		if declared, err = checkDeclared(*patch.Paths, s.opts.Limits.Paths); err != nil {
+			return Issue{}, err
+		}
+	}
 	var out Issue
 	err = s.write(ctx, actor, func(w *wtx) error {
 		before, err := loadIssue(ctx, w.tx, id)
@@ -392,8 +414,8 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		if patch.Status != nil && before.Status == StatusClosed {
 			return &StateError{ID: id, Reason: StateClosed}
 		}
-		if len(sets) == 0 {
-			out = before
+		out = before
+		if len(sets) == 0 && patch.Paths == nil {
 			return nil
 		}
 		c, err := loadClaim(ctx, w.tx, id)
@@ -420,16 +442,31 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 				return err
 			}
 		}
-		out, err = casUpdate(ctx, w, before, sets, args)
-		if err != nil {
-			return err
+		pathsChanged := false
+		if patch.Paths != nil {
+			if pathsChanged, err = setDeclaredPaths(ctx, w, id, declared); err != nil {
+				return err
+			}
 		}
-		b, a := diff(before, out)
-		if err := w.event(ctx, OpIssueUpdate, string(id), b, a); err != nil {
-			return err
+		if len(sets) > 0 || pathsChanged {
+			// The paths live in their own table, so a paths-only change
+			// writes the issue row too: two replaces from one rev then
+			// write the same cells and conflict, rather than both
+			// committing and leaving their union.
+			if out, err = casUpdate(ctx, w, before, sets, args); err != nil {
+				return err
+			}
 		}
-		if out.Assignee != before.Assignee {
-			return w.notifyAssigned(ctx, out)
+		if len(sets) > 0 {
+			b, a := diff(before, out)
+			if err := w.event(ctx, OpIssueUpdate, string(id), b, a); err != nil {
+				return err
+			}
+			if out.Assignee != before.Assignee {
+				if err := w.notifyAssigned(ctx, out); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
@@ -448,14 +485,19 @@ const errClaimedFields = "status and assignee change only through finish, close 
 var ErrStatusInProgress = fmt.Errorf("%w: status in_progress is set only by start, which claims the issue", ErrInvalid)
 
 // casUpdateSQL is the one UPDATE of issues. {sets} comes from a fixed
-// column list, never from input.
-const casUpdateSQL = `UPDATE issues SET {sets}, updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`
+// column list, never from input; each set ends in ", ", and there may be
+// none.
+const casUpdateSQL = `UPDATE issues SET {sets}updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`
 
 // casUpdate writes sets to the issue at before.Rev, stamping rev and
 // write_id, and returns the new state.
 func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []any) (Issue, error) {
 	wid := randomInt63()
-	q := strings.Replace(casUpdateSQL, "{sets}", strings.Join(sets, ", "), 1)
+	var cols string
+	for _, set := range sets {
+		cols += set + ", "
+	}
+	q := strings.Replace(casUpdateSQL, "{sets}", cols, 1)
 	all := append(append([]any{}, args...), w.now, wid, string(before.ID), int64(before.Rev))
 	n, err := w.exec(ctx, q, all...)
 	if err != nil {

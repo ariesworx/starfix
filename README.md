@@ -159,7 +159,7 @@ binary, building from source and verifying a download by hand.
 | 0 | Dolt concurrency spike | Done |
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
-| 3 | Claims with leases, agents registry, inbox, event push, handoff, token capture | In progress (claims, agents registry, inbox, push, structured handoffs, and the server side of token capture built) |
+| 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, token capture | In progress (claims, agents registry, inbox, push, structured handoffs, files to issues, and the server side of token capture built) |
 | 4 | Team and personal memory with tags; prices and `sfx cost` | |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |

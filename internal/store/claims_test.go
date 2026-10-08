@@ -153,14 +153,14 @@ func TestRenewClaims(t *testing.T) {
 
 	// A renewal with most of the lease left writes nothing.
 	clk.add(time.Minute)
-	got, err := s.RenewClaims(ctx, alice, DefaultLease, false)
+	got, err := s.RenewClaims(ctx, alice, DefaultLease, false, nil)
 	if err != nil || len(got) != 1 || got[0].Issue != a.ID || !got[0].ExpiresAt.Equal(start.Add(DefaultLease)) {
 		t.Fatalf("early renew: %+v, %v", got, err)
 	}
 
 	// Past half the lease it extends, only for this session.
 	clk.add(8 * time.Minute)
-	got, err = s.RenewClaims(ctx, alice, DefaultLease, false)
+	got, err = s.RenewClaims(ctx, alice, DefaultLease, false, nil)
 	if err != nil || len(got) != 1 || !got[0].ExpiresAt.Equal(clk.now().Add(DefaultLease)) {
 		t.Fatalf("renew: %+v, %v", got, err)
 	}
@@ -170,7 +170,7 @@ func TestRenewClaims(t *testing.T) {
 
 	// Going away renews every session's claims, and a later short renewal
 	// never shortens them.
-	got, err = s.RenewClaims(ctx, alice, 4*time.Hour, true)
+	got, err = s.RenewClaims(ctx, alice, 4*time.Hour, true, nil)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("away: %+v, %v", got, err)
 	}
@@ -180,11 +180,11 @@ func TestRenewClaims(t *testing.T) {
 			t.Fatalf("away expiry: %+v", c)
 		}
 	}
-	if got, err := s.RenewClaims(ctx, alice2, DefaultLease, false); err != nil || !got[0].ExpiresAt.Equal(away) {
+	if got, err := s.RenewClaims(ctx, alice2, DefaultLease, false, nil); err != nil || !got[0].ExpiresAt.Equal(away) {
 		t.Fatalf("short renew after away: %+v, %v", got, err)
 	}
 
-	if _, err := s.RenewClaims(ctx, alice, time.Second, false); !errors.Is(err, ErrInvalid) {
+	if _, err := s.RenewClaims(ctx, alice, time.Second, false, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("short lease: %v", err)
 	}
 	if _, _, err := s.StartIssue(ctx, alice, a.ID, 8*24*time.Hour, false); !errors.Is(err, ErrInvalid) {
@@ -208,10 +208,10 @@ func TestClaimEndsOnCloseAndRelease(t *testing.T) {
 	}
 	// Release with a stale epoch is refused; with the current one it ends
 	// the claim and lets bob start it.
-	if _, err := s.HandoffIssue(ctx, alice, b.ID, 7, HandoffNote{Note: "n"}, true, ""); !errors.As(err, new(*StaleEpochError)) {
+	if _, err := s.HandoffIssue(ctx, alice, b.ID, 7, HandoffNote{Note: "n"}, true, "", nil); !errors.As(err, new(*StaleEpochError)) {
 		t.Fatalf("stale release: %v", err)
 	}
-	if _, err := s.HandoffIssue(ctx, alice, b.ID, 1, HandoffNote{Note: "over to you"}, true, ""); err != nil {
+	if _, err := s.HandoffIssue(ctx, alice, b.ID, 1, HandoffNote{Note: "over to you"}, true, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []IssueID{a.ID, b.ID} {

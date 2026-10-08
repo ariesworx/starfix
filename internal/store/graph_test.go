@@ -120,7 +120,7 @@ func TestReadyAndBlocked(t *testing.T) {
 
 func readyIDs(t *testing.T, s *Store) []IssueID {
 	t.Helper()
-	rs, err := s.Ready(t.Context(), 100)
+	rs, err := s.Ready(t.Context(), Actor{}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

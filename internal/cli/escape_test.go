@@ -57,7 +57,9 @@ func TestPrintEscapesControl(t *testing.T) {
 		Similar: []proto.Summary{sum},
 		Handoff: &proto.Handoff{Author: evil, Body: evilMD, CreatedAt: now,
 			State: "partial" + evil, Next: evil, Branch: evil, Worktree: evil, To: evil},
-		Usage: &proto.IssueUsage{Account: evil, AccountFrom: evil, HeldSeconds: 60, Models: evilModels}}
+		Usage: &proto.IssueUsage{Account: evil, AccountFrom: evil, HeldSeconds: 60, Models: evilModels},
+		Files: &proto.Files{Paths: []proto.FilePath{{Path: evil, Source: proto.PathDeclared}, {Path: evil, Source: proto.PathCommit}},
+			Overlaps: []proto.Overlap{{ID: "sf-b" + evil, By: evil, Session: evil}}}}
 	digestItem := proto.DigestItem{ID: "sf-d" + evil, Title: evil, By: evil, At: now, Note: evil, From: evil, BlockedBy: []string{evil}}
 	tests := []struct {
 		name  string
@@ -68,9 +70,15 @@ func TestPrintEscapesControl(t *testing.T) {
 			printIssueUsage(w, show.Issue.Account, show.Usage)
 			printItems(w, show.Items)
 			printHandoff(w, show.Handoff)
+			printFiles(w, show.Files)
 			printSimilar(w, show.Similar)
 		}},
 		{"list", func(w *bytes.Buffer) { printSummaries(w, []proto.Summary{sum}, nil) }},
+		{"ready", func(w *bytes.Buffer) {
+			s := sum
+			s.Overlaps = []string{"sf-b" + evil}
+			printReady(w, []proto.Summary{s})
+		}},
 		{"blocked", func(w *bytes.Buffer) {
 			printBlocked(w, []proto.BlockedIssue{{Summary: sum, BlockedBy: []string{evil}, Via: evil}})
 		}},

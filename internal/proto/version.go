@@ -27,7 +27,12 @@ import (
 // to 2 and protocol 1 clients are refused. A protocol 2 client never
 // sends usage and omits account, which leaves an issue inheriting its
 // account; show's usage and digest's usage are result fields, which it
-// ignores.
+// ignores. Then files to issues (design §12 item 3): paths on renew,
+// finish and handoff (the client's git), and declared paths on create and
+// update; ready's overlaps and show's files are result fields. Protocol 3
+// had not shipped in a release (v0.2.2 speaks 2), so they join it without
+// another bump; a protocol 2 client sends no paths, and nothing is
+// recorded for it.
 const (
 	Proto    = 3
 	ProtoMin = 2

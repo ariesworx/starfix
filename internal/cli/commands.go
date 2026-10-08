@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/gitx"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -78,13 +79,14 @@ func (r *runner) readTexts(f *fields) error {
 }
 
 func cmdCreate(ctx context.Context, r *runner, args []string) error {
-	const usage = "create TITLE... [-p N] [-t TYPE] [--body TEXT|-] [--parent ID] [--account NAME] [--label L]..."
+	const usage = "create TITLE... [-p N] [-t TYPE] [--body TEXT|-] [--parent ID] [--account NAME] [--label L]... [--paths P,P]"
 	fs := r.newFlags("create")
 	var f fields
 	f.register(fs, false)
-	var labels listFlag
+	var labels, paths listFlag
 	var id string
 	fs.Var(&labels, "label", "label (repeatable, or comma-separated)")
+	fs.Var(&paths, "paths", "files the work will touch, relative to here; a directory ends in / (repeatable, or comma-separated)")
 	fs.Var(&labels, "l", "label")
 	fs.StringVar(&id, "id", "", "issue id (default: generated)")
 	pos, err := parse(fs, args, usage)
@@ -101,6 +103,9 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 	in := proto.CreateArgs{ID: id, Idem: idem, Title: strings.Join(pos, " "), Body: f.body, Design: f.design,
 		Acceptance: f.acceptance, Notes: f.notes, Status: f.status, Type: f.typ, Assignee: f.assignee,
 		Owner: f.owner, Parent: f.parent, Labels: labels, Account: f.account}
+	if len(paths) > 0 {
+		in.Paths = gitx.RepoRelative(ctx, r.dir, paths)
+	}
 	if f.prio != "" {
 		p, err := priority(f.prio)
 		if err != nil {
@@ -191,6 +196,7 @@ func cmdShow(ctx context.Context, r *runner, args []string) error {
 	printIssueUsage(r.env.Stdout, out.Issue.Account, out.Usage)
 	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
+	printFiles(r.env.Stdout, out.Files)
 	if len(out.Similar) > 0 {
 		_, _ = fmt.Fprintln(r.env.Stdout)
 		printSimilar(r.env.Stdout, out.Similar)
@@ -355,7 +361,7 @@ func cmdReady(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	printSummaries(r.env.Stdout, out.Issues, nil)
+	printReady(r.env.Stdout, out.Issues)
 	return nil
 }
 
@@ -396,10 +402,12 @@ func printBlocked(w io.Writer, issues []proto.BlockedIssue) {
 }
 
 func cmdUpdate(ctx context.Context, r *runner, args []string) error {
-	const usage = "update ID [--rev N] [--title T] [--body TEXT|-] [--status S] [-p N] [-t TYPE] [--assignee A] [--parent ID] [--account NAME] ..."
+	const usage = "update ID [--rev N] [--title T] [--body TEXT|-] [--status S] [-p N] [-t TYPE] [--assignee A] [--parent ID] [--account NAME] [--paths P,P] ..."
 	fs := r.newFlags("update")
 	var f fields
 	f.register(fs, true)
+	var paths listFlag
+	fs.Var(&paths, "paths", "files the work will touch, replacing those declared; empty clears them")
 	rev := fs.Int64("rev", 0, "revision you read (default: the current one)")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
@@ -441,6 +449,11 @@ func cmdUpdate(ctx context.Context, r *runner, args []string) error {
 			return usagef(usage, "%v", err)
 		}
 		in.Priority = &p
+		n++
+	}
+	if set(fs, "paths") {
+		ps := gitx.RepoRelative(ctx, r.dir, paths)
+		in.Paths = &ps
 		n++
 	}
 	if n == 0 {

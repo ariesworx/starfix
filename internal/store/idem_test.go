@@ -25,7 +25,7 @@ func TestIdempotentReplay(t *testing.T) {
 		}},
 		{"handoff with release", func(t *testing.T, s *Store, id IssueID, key string) (any, error) {
 			return s.HandoffIssue(t.Context(), alice, id, 0, HandoffNote{Note: "over to you",
-				HandoffFields: HandoffFields{State: HandoffPartial}}, true, key)
+				HandoffFields: HandoffFields{State: HandoffPartial}}, true, key, nil)
 		}},
 		{"finish with discovered work", func(t *testing.T, s *Store, id IssueID, key string) (any, error) {
 			is, ids, err := s.FinishIssue(t.Context(), alice, id, 0, Finish{Reason: "done", IdempotencyKey: key,
@@ -86,7 +86,7 @@ func TestIdempotentReplayAfterRetry(t *testing.T) {
 		do func(ctx context.Context, s *Store, id IssueID) (any, error)
 	}{
 		{"handoff", func(ctx context.Context, s *Store, id IssueID) (any, error) {
-			return s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "over to you"}, false, "k-1")
+			return s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "over to you"}, false, "k-1", nil)
 		}},
 		{"finish", func(ctx context.Context, s *Store, id IssueID) (any, error) {
 			is, ids, err := s.FinishIssue(ctx, alice, id, 0, Finish{Reason: "done", IdempotencyKey: "k-1"})

@@ -400,6 +400,7 @@ limits:
 | `refusal_logs` | 20 | Refusal log lines per principal a minute |
 | `usage_records` | 500 | Token usage records in one `usage` call |
 | `usage_per_day` | 50000 | Token usage records one principal may add in 24 hours, counted by when the server stored them. Per principal, because a client can name any number of sessions |
+| `paths_per_issue` | 200 | Paths one issue keeps, declared and from commits, and the commit paths one `renew`, `finish` or `handoff` records. Too many declared paths are refused with `invalid`; past the cap, commit paths keep the request's first (most recent) and the issue's most recently recorded, and the request still succeeds |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.
@@ -533,6 +534,13 @@ how fast one principal can grow it.
 Token usage is one row per harness request in `token_usage`, about 200
 bytes each, also never pruned; a `usage` call adds one summary event, not
 one per row. `usage_per_day` bounds how fast one principal can grow it.
+
+An issue's paths are at most `paths_per_issue` rows in `issue_paths`. A
+call that adds paths records one `issue.paths` event listing at most 20;
+one that only sees paths already recorded refreshes their time and
+records nothing. A request carries at most 200 paths for an issue, and a
+`renew` paths for at most 50 issues, whatever `paths_per_issue` is;
+past either it is refused with `invalid`.
 
 Watch the size of `/var/lib/dolt/data`. If it grows, run `dolt gc` in a
 quiet hour: `cd /var/lib/dolt/data/starfix && sudo -u dolt -H dolt gc`.

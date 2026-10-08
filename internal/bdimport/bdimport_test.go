@@ -338,7 +338,7 @@ func TestImportBacklog(t *testing.T) {
 
 	// Ready and blocked see the imported graph: acme-7k2.1 waits on a
 	// closed bug, so it is not blocked by it.
-	ready, err := s.Ready(ctx, 50)
+	ready, err := s.Ready(ctx, store.Actor{}, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
