@@ -1,6 +1,8 @@
 package gitx
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,5 +167,46 @@ func TestAddWorktree(t *testing.T) {
 	wt3 := filepath.Join(t.TempDir(), "wt3")
 	if err := AddWorktree(t.Context(), dir, wt3, "fix/sf-c3d4"); err != nil || current(t, wt3) != "fix/sf-c3d4" {
 		t.Fatalf("existing branch: %v", err)
+	}
+}
+
+// A failed git command's error carries git's own message, or the cause's
+// when git printed none, and unwraps to the cause: the context's error, or
+// git's exit status.
+func TestGitErrors(t *testing.T) {
+	dir := newRepo(t)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, cancel := context.WithTimeout(t.Context(), 0)
+	defer cancel()
+	tests := []struct {
+		name string
+		run  func() error
+		is   error  // the cause errors.Is must find, or nil for an exit status
+		exit int    // the exit status errors.As must find, when is is nil
+		msg  string // the start of the message
+	}{
+		{name: "cancelled context", run: func() error { _, err := git(cancelled, dir, "status"); return err },
+			is: context.Canceled, msg: "git status: context canceled"},
+		{name: "expired context", run: func() error { _, err := git(expired, dir, "status"); return err },
+			is: context.DeadlineExceeded, msg: "git status: context deadline exceeded"},
+		{name: "git refuses", run: func() error { _, err := git(t.Context(), dir, "rev-parse", "--verify", "refs/heads/none"); return err },
+			exit: 128, msg: "git rev-parse: fatal: "},
+		{name: "switch outside a repository", run: func() error { return Switch(t.Context(), t.TempDir(), "fix/sf-a1b2") },
+			exit: 128, msg: "git rev-parse: fatal: not a git repository"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil || !strings.HasPrefix(err.Error(), tc.msg) || strings.Contains(err.Error(), "exit status") {
+				t.Errorf("error = %v, want git's message, starting %q", err, tc.msg)
+			}
+			if tc.is != nil && !errors.Is(err, tc.is) {
+				t.Errorf("errors.Is(%v, %v) = false, want true", err, tc.is)
+			}
+			if ee, ok := errors.AsType[*exec.ExitError](err); tc.is == nil && (!ok || ee.ExitCode() != tc.exit) {
+				t.Errorf("error %v does not unwrap to git's exit status %d", err, tc.exit)
+			}
+		})
 	}
 }
