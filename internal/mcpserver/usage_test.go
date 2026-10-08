@@ -35,11 +35,11 @@ func TestShowAndDigestCarryUsage(t *testing.T) {
 	}{
 		{name: "split tokens", show: &proto.IssueUsage{Account: "acme", AccountFrom: "sf-0", HeldSeconds: 4500, Split: true,
 			Models: []proto.ModelTokens{gemini, opus}},
-			digest: &proto.DigestUsage{HeldSeconds: 6000, Models: []proto.ModelTokens{opus},
+			digest: &proto.DigestUsage{HeldSeconds: 6000, Split: true, Models: []proto.ModelTokens{opus},
 				Unattributed: []proto.ModelTokens{{Model: "opus", Tokens: proto.Tokens{Input: n64(7)}}}},
 			account:    "acme",
 			showLine:   "held 1h; opus 950 in, 12.3k out, 1.5M cache write, 2B cache read; gemini 0 out; split by time",
-			digestLine: "held 1h; opus 950 in, 12.3k out, 1.5M cache write, 2B cache read; unattributed: opus 7 in"},
+			digestLine: "held 1h; opus 950 in, 12.3k out, 1.5M cache write, 2B cache read; unattributed: opus 7 in; split by time"},
 		{name: "never held", show: &proto.IssueUsage{Account: "internal"}, account: "internal"},
 		{name: "many models", show: &proto.IssueUsage{Account: "internal", HeldSeconds: 60, Models: many},
 			digest:  &proto.DigestUsage{HeldSeconds: 60, Models: many, Unattributed: many},

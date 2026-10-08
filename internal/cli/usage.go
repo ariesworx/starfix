@@ -46,7 +46,11 @@ func printDigestUsage(w io.Writer, u *proto.DigestUsage) {
 	if u == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(w, "held %s\n", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
+	_, _ = fmt.Fprintf(w, "held %s", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
+	if u.Split {
+		_, _ = fmt.Fprint(w, "; some tokens split by time")
+	}
+	_, _ = fmt.Fprintln(w)
 	printModels(w, "tokens", u.Models)
 	printModels(w, "unattributed", u.Unattributed)
 }

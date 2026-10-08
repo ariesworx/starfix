@@ -42,7 +42,8 @@ func wireDigestUsage(u store.DigestUsage) *proto.DigestUsage {
 	if u.Held == 0 && len(u.Models) == 0 {
 		return nil
 	}
-	return &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed)}
+	return &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed),
+		Split: u.Split}
 }
 
 // wireModels converts the store's sums, in model order. Past

@@ -180,8 +180,9 @@ yet; the server accepts records through the `usage` operation.)
 **Attribution** is worked out when you read it, from the claim history,
 and never stored. A request goes to the issue its session held at that
 moment. A turn or session record that spans several issues is split by
-time held, and `show` says some tokens were split; a stretch when the
-session held nothing stays unattributed, and `digest` counts it apart.
+time held, and `show` and `digest` say some tokens were split; a stretch
+when the session held nothing stays unattributed, and `digest` counts it
+apart.
 Splitting by time is an estimate when a session switches issues. A
 record is split in whole tokens, so the parts add up to the record: the
 issues' tokens plus the unattributed ones are the total.

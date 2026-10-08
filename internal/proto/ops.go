@@ -606,6 +606,9 @@ type DigestUsage struct {
 	HeldSeconds  int64         `json:"held_seconds"`
 	Models       []ModelTokens `json:"models,omitempty"`
 	Unattributed []ModelTokens `json:"unattributed,omitempty"`
+	// Split is set when a record in the window was split by time, among
+	// issues or with time none was held, so the parts are estimates.
+	Split bool `json:"split,omitempty"`
 }
 
 // Span formats a duration compactly for people and agents: 45m, 5h, 3d4h.

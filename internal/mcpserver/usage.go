@@ -48,6 +48,9 @@ func digestUsageLine(u proto.DigestUsage) string {
 	if m := modelsLine(u.Unattributed); m != "" {
 		parts = append(parts, "unattributed: "+m)
 	}
+	if u.Split {
+		parts = append(parts, "split by time")
+	}
 	return strings.Join(parts, "; ")
 }
 

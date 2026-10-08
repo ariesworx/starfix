@@ -218,3 +218,22 @@ func TestUsageModelsCapped(t *testing.T) {
 	check("show", mustCall[proto.ShowResult](t, s, alice, proto.OpShow, proto.ShowArgs{ID: is.ID}).Usage.Models)
 	check("digest", mustCall[proto.DigestResult](t, s, alice, proto.OpDigest, proto.DigestArgs{}).Usage.Models)
 }
+
+// A turn that began before its issue was started is split between the
+// issue and unattributed time, and the digest says so, as show does.
+func TestDigestUsageSplit(t *testing.T) {
+	s := newServer(t)
+	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "begun mid-turn"})
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: is.ID})
+	at := time.Now().UTC()
+	turn := usageRec("turn", at, 100)
+	turn.Granularity, turn.SpanStart = "turn", ptr(at.Add(-time.Hour))
+	mustCall[proto.UsageResult](t, s, alice, proto.OpUsage, proto.UsageArgs{Records: []proto.UsageRecord{turn}})
+
+	if u := mustCall[proto.ShowResult](t, s, alice, proto.OpShow, proto.ShowArgs{ID: is.ID}).Usage; u == nil || !u.Split {
+		t.Errorf("show(%s).usage = %+v, want split", is.ID, u)
+	}
+	if u := mustCall[proto.DigestResult](t, s, alice, proto.OpDigest, proto.DigestArgs{}).Usage; u == nil || !u.Split {
+		t.Errorf("digest usage = %+v, want split", u)
+	}
+}

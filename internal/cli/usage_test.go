@@ -57,6 +57,11 @@ func TestPrintDigestUsage(t *testing.T) {
 		t.Errorf("printDigestUsage =\n%s\nwant\n%s", b.String(), want)
 	}
 	b.Reset()
+	printDigestUsage(&b, &proto.DigestUsage{HeldSeconds: 600, Split: true, Models: []proto.ModelTokens{{Model: "opus", Tokens: proto.Tokens{Input: n(9)}}}})
+	if want := "held 10m; some tokens split by time\ntokens opus: 9 in\n"; b.String() != want {
+		t.Errorf("printDigestUsage(split) =\n%s\nwant\n%s", b.String(), want)
+	}
+	b.Reset()
 	printDigestUsage(&b, nil)
 	if b.Len() != 0 {
 		t.Errorf("printDigestUsage(nil) = %q, want nothing", b.String())
