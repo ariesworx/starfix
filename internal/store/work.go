@@ -178,7 +178,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	}{id, epoch, f}
 	var out finished
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, f.IdempotencyKey, "finish", req, &out); done || err != nil {
+		if done, err := replay(ctx, w, f.IdempotencyKey, "finish", req, &out); done || err != nil {
 			return err
 		}
 		before, err := loadIssue(ctx, w.tx, id)
@@ -263,7 +263,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 	}
 	var out Issue
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, idem, "handoff", req, &out); done || err != nil {
+		if done, err := replay(ctx, w, idem, "handoff", req, &out); done || err != nil {
 			return err
 		}
 		before, err := loadIssue(ctx, w.tx, id)

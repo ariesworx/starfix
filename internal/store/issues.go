@@ -274,7 +274,7 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 	}
 	var out Issue
 	err = s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, in.IdempotencyKey, "create", in, &out); done || err != nil {
+		if done, err := replay(ctx, w, in.IdempotencyKey, "create", in, &out); done || err != nil {
 			return err
 		}
 		var err error

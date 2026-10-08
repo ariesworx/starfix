@@ -82,7 +82,7 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, i
 	}
 	var c Comment
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, idem, "comment", struct {
+		if done, err := replay(ctx, w, idem, "comment", struct {
 			ID   IssueID
 			Body string
 		}{id, body}, &c); done || err != nil {
