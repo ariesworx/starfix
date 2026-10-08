@@ -345,6 +345,10 @@ type replay struct {
 	tx       []sevent             // events of the transaction being read
 	txs      int
 
+	// ambiguous counts releasing-or-not handoffs of a held issue not in
+	// progress; unlogged, the claims later found released by one.
+	ambiguous, unlogged int
+
 	mu        sync.Mutex // guards the replay between snapshots
 	openCount int        // issues not closed, as of the last snapshot
 }
@@ -618,6 +622,7 @@ func (r *replay) comment(e sevent, f txFacts) {
 	r.handedAt[c.Body] = atEpoch{issue: e.target, epoch: cl.epoch, holder: cl.holder, actor: e.actor, seq: e.seq}
 	if !f.update[e.target] && cl.holder != (sessKey{}) && r.issues[e.target].status != "in_progress" {
 		cl.maybeReleased = true
+		r.ambiguous++
 	}
 }
 
@@ -655,6 +660,8 @@ func (r *replay) take(e sevent) {
 	switch {
 	case before == nil && c.holder != (sessKey{}) && !c.maybeReleased:
 		r.fail(e.target, "event %d takes epoch %d without naming %s, who held epoch %d", e.seq, after.Epoch, c.holder, c.epoch)
+	case before == nil && c.holder != (sessKey{}):
+		r.unlogged++ // the handoff did release it
 	case before != nil && c.holder == (sessKey{}):
 		r.fail(e.target, "event %d replaces a claim by %s/%s, but no claim was held", e.seq, before.Holder.Principal, before.Holder.Session)
 	case before != nil && (before.Holder.Principal != c.holder.principal || before.Holder.Session != c.holder.session || before.Epoch != c.epoch):

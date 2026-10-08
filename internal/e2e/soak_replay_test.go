@@ -395,3 +395,23 @@ func TestCheckFencing(t *testing.T) {
 		})
 	}
 }
+
+// A releasing handoff of an issue that is not in progress clears the
+// claim without an event of its own, so the replay cannot tell it from a
+// handoff that kept the claim until the next take, or the table, says.
+func TestReplayAmbiguousRelease(t *testing.T) {
+	alice, bob := sessKey{"alice", "s1"}, sessKey{"bob", "s1"}
+	b := newLog().create(alice, "sf-1").take(alice, "sf-1", 1, time.Minute, "")
+	b.add(0, alice, "issue.update", "sf-1", `{"status": "open"}`, `{"status": "in_progress", "assignee": "alice"}`)
+	b.at += 5 * time.Minute // the lease lapsed; the reaper has not run
+	b.add(time.Minute, bob, "issue.update", "sf-1", `{"status": "in_progress", "assignee": "alice"}`, `{"status": "blocked", "assignee": null}`)
+	b.add(time.Minute, alice, "comment.add", "sf-1", "", `{"body": "handoff alice-2", "kind": "handoff"}`)
+	b.take(bob, "sf-1", 2, time.Minute, "")
+	var got []string
+	r := newReplay(func(_, format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) }, nil)
+	r.feed(b.evs)
+	r.flush()
+	if len(got) > 0 || r.ambiguous != 1 || r.unlogged != 1 {
+		t.Errorf("replay found %q, %d ambiguous and %d unlogged releases; want none, 1 and 1", got, r.ambiguous, r.unlogged)
+	}
+}
