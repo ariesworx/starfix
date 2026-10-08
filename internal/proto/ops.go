@@ -244,7 +244,7 @@ type IssueUsage struct {
 // or session ("granularity": request, turn or session). RequestID is the
 // harness's id for it: the server keeps one record per session and id,
 // so sending it again changes nothing. At is the time the source gives;
-// SpanStart starts a turn's or session's span.
+// SpanStart starts a turn's or session's span, at most 7 days before At.
 type UsageRecord struct {
 	Harness     string     `json:"harness"`
 	RequestID   string     `json:"request_id"`
