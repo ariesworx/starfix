@@ -182,4 +182,6 @@ and never stored. A request goes to the issue its session held at that
 moment. A turn or session record that spans several issues is split by
 time held, and `show` says some tokens were split; a stretch when the
 session held nothing stays unattributed, and `digest` counts it apart.
-Splitting by time is an estimate when a session switches issues.
+Splitting by time is an estimate when a session switches issues. A
+record is split in whole tokens, so the parts add up to the record: the
+issues' tokens plus the unattributed ones are the total.

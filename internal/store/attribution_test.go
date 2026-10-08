@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +368,67 @@ func TestDigestUsage(t *testing.T) {
 					tc.f, u.Held, modelsText(u.Models), modelsText(u.Unattributed), tc.held, tc.models, tc.unattributed)
 			}
 		})
+	}
+}
+
+// A record divided among issues and unheld time divides in whole tokens
+// that add back up to it: the issues' parts and the digest's unattributed
+// part sum to the digest's total, with nothing lost or invented by
+// rounding.
+func TestUsagePartsSumToRecord(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now()
+	var ids []IssueID
+	for _, title := range []string{"x", "y", "z"} {
+		is := mustCreate(t, s, NewIssue{Title: title})
+		if _, _, err := s.StartIssue(ctx, alice, is.ID, time.Hour, false); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, is.ID)
+	}
+	clk.add(10 * time.Minute)
+	mustAddUsage(t, s, alice,
+		// Three ways at an instant: 10 is 4, 3 and 3, not 3 each.
+		rec("three", "opus", t0.Add(time.Minute), 10, 1),
+		// A third unheld, the rest three ways: 7 is 2 unattributed and
+		// 2, 2 and 1, not 2 each.
+		UsageRecord{Harness: "codex", RequestID: "turn", Model: "opus", At: t0.Add(2 * time.Minute),
+			Granularity: GranularityTurn, SpanStart: ptr(t0.Add(-time.Minute)), Tokens: Tokens{Input: n64(7), Output: n64(5)}},
+	)
+	d, err := s.Digest(ctx, DigestFilter{Since: t0.Add(-time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Usage.Models) != 1 || len(d.Usage.Unattributed) != 1 {
+		t.Fatalf("Digest usage: models %q unattributed %q; want one model each",
+			modelsText(d.Usage.Models), modelsText(d.Usage.Unattributed))
+	}
+	total, loose := d.Usage.Models[0], d.Usage.Unattributed[0]
+	sumIn, sumOut := *loose.Input, *loose.Output
+	for _, id := range ids {
+		u := mustUsage(t, s, id)
+		if len(u.Models) != 1 {
+			t.Fatalf("IssueUsage(%s).Models = %q, want one model", id, modelsText(u.Models))
+		}
+		sumIn += *u.Models[0].Input
+		sumOut += *u.Models[0].Output
+	}
+	if sumIn != *total.Input || sumOut != *total.Output {
+		t.Errorf("issues plus unattributed = %d in, %d out; digest total %s; want them equal",
+			sumIn, sumOut, tokensText(total))
+	}
+	if want := "opus 17/6/?/?/?"; tokensText(total) != want {
+		t.Errorf("digest total = %q, want %q", tokensText(total), want)
+	}
+	// Leftover tokens go to the largest remainders, ties in issue order.
+	slices.Sort(ids)
+	for i, want := range []string{"opus 6/2/?/?/?", "opus 5/1/?/?/?", "opus 4/1/?/?/?"} {
+		if got := modelsText(mustUsage(t, s, ids[i]).Models); got != want {
+			t.Errorf("IssueUsage(%s, issue %d of 3 by id) = %q, want %q", ids[i], i+1, got, want)
+		}
+	}
+	if want := "opus 2/2/?/?/?"; tokensText(loose) != want {
+		t.Errorf("digest unattributed = %q, want %q", tokensText(loose), want)
 	}
 }

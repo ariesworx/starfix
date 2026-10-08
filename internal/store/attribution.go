@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -63,9 +64,10 @@ type UsageSummary struct {
 	Capped bool
 }
 
-// ModelUsage is one model's tokens, rounded to whole tokens. A count is
-// nil when no record that contributed reported it; otherwise it sums the
-// records that did.
+// ModelUsage is one model's tokens. A count is nil when no record that
+// contributed reported it; otherwise it sums the records that did, or
+// their parts. A record is divided in whole tokens whose parts sum to it,
+// so the issues' parts and the unattributed part add up to the total.
 type ModelUsage struct {
 	Model string
 	Tokens
@@ -146,18 +148,17 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 	}
 	var sum usageSum
 	for _, r := range rows {
-		share := shares(r, holds[r.key])[id]
-		if share > 0 {
-			sum.add(r, share)
-			out.Split = out.Split || share < 1-splitEpsilon
+		d := divide(r, holds[r.key])
+		i := d.part(id)
+		if i < 0 {
+			continue
 		}
+		sum.add(r, func(n int64) int64 { return d.parts(n)[i] })
+		out.Split = out.Split || d.split()
 	}
 	out.Models = sum.models()
 	return out, nil
 }
-
-// splitEpsilon absorbs float error in a share that is really whole.
-const splitEpsilon = 1e-9
 
 // claimEventOps are the events that open or may end a claim.
 var claimEventOps = []Op{OpClaimTake, OpClaimExpire, OpIssueClose, OpIssueUpdate, OpIssueImport}
@@ -368,22 +369,30 @@ func readUsage(ctx context.Context, q querier, where string, limit int, args ...
 	return out, false, nil
 }
 
-// shares divides a record among the issues its session held: by issue,
-// the fraction of the record that is the issue's. What is left of 1 is
-// unattributed.
-func shares(r usageRow, holds []hold) map[IssueID]float64 {
-	out := map[IssueID]float64{}
+// division is how one record divides: the issues its session held over
+// it, sorted, each with a weight, then the weight of the time no issue
+// was held, last. A weight is time held in nanoseconds, or 1 each for an
+// instant; time held by several issues at once counts for each in equal
+// shares.
+type division struct {
+	issues  []IssueID
+	weights []float64
+}
+
+// divide divides r among holds, its session's.
+func divide(r usageRow, holds []hold) division {
+	w := map[IssueID]float64{}
+	var unheld float64
 	if !r.from.Before(r.to) {
-		var held []IssueID
 		for _, h := range holds {
 			if !r.to.Before(h.start) && r.to.Before(h.end) {
-				held = append(held, h.issue)
+				w[h.issue] = 1
 			}
 		}
-		for _, id := range held {
-			out[id] += 1 / float64(len(held))
+		if len(w) == 0 {
+			unheld = 1
 		}
-		return out
+		return newDivision(w, unheld)
 	}
 	// Cut the span at every hold boundary inside it; each piece is then
 	// wholly held, or not, by each hold.
@@ -397,7 +406,6 @@ func shares(r usageRow, holds []hold) map[IssueID]float64 {
 	}
 	slices.SortFunc(cuts, time.Time.Compare)
 	cuts = slices.CompactFunc(cuts, time.Time.Equal)
-	whole := float64(r.to.Sub(r.from))
 	for i := range len(cuts) - 1 {
 		a, b := cuts[i], cuts[i+1]
 		var held []IssueID
@@ -406,11 +414,97 @@ func shares(r usageRow, holds []hold) map[IssueID]float64 {
 				held = append(held, h.issue)
 			}
 		}
+		if len(held) == 0 {
+			unheld += float64(b.Sub(a))
+		}
 		for _, id := range held {
-			out[id] += float64(b.Sub(a)) / whole / float64(len(held))
+			w[id] += float64(b.Sub(a)) / float64(len(held))
 		}
 	}
-	return out
+	return newDivision(w, unheld)
+}
+
+// newDivision orders weights by issue and puts unheld last.
+func newDivision(w map[IssueID]float64, unheld float64) division {
+	d := division{issues: slices.Sorted(maps.Keys(w))}
+	for _, id := range d.issues {
+		d.weights = append(d.weights, w[id])
+	}
+	d.weights = append(d.weights, unheld)
+	return d
+}
+
+// part is the bucket of issue id, or -1 if the record has none for it.
+func (d division) part(id IssueID) int {
+	if i, ok := slices.BinarySearch(d.issues, id); ok && d.weights[i] > 0 {
+		return i
+	}
+	return -1
+}
+
+// unheld is the bucket of the time no issue was held.
+func (d division) unheld() int { return len(d.issues) }
+
+// split reports whether the record divides into more than one part.
+func (d division) split() bool { return d.positive() > 1 }
+
+// positive counts the parts with weight.
+func (d division) positive() int {
+	n := 0
+	for _, w := range d.weights {
+		if w > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// parts divides a count n by the division's weights, in whole tokens
+// that sum to n.
+func (d division) parts(n int64) []int64 { return apportion(n, d.weights) }
+
+// apportion divides n into parts in proportion to weights, which are not
+// negative and not all zero, by the largest-remainder method: each part
+// is its quota rounded down, and what that leaves goes one each to the
+// parts with the largest remainders, ties to the earlier part. The parts
+// sum to n, and a part with no weight gets nothing.
+func apportion(n int64, weights []float64) []int64 {
+	var total float64
+	for _, w := range weights {
+		total += w
+	}
+	parts := make([]int64, len(weights))
+	rems := make([]float64, len(weights))
+	var order []int // the parts with weight, by remainder, largest first
+	left := n
+	for i, w := range weights {
+		if w <= 0 {
+			continue
+		}
+		q := float64(n) * (w / total)
+		f := math.Floor(q)
+		parts[i], rems[i] = int64(f), q-f
+		left -= parts[i]
+		order = append(order, i)
+	}
+	if len(order) == 0 {
+		return parts
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(rems[b], rems[a]) })
+	// Exact quotas leave fewer tokens than there are parts. Float error
+	// can leave one more, or take one too many; the loops settle either.
+	for i := 0; left > 0; i, left = i+1, left-1 {
+		parts[order[i%len(order)]]++
+	}
+	for left < 0 {
+		for _, j := range slices.Backward(order) {
+			if left < 0 && parts[j] > 0 {
+				parts[j]--
+				left++
+			}
+		}
+	}
+	return parts
 }
 
 // usageSum adds up records, or parts of them, by model.
@@ -418,12 +512,12 @@ type usageSum map[string]*modelSum
 
 // modelSum is one model's running counts, and which were ever known.
 type modelSum struct {
-	n     [5]float64
+	n     [5]int64
 	known [5]bool
 }
 
-// add adds share of r.
-func (u *usageSum) add(r usageRow, share float64) {
+// add adds part(c) for each count c that r reports.
+func (u *usageSum) add(r usageRow, part func(int64) int64) {
 	if *u == nil {
 		*u = usageSum{}
 	}
@@ -434,21 +528,23 @@ func (u *usageSum) add(r usageRow, share float64) {
 	}
 	for i, c := range []*int64{r.Input, r.Output, r.CacheWrite, r.CacheWrite1h, r.CacheRead} {
 		if c != nil {
-			m.n[i] += float64(*c) * share
+			m.n[i] += part(*c)
 			m.known[i] = true
 		}
 	}
 }
 
-// models returns the sums by model, sorted, rounded to whole tokens.
+// whole is the part of a count that is all of it.
+func whole(n int64) int64 { return n }
+
+// models returns the sums by model, sorted.
 func (u usageSum) models() []ModelUsage {
 	var out []ModelUsage
 	for model, m := range u {
 		mu := ModelUsage{Model: model}
 		for i, p := range []**int64{&mu.Input, &mu.Output, &mu.CacheWrite, &mu.CacheWrite1h, &mu.CacheRead} {
 			if m.known[i] {
-				v := int64(math.Round(m.n[i]))
-				*p = &v
+				*p = &m.n[i]
 			}
 		}
 		out = append(out, mu)
@@ -539,24 +635,32 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 	}
 	var total, loose usageSum
 	for _, r := range rows {
-		attributed := 0.0
-		for id, sh := range shares(r, bySession[r.key]) {
-			if counts(id) {
-				attributed += sh
+		d := divide(r, bySession[r.key])
+		if q.f.Label == "" {
+			total.add(r, whole)
+			if un := d.unheld(); d.weights[un] > 0 {
+				loose.add(r, func(n int64) int64 { return d.parts(n)[un] })
+			}
+			u.Split = u.Split || d.split()
+			continue
+		}
+		var in []int // the labeled issues' parts
+		for i, id := range d.issues {
+			if d.weights[i] > 0 && counts(id) {
+				in = append(in, i)
 			}
 		}
-		switch {
-		case q.f.Label != "":
-			if attributed > 0 {
-				total.add(r, attributed)
-				u.Split = u.Split || attributed < 1-splitEpsilon
-			}
-		default:
-			total.add(r, 1)
-			if rest := 1 - attributed; rest > splitEpsilon {
-				loose.add(r, rest)
-			}
+		if len(in) == 0 {
+			continue
 		}
+		total.add(r, func(n int64) int64 {
+			p, sum := d.parts(n), int64(0)
+			for _, i := range in {
+				sum += p[i]
+			}
+			return sum
+		})
+		u.Split = u.Split || d.positive() > len(in)
 	}
 	u.Models, u.Unattributed = total.models(), loose.models()
 	return nil
