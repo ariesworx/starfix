@@ -132,8 +132,11 @@ follow once their formats are checked against real files. Every harness
 still gets the time each issue was held.
 
 Setup adds `sfx usage --hook` to Claude Code's Stop, SubagentStop and
-SessionEnd hooks, with `"async": true`, so the turn never waits on the
-server, and a 30-second timeout. Each run:
+SessionEnd hooks. Stop and SubagentStop run with `"async": true`, so the
+turn never waits on the server, and a 30-second timeout. SessionEnd runs
+synchronously with a 10-second timeout: it sends the session's last
+response, and Claude Code waits for it as it exits, where an async hook
+might not finish. Each run:
 
 - reads the session's transcript, named by the hook's `transcript_path`,
   and its subagents' transcripts beside it
@@ -151,10 +154,16 @@ server, and a 30-second timeout. Each run:
   records, so a failed send is retried by the next hook, and the server
   keeps one record per request, so nothing is counted twice;
 - waits for a response to finish. Claude Code writes a response one line
-  per content block, its output count growing to the last line's, so a
-  response is sent only once a later line follows it. A file's last
-  response waits for the next hook, and SessionEnd sends whatever is
-  left.
+  per content block, its output count growing to the last line's, and
+  tools run while it streams, so tool results can fall among its lines.
+  A response is sent only once a line of the next response follows it,
+  since the next request starts only after it ends. A file's last
+  response waits for the next hook; SubagentStop sends the stopped
+  subagent's, and SessionEnd whatever is left;
+- drops a record the server refuses as invalid, such as one dated more
+  than an hour past the server's clock, so it cannot hold back the
+  records after it, and says so. A server that is busy or unreachable
+  drops nothing: the next hook sends the records again.
 
 **Only counts leave your machine.** The transcripts hold your whole
 conversation, but `sfx` reads them locally and keeps only the fields
@@ -163,16 +172,20 @@ printed. The connection is the same SSH connection every `sfx` command
 uses.
 
 The hook exits 0 whatever happens and prints nothing outside a starfix
-repository or when there is nothing new. Otherwise a failure is one line
-on stderr with a fix. If Claude Code changes its transcript format so
-that `sfx` cannot read a response's usage, the hook sends nothing for
-that file, says the format was not recognized and names the Claude Code
-version; it never guesses counts. Upgrading `sfx` picks the file up where
-it stopped.
+repository or when there is nothing new. Otherwise it writes one line to
+stderr with a fix. Claude Code keeps hook output out of the
+conversation, so the line may go unseen; `claude --debug` shows it.
 
-A repository set up before these hooks existed has the session-start
-hook alone: `sfx setup claude-code --check` names the missing hooks, and
-`--write` adds them.
+If Claude Code changes its transcript format, `sfx` never guesses
+counts. When none of the response lines new in a file can be read, the
+hook sends nothing for it, says the format was not recognized, names the
+Claude Code version, and keeps the file's offset, so an upgraded `sfx`
+reads those lines. Lines it cannot read among lines it can are skipped,
+and the offset moves past them: an upgrade does not recover those.
+
+An older setup upgrades with `sfx setup claude-code --write`. One from
+before these hooks has the session-start hook alone, and one from their
+first release runs SessionEnd async; `--check` names the hooks to fix.
 
 ## Tools
 
