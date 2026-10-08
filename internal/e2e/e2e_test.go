@@ -676,7 +676,7 @@ func TestOlderClientWarns(t *testing.T) {
 func TestRestartDaemonFails(t *testing.T) {
 	w := newWorld(t, daemonOpts{})
 	// The listener refuses a socket directory others can read.
-	if err := os.Chmod(filepath.Dir(w.socket), 0o755); err != nil {
+	if err := os.Chmod(filepath.Dir(w.socket), 0o755); err != nil { //nolint:gosec // the mode the listener must refuse
 		t.Fatal(err)
 	}
 	if err := w.restartDaemon(); err == nil || !strings.Contains(err.Error(), "chmod 700") {
