@@ -31,6 +31,12 @@ type Terminal struct {
 	// Restore puts the terminal back as it was. Run calls it once, on
 	// every way out.
 	Restore func()
+	// Continued receives when the process continues after being stopped
+	// (SIGCONT); nil where nothing says so.
+	Continued <-chan os.Signal
+	// Resume takes the terminal over again after a stop, during which
+	// the shell may have put it back as it was.
+	Resume func()
 }
 
 // Run shows the board titled title on t, kept current by live through
@@ -119,6 +125,10 @@ func Run(ctx context.Context, title string, t Terminal, live *Live, conn Conn) e
 			}
 			draw()
 		case <-t.Resized:
+			draw()
+		case <-t.Continued:
+			t.Resume()
+			last = nil // the screen may hold anything now
 			draw()
 		case <-tick.C:
 			draw()

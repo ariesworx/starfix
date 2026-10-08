@@ -35,11 +35,11 @@ func IsTerminal(in io.Reader, out io.Writer) bool {
 // arrive one at a time and unechoed, on the alternate screen with the
 // cursor hidden. Restore gives it back.
 type Screen struct {
-	in    io.Reader
-	out   io.Writer
-	outFd int
-	undo  []func()
-	once  sync.Once
+	in          io.Reader
+	out         io.Writer
+	inFd, outFd int
+	undo        []func()
+	once        sync.Once
 }
 
 // OpenScreen takes over the terminal that in and out are, which must
@@ -50,7 +50,7 @@ func OpenScreen(in io.Reader, out io.Writer) (*Screen, error) {
 	if !ok || !ok2 {
 		return nil, fmt.Errorf("open screen: not a terminal")
 	}
-	s := &Screen{in: in, out: out, outFd: outFd}
+	s := &Screen{in: in, out: out, inFd: inFd, outFd: outFd}
 	state, err := term.MakeRaw(inFd)
 	if err != nil {
 		return nil, fmt.Errorf("raw mode: %w", err)
@@ -62,9 +62,20 @@ func OpenScreen(in io.Reader, out io.Writer) (*Screen, error) {
 		return nil, err
 	}
 	s.undo = append(s.undo, vt)
-	_, _ = io.WriteString(out, "\x1b[?1049h\x1b[?25l") // alternate screen, cursor hidden
+	_, _ = io.WriteString(out, enterScreen)
 	s.undo = append(s.undo, func() { _, _ = io.WriteString(out, "\x1b[?25h\x1b[?1049l") })
 	return s, nil
+}
+
+// enterScreen switches to the alternate screen and hides the cursor.
+const enterScreen = "\x1b[?1049h\x1b[?25l"
+
+// Resume takes the terminal over again after the process was stopped
+// and continued, since the shell may have put it back meanwhile. Restore
+// still puts back the modes OpenScreen found.
+func (s *Screen) Resume() {
+	_, _ = term.MakeRaw(s.inFd) // a failure leaves keys line-buffered; the board still draws
+	_, _ = io.WriteString(s.out, enterScreen)
 }
 
 // Restore leaves the alternate screen, shows the cursor and puts the
@@ -89,8 +100,9 @@ func (s *Screen) Size() (int, int) {
 }
 
 // Terminal returns the Terminal for Run on s; color allows color codes.
-// stop ends the resize notices; call it once Run returns.
+// stop ends the resize and continue notices; call it once Run returns.
 func (s *Screen) Terminal(color bool) (t Terminal, stop func()) {
-	resized, stop := notifyResize()
-	return Terminal{In: s.in, Out: s.out, Size: s.Size, Resized: resized, Color: color, Restore: s.Restore}, stop
+	resized, continued, stop := notify()
+	return Terminal{In: s.in, Out: s.out, Size: s.Size, Resized: resized, Color: color, Restore: s.Restore,
+		Continued: continued, Resume: s.Resume}, stop
 }

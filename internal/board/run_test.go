@@ -21,12 +21,14 @@ type screen struct {
 	out      bytes.Buffer
 	w, h     int
 	resized  chan os.Signal
+	cont     chan os.Signal
 	restored atomic.Int32
+	resumed  atomic.Int32
 }
 
 func newScreen(w, h int) *screen {
 	in, keys := io.Pipe()
-	return &screen{keys: keys, in: in, w: w, h: h, resized: make(chan os.Signal, 1)}
+	return &screen{keys: keys, in: in, w: w, h: h, resized: make(chan os.Signal, 1), cont: make(chan os.Signal, 1)}
 }
 
 func (s *screen) Write(p []byte) (int, error) {
@@ -48,7 +50,8 @@ func (s *screen) size() (int, int) {
 }
 
 func (s *screen) terminal() Terminal {
-	return Terminal{In: s.in, Out: s, Size: s.size, Resized: s.resized, Restore: func() { s.restored.Add(1) }}
+	return Terminal{In: s.in, Out: s, Size: s.size, Resized: s.resized, Restore: func() { s.restored.Add(1) },
+		Continued: s.cont, Resume: func() { s.resumed.Add(1) }}
 }
 
 // run starts Run on a fake server and screen; wait returns its error once
@@ -103,6 +106,34 @@ func TestRunDrawsAndQuits(t *testing.T) {
 		}
 		if n := sc.restored.Load(); n != 1 {
 			t.Errorf("terminal restored %d times, want once", n)
+		}
+	})
+}
+
+// After the process is stopped and continued, the shell may have reset
+// the terminal, so the board takes it over again and paints the whole
+// frame, though nothing in it changed.
+func TestRunResumes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv, sc := &fakeServer{}, newScreen(80, 12)
+		wait := runBoard(t, srv, sc, sc.terminal())
+		synctest.Wait()
+		sc.mu.Lock()
+		sc.out.Reset()
+		sc.mu.Unlock()
+
+		sc.cont <- os.Interrupt // any signal will do
+		synctest.Wait()
+		if n := sc.resumed.Load(); n != 1 {
+			t.Errorf("terminal resumed %d times after a continue, want once", n)
+		}
+		if out := sc.output(); !strings.Contains(out, "Ready 1") {
+			t.Errorf("after a continue the board painted %q, want the whole frame", out)
+		}
+
+		_, _ = sc.keys.Write([]byte("q"))
+		if err := wait(); err != nil {
+			t.Errorf("Run after q = %v, want nil", err)
 		}
 	})
 }
