@@ -40,8 +40,12 @@ func TestResolveSettingsLimits(t *testing.T) {
 				return l.Labels == 9 && l.ConnsPerPrincipal == 4 && l.IdleTimeout == Duration(90*time.Second) &&
 					l.WriteRate == 2.5 && l.AgentKeep == Duration(14*24*time.Hour) && l.Conns == DefaultLimits.Conns
 			}},
+		{name: "zero takes the default", body: "limits:\n  labels_per_issue: 0\n  write_burst: 0\n  write_rate: 0\n",
+			want: func(l Limits) bool { return l == DefaultLimits }},
 		{name: "negative store limit", body: "limits:\n  acceptance_items: -1\n", err: "acceptance_items"},
-		{name: "negative server limit", body: "limits:\n  write_burst: -1\n", err: "write_burst"},
+		{name: "negative server limit", body: "limits:\n  write_burst: -1\n", err: "limit write_burst must be zero or a positive number"},
+		{name: "write rate not a number", body: "limits:\n  write_rate: .nan\n", err: "limit write_rate must be zero or a positive number"},
+		{name: "infinite write rate", body: "limits:\n  write_rate: .inf\n", err: "limit write_rate must be zero or a positive number"},
 		{name: "bad duration", body: "limits:\n  idle_timeout: soon\n", err: "soon"},
 		{name: "unknown limit", body: "limits:\n  lables: 3\n", err: "lables"},
 	}

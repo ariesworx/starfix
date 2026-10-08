@@ -103,7 +103,7 @@ func (l Limits) Validate() error {
 		{"agent_keep", l.AgentKeep < 0}, {"inbox_keep", l.InboxKeep < 0},
 	} {
 		if f.bad {
-			return fmt.Errorf("limit %s must be positive; fix: correct limits: in the config file, or leave it out for the default", f.name)
+			return fmt.Errorf("limit %s must be zero or a positive number; fix: correct limits: in the config file, or leave it out for the default", f.name)
 		}
 	}
 	return nil
