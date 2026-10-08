@@ -171,14 +171,20 @@ func planIssue(before Issue, in Issue) (ImportOutcome, []string) {
 }
 
 // PlanImportIssue reports what ImportIssue would do with in, without
-// writing. It does not check that the parent exists or would not make a
-// cycle; the importer checks those against its whole input.
+// writing, from one snapshot. It does not check that the parent exists or
+// would not make a cycle; the importer checks those against its whole
+// input.
 func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)
 	if err != nil {
 		return ImportResult{}, err
 	}
-	before, err := loadIssue(ctx, s.r, in.ID)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("plan import of %s: %w", in.ID, err)
+	}
+	defer end()
+	before, err := loadIssue(ctx, tx, in.ID)
 	if errors.Is(err, ErrNotFound) {
 		return ImportResult{Outcome: ImportCreated, LabelsAdded: len(in.Labels)}, nil
 	}
@@ -199,7 +205,9 @@ func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, er
 // The parent, when set, must exist (ErrNotFound) and must not make a
 // cycle (ErrCycle). ImportIssue is for the server's operator, not for
 // clients: it skips the hold check, so it writes an issue whoever holds
-// it, and it does not end a claim on an issue it closes.
+// it. An import that closes an issue ends any claim on it, and when a live
+// claim was another session's, that session gets a claim.lost inbox item,
+// as with [Store.CloseIssue].
 func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)
 	if err != nil {
@@ -225,10 +233,7 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 			}
 			return checkEdge(ctx, w.tx, in.ID, in.ParentID)
 		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		before, err := loadIssue(ctx, w.tx, in.ID)
 		var add []string
 		switch {
@@ -272,6 +277,20 @@ func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportR
 				}
 				if err := tickInText(ctx, w, in.ID, in.Acceptance); err != nil {
 					return err
+				}
+				if before.Status != StatusClosed && in.Status == StatusClosed {
+					// Closing ends the claim and tells its holder, as closeTx
+					// does, so a closed issue is never left held.
+					c, err := loadClaim(ctx, w.tx, in.ID)
+					if err != nil {
+						return err
+					}
+					if err := w.ended(ctx, c, "closed"); err != nil {
+						return err
+					}
+					if err := releaseClaim(ctx, w, c); err != nil {
+						return err
+					}
 				}
 				after, err := loadIssue(ctx, w.tx, in.ID)
 				if err != nil {
@@ -389,10 +408,7 @@ func (s *Store) ImportDep(ctx context.Context, actor Actor, d Dep) (ImportOutcom
 				return err
 			}
 		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		if _, err := w.exec(ctx, `INSERT INTO deps (from_id, to_id, type, metadata, created_by, created_at, rev, write_id)
   VALUES (?, ?, ?, ?, ?, ?, 1, ?)`, string(d.From), string(d.To), string(d.Type), meta, d.CreatedBy, d.CreatedAt, wid); err != nil {
 			return fmt.Errorf("insert dep: %w", err)

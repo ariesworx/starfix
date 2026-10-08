@@ -79,7 +79,8 @@ func TestSetupClaudeDesktop(t *testing.T) {
 				t.Fatalf("print: exit %d, files %v\n%s%s", code, snapshot(t, home), out, errb)
 			}
 			for _, want := range []string{"# MCP server: add to " + cfg, `"command": ` + jsonString(d.exe), `"-C"`, jsonString(widget),
-				`"STARFIX_HARNESS": "claude-desktop"`, "Quit Claude Desktop", "session id: Claude Desktop gives sfx mcp none"} {
+				`"STARFIX_HARNESS": "claude-desktop"`, "Quit Claude Desktop",
+				"session id: Claude Desktop gives sfx mcp none; sfx mcp picks its own per process (m-…) unless STARFIX_SESSION is set\n"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("print lacks %q:\n%s", want, out)
 				}

@@ -68,6 +68,14 @@ func newServer(t *testing.T) *Server {
 // newServerWith is newServer with limits, the store's included.
 func newServerWith(t *testing.T, lim Limits) *Server {
 	t.Helper()
+	s, _ := newServerDSN(t, lim)
+	return s
+}
+
+// newServerDSN is newServerWith that also returns the store's DSN, for
+// tests that plant rows the store would not write.
+func newServerDSN(t *testing.T, lim Limits) (*Server, string) {
+	t.Helper()
 	if errors.Is(doltErr, dolttest.ErrNoDolt) {
 		t.Skip("dolt is not on PATH: install dolt to run the server tests")
 	}
@@ -89,7 +97,7 @@ func newServerWith(t *testing.T, lim Limits) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s, dsn
 }
 
 var (
@@ -490,6 +498,111 @@ func TestServeAcceptErrors(t *testing.T) {
 	}
 }
 
+// lateListener models a connection accepted just as Serve stops. Its
+// first Accept returns first. Its second waits until Serve has closed the
+// listener and then first, the connection it holds, and returns late; any
+// later Accept fails with net.ErrClosed. Only Serve calls Accept.
+type lateListener struct {
+	first, late net.Conn
+	firstClosed <-chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
+	accepts     int
+}
+
+func (l *lateListener) Accept() (net.Conn, error) {
+	l.accepts++
+	switch l.accepts {
+	case 1:
+		return l.first, nil
+	case 2:
+		<-l.closed
+		<-l.firstClosed
+		return l.late, nil
+	}
+	return nil, net.ErrClosed
+}
+
+func (l *lateListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *lateListener) Addr() net.Addr { return &net.UnixAddr{Name: "late.sock", Net: "unix"} }
+
+// signalConn is a net.Conn that closes closed when it is first closed.
+type signalConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *signalConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// welcome runs a's side of the handshake on c, and returns the refusal or
+// the failure that kept a from being welcomed.
+func welcome(c net.Conn, a store.Actor) error {
+	enc, dec := proto.NewEncoder(c), proto.NewDecoder(c)
+	if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: a.Principal}); err != nil {
+		return err
+	}
+	if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: a.Session,
+		Machine: a.Machine}); err != nil {
+		return err
+	}
+	f, err := dec.Decode()
+	if err != nil {
+		return err
+	}
+	if f.Err != nil {
+		return f.Err
+	}
+	return nil
+}
+
+// A connection accepted as Serve stops, after it closed the connections
+// it held, is closed too: Serve returns at once, rather than wait for
+// that client to leave or its connection to idle out.
+func TestServeClosesConnectionAcceptedAsItStops(t *testing.T) {
+	s := newServer(t)
+	firstSrv, firstCli := net.Pipe()
+	lateSrv, lateCli := net.Pipe()
+	first := &signalConn{Conn: firstSrv, closed: make(chan struct{})}
+	l := &lateListener{first: first, late: lateSrv, firstClosed: first.closed, closed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() { served <- s.Serve(ctx, l) })
+	// Closing the clients ends their handlers, so that a Serve waiting for
+	// them returns before the test does.
+	t.Cleanup(func() {
+		cancel()
+		_ = firstCli.Close()
+		_ = lateCli.Close()
+		wg.Wait()
+	})
+	for _, c := range []net.Conn{firstCli, lateCli} {
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	if err := welcome(firstCli, alice); err != nil {
+		t.Fatalf("first client's handshake: %v", err)
+	}
+	// The late client is welcomed only if Serve serves its connection.
+	wg.Go(func() { _ = welcome(lateCli, bob) })
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("Serve = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after ctx ended: it serves the connection accepted as it stopped")
+	}
+}
+
 func TestBridgeFrameOnlyFirst(t *testing.T) {
 	s := newServer(t)
 	srv, cli := net.Pipe()
@@ -610,8 +723,9 @@ func TestBridgeUnavailable(t *testing.T) {
 	if !strings.Contains(out.String(), `"c":"auth"`) {
 		t.Fatalf("refusal: %s", out.String())
 	}
-	// S-15: no key may authenticate as the server's own principals.
-	for _, p := range store.ReservedPrincipals {
+	// S-15: no key may authenticate as the server's own principals, the
+	// upgrade's probe among them.
+	for _, p := range append([]string{ProbePrincipal}, store.ReservedPrincipals...) {
 		out.Reset()
 		if err := Bridge(t.Context(), "/nonexistent", p, strings.NewReader(""), &out); err == nil {
 			t.Fatalf("reserved principal %q accepted", p)
@@ -687,6 +801,7 @@ func TestResolveSettings(t *testing.T) {
 			check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"dana", "erin"}) }},
 		{name: "reserved admin refused", path: reserved, err: `admin "starfixd"`},
 		{name: "reserved admin in env refused", path: empty, env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
+		{name: "probe principal as admin refused", path: empty, env: map[string]string{EnvAdmins: ProbePrincipal}, err: `admin "starfixd-upgrade"`},
 		{name: "invalid admin refused", path: empty, env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
 	}
 	for _, tc := range tests {
@@ -867,7 +982,8 @@ func TestDispatchClaims(t *testing.T) {
 }
 
 // A welcomed connection registers its session, with the hello's harness;
-// a harness the store would refuse is dropped, not fatal.
+// a harness the store would refuse is dropped, not fatal. The upgrade's
+// health probe is welcomed but is no agent, so it is not registered.
 func TestHandshakeRegistersAgent(t *testing.T) {
 	s := newServer(t)
 	bridge := func(p string) *proto.Frame { return &proto.Frame{T: proto.FrameBridge, Principal: p} }
@@ -877,6 +993,7 @@ func TestHandshakeRegistersAgent(t *testing.T) {
 	for _, fs := range [][]*proto.Frame{
 		{bridge("alice"), hello("s-1", "claude-code")},
 		{bridge("bob"), hello("s-2", "Not A Harness")},
+		{bridge(ProbePrincipal), hello("upgrade-probe", "")},
 	} {
 		if f, err := handshake(t, s, fs...); err != nil || f.Err != nil {
 			t.Fatalf("handshake: %v %+v", err, f)

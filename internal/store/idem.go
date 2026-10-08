@@ -58,10 +58,11 @@ func idemHash(op string, args any) (string, error) {
 }
 
 // replay looks key up for w's principal. When the key's request was
-// already applied it fills out with that request's result and reports
-// true. Otherwise it arms w to stamp this operation with key and reports
-// false. An empty key does nothing. op and args identify the request.
-func (w *wtx) replay(ctx context.Context, key, op string, args, out any) (bool, error) {
+// already applied it sets *out to that request's result, exactly as
+// stored, and reports true. Otherwise it arms w to stamp this operation
+// with key and reports false. An empty key does nothing. op and args
+// identify the request.
+func replay[T any](ctx context.Context, w *wtx, key, op string, args any, out *T) (bool, error) {
 	w.idem = nil
 	if key == "" {
 		return false, nil
@@ -86,9 +87,14 @@ func (w *wtx) replay(ctx context.Context, key, op string, args, out any) (bool, 
 	case prev.String != hash || len(result) == 0:
 		return false, &IdemError{Key: key}
 	}
-	if err := json.Unmarshal(result, out); err != nil {
+	// Decode into a zero value, not into *out: a failed earlier attempt of
+	// the same write may have filled *out, and a field the stored result
+	// leaves out would keep what that attempt put there.
+	var v T
+	if err := json.Unmarshal(result, &v); err != nil {
 		return false, fmt.Errorf("idempotency result: %w", err)
 	}
+	*out = v
 	return true, nil
 }
 

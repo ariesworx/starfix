@@ -53,7 +53,7 @@ func (r *runner) setupDesktop(agent agentsetup.Agent, command string, mode setup
 	// %APPDATA%, which need not be under home: then only its directory and
 	// the file itself are checked.
 	base := fileBase{dir: home, user: true, home: home}
-	if rel, err := filepath.Rel(home, path); home == "" || err != nil || strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(home, path); home == "" || err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		base.dir = filepath.Dir(filepath.Dir(path))
 	}
 	d := &diskFile{path: path, base: base}

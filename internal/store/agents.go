@@ -61,10 +61,7 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 		err := w.tx.QueryRowContext(ctx, `SELECT machine, harness, last_seen, rev FROM agents
   WHERE principal = ? AND session = ?`, actor.Principal, actor.Session).Scan(&machine, &known, &seen, &rev)
 		if errors.Is(err, sql.ErrNoRows) {
-			wid, err := randomInt63()
-			if err != nil {
-				return err
-			}
+			wid := randomInt63()
 			if _, err := w.exec(ctx, `INSERT INTO agents
   (principal, session, machine, harness, started, last_seen, rev, write_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
 				actor.Principal, actor.Session, actor.Machine, harness, w.now, w.now, wid); err != nil {
@@ -85,10 +82,7 @@ func (s *Store) TouchAgent(ctx context.Context, actor Actor, harness string) err
 		if machine == actor.Machine && h == known && w.now.Sub(seen) < AgentTouchEvery {
 			return nil
 		}
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		n, err := w.exec(ctx, `UPDATE agents SET machine = ?, harness = ?, last_seen = ?, rev = rev + 1, write_id = ?
   WHERE principal = ? AND session = ? AND rev = ?`,
 			actor.Machine, h, w.now, wid, actor.Principal, actor.Session, rev)

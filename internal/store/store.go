@@ -81,6 +81,9 @@ type Store struct {
 	// beforeCommit, when set by tests, runs inside every write transaction
 	// just before COMMIT.
 	beforeCommit func(context.Context) error
+	// wrapRead, when set by tests, wraps the querier beginRead returns, so
+	// a test can act between a read's queries.
+	wrapRead func(querier) querier
 }
 
 // Open connects to the Dolt database named in dsn (go-sql-driver/mysql
@@ -253,6 +256,22 @@ func (s *Store) Now() time.Time { return s.now() }
 
 func (s *Store) now() time.Time {
 	return s.opts.Now().UTC().Truncate(time.Microsecond)
+}
+
+// beginRead starts a read of several queries on one read-only
+// transaction, so that they see one snapshot: a write that commits while
+// the read runs shows in none of them. It returns the transaction to run
+// the queries on and a func that ends it, to call once they are done.
+func (s *Store) beginRead(ctx context.Context) (querier, func(), error) {
+	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin read: %w", err)
+	}
+	var q querier = tx
+	if s.wrapRead != nil {
+		q = s.wrapRead(q)
+	}
+	return q, func() { _ = tx.Rollback() }, nil // read-only: nothing to keep
 }
 
 // querier is satisfied by *sql.DB, *sql.Conn and *sql.Tx.

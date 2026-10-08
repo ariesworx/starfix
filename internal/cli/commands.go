@@ -96,10 +96,7 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 	if err := r.readTexts(&f); err != nil {
 		return err
 	}
-	idem, err := proto.NewIdem("cli")
-	if err != nil {
-		return err
-	}
+	idem := proto.NewIdem("cli")
 	in := proto.CreateArgs{ID: id, Idem: idem, Title: strings.Join(pos, " "), Body: f.body, Design: f.design,
 		Acceptance: f.acceptance, Notes: f.notes, Status: f.status, Type: f.typ, Assignee: f.assignee,
 		Owner: f.owner, Parent: f.parent, Labels: labels}
@@ -571,10 +568,7 @@ func cmdComment(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	idem, err := proto.NewIdem("cli")
-	if err != nil {
-		return err
-	}
+	idem := proto.NewIdem("cli")
 	var out proto.CommentResult
 	if err := r.call(ctx, proto.OpComment, proto.CommentArgs{ID: pos[0], Body: body, Idem: idem}, &out); err != nil {
 		return err

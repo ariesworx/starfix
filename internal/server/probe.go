@@ -10,7 +10,9 @@ import (
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
-// ProbePrincipal is the principal a health probe connects as.
+// ProbePrincipal is the principal a health probe connects as. It is
+// reserved (store.ReservedPrincipals), so no key's bridge may claim it;
+// the daemon welcomes it, but does not list it in who.
 const ProbePrincipal = "starfixd-upgrade"
 
 // Probe connects to the daemon's socket as the daemon's own user, as the

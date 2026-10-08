@@ -145,6 +145,11 @@ func (c *Client) get(ctx context.Context, u string, limit int64, accept string) 
 	}
 	res, err := c.http().Do(req)
 	if err != nil {
+		// The error names the URL the client failed on: after a redirect,
+		// the signed download URL, whose query string is a credential.
+		if ue, ok := errors.AsType[*url.Error](err); ok {
+			ue.URL = redact(ue.URL)
+		}
 		return nil, err
 	}
 	defer func() { _ = res.Body.Close() }()

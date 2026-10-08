@@ -319,8 +319,9 @@ It comes from the key line that matched, never from the client.
   6](#6-let-the-first-principal-in). A principal may have several lines,
   one per key, for example a laptop and a desktop.
 - **Name rules:** lowercase, starting with a letter, then letters, digits,
-  `.`, `_` or `-`, up to 64 characters. `starfixd` (the claim reaper) and
-  `import` (the bd importer) are reserved.
+  `.`, `_` or `-`, up to 64 characters. `starfixd` (the claim reaper),
+  `import` (the bd importer) and `starfixd-upgrade` (the health check of
+  `starfixd upgrade`) are reserved.
 - **Agents on someone's machine** use that person's key, so their work is
   theirs. Give an agent that runs on its own, in CI or in a cloud sandbox,
   its own principal and key (for example `ci-bot`). Its work then shows

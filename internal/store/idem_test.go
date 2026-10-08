@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -70,6 +71,66 @@ func TestIdempotentReplay(t *testing.T) {
 				t.Errorf("%d events carry the key, want 1", keyed)
 			}
 			assertGapless(t, s)
+		})
+	}
+}
+
+// A write whose first attempt loses to the same request, committed with
+// the same key by another store, replays that request's result exactly:
+// nothing the failed attempt put in its result survives, not even a field
+// the stored result leaves out.
+func TestIdempotentReplayAfterRetry(t *testing.T) {
+	tests := []struct {
+		name string
+		// do runs the operation once, with the key k-1.
+		do func(ctx context.Context, s *Store, id IssueID) (any, error)
+	}{
+		{"handoff", func(ctx context.Context, s *Store, id IssueID) (any, error) {
+			return s.HandoffIssue(ctx, alice, id, 0, HandoffNote{Note: "over to you"}, false, "k-1")
+		}},
+		{"finish", func(ctx context.Context, s *Store, id IssueID) (any, error) {
+			is, ids, err := s.FinishIssue(ctx, alice, id, 0, Finish{Reason: "done", IdempotencyKey: "k-1"})
+			return struct {
+				Issue Issue
+				IDs   []IssueID
+			}{is, ids}, err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dsn := newDSN(t)
+			s1 := openStore(t, dsn, Options{})
+			s2 := openStore(t, dsn, Options{})
+			is := mustCreate(t, s1, NewIssue{Title: "work", Labels: []string{"area:db"}})
+			var want any
+			retried := false
+			s1.beforeCommit = func(ctx context.Context) error {
+				if retried {
+					return nil
+				}
+				retried = true
+				// The first attempt's result has the label; the request
+				// that commits first, from s2, finds it gone, so its
+				// stored result has no labels field at all.
+				if err := s2.RemoveLabel(ctx, alice, is.ID, "area:db"); err != nil {
+					return err
+				}
+				var err error
+				if want, err = tc.do(ctx, s2, is.ID); err != nil {
+					return err
+				}
+				return errRetry
+			}
+			got, err := tc.do(t.Context(), s1, is.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !retried {
+				t.Fatal("the first attempt never reached its commit")
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s replayed after a retry = %+v\nwant the stored result %+v", tc.name, got, want)
+			}
 		})
 	}
 }

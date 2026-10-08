@@ -12,9 +12,10 @@ import (
 // Errors returned by the store, always wrapped with context. Test with
 // [errors.Is].
 //
-// starfixd's error mapping (internal/server/errors.go) reads some of the
-// messages these wrap, such as "is claimed by" and "is closed; reopen it
-// first", to name the next step. Change such a message together with it.
+// starfixd's error mapping (internal/server/errors.go) chooses the next
+// step by error, or by a typed error such as [*StateError], never by
+// message. It shows the messages, trimmed, and its tests pin what it
+// shows.
 var (
 	// ErrNotFound means the issue, or another target, does not exist.
 	ErrNotFound = errors.New("not found")
@@ -150,3 +151,46 @@ func (e *ForbiddenError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrForbidden) hold.
 func (e *ForbiddenError) Unwrap() error { return ErrForbidden }
+
+// StateError refuses a change that does not fit the issue's state, for
+// the Reason given. It wraps ErrInvalid, and its text starts with
+// ErrInvalid's.
+type StateError struct {
+	ID     IssueID
+	Reason StateReason
+	// Holder holds the issue's claim, when Reason is StateClaimed.
+	Holder Actor
+}
+
+// StateReason says why a [*StateError] refused a change.
+type StateReason string
+
+// The reasons a [*StateError] gives.
+const (
+	// StateClaimed: a status or assignee change to an issue under a live
+	// claim, which changes them only through finish, close or a releasing
+	// handoff.
+	StateClaimed StateReason = "claimed"
+	// StateClosed: a change that needs the issue open, such as a status
+	// change, a start, a release or an acceptance change.
+	StateClosed StateReason = "closed"
+	// StateAlreadyClosed: a close or finish of a closed issue.
+	StateAlreadyClosed StateReason = "already closed"
+	// StateNotClosed: a reopen of an issue that is not closed.
+	StateNotClosed StateReason = "not closed"
+)
+
+func (e *StateError) Error() string {
+	switch e.Reason {
+	case StateClaimed:
+		return fmt.Sprintf("%v: issue %s is claimed by %s/%s; %s", ErrInvalid, e.ID, e.Holder.Principal, e.Holder.Session, errClaimedFields)
+	case StateClosed:
+		return fmt.Sprintf("%v: issue %s is closed; reopen it first", ErrInvalid, e.ID)
+	case StateAlreadyClosed:
+		return fmt.Sprintf("%v: issue %s is already closed", ErrInvalid, e.ID)
+	}
+	return fmt.Sprintf("%v: issue %s is not closed", ErrInvalid, e.ID)
+}
+
+// Unwrap makes errors.Is(err, ErrInvalid) hold.
+func (e *StateError) Unwrap() error { return ErrInvalid }

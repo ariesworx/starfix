@@ -444,7 +444,7 @@ func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, glob
 	if agent.SessionEnv != "" {
 		p("\n# session id: read from %s\n", agent.SessionEnv)
 	} else {
-		p("\n# session id: %s gives sfx mcp none; the server assigns one unless STARFIX_SESSION is set\n", agent.Title)
+		p("\n# session id: %s gives sfx mcp none; sfx mcp picks its own per process (m-…) unless STARFIX_SESSION is set\n", agent.Title)
 	}
 }
 

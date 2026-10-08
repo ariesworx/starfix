@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -59,7 +60,7 @@ func (s *Store) StartIssue(ctx context.Context, actor Actor, id IssueID, lease t
 			return err
 		}
 		if before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, target)
+			return &StateError{ID: target, Reason: StateClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, target)
 		if err != nil {
@@ -148,6 +149,9 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	if len(f.Discovered) > MaxDiscovered {
 		return Issue{}, nil, fmt.Errorf("%w: at most %d discovered issues", ErrInvalid, MaxDiscovered)
 	}
+	// normalize fills in defaults in place, so work on a copy: the
+	// caller's slice shares its backing array with f.Discovered.
+	f.Discovered = slices.Clone(f.Discovered)
 	ids := make([]IssueID, len(f.Discovered))
 	metas := make([]any, len(f.Discovered))
 	for i := range f.Discovered {
@@ -174,7 +178,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 	}{id, epoch, f}
 	var out finished
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, f.IdempotencyKey, "finish", req, &out); done || err != nil {
+		if done, err := replay(ctx, w, f.IdempotencyKey, "finish", req, &out); done || err != nil {
 			return err
 		}
 		before, err := loadIssue(ctx, w.tx, id)
@@ -182,7 +186,7 @@ func (s *Store) FinishIssue(ctx context.Context, actor Actor, id IssueID, epoch 
 			return err
 		}
 		if before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is already closed", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateAlreadyClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, id)
 		if err != nil {
@@ -259,7 +263,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 	}
 	var out Issue
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, idem, "handoff", req, &out); done || err != nil {
+		if done, err := replay(ctx, w, idem, "handoff", req, &out); done || err != nil {
 			return err
 		}
 		before, err := loadIssue(ctx, w.tx, id)
@@ -275,7 +279,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 		}
 		if release {
 			if before.Status == StatusClosed {
-				return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+				return &StateError{ID: id, Reason: StateClosed}
 			}
 			if err := checkEpoch(c, epoch); err != nil {
 				return err

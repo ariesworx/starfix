@@ -7,7 +7,9 @@
 //
 // It installs no hooks. Switch and AddWorktree run the git on PATH with
 // explicit arguments, never through a shell, and kill it if their context
-// ends first. Their errors name the git command that failed.
+// ends first. Their errors name the git command that failed, carry git's
+// own message, and unwrap to the cause, such as git's *exec.ExitError or,
+// when the context ended before git started, the context's error.
 package gitx
 
 import (
@@ -127,8 +129,20 @@ func IDFromMessage(msg string) (string, bool) {
 	return "", false
 }
 
+// gitError is a failed git command: msg names the command and carries
+// git's own message, and err is the cause, such as an *exec.ExitError or
+// the context's error.
+type gitError struct {
+	msg string
+	err error
+}
+
+func (e *gitError) Error() string { return e.msg }
+
+func (e *gitError) Unwrap() error { return e.err }
+
 // git runs git in dir and returns its trimmed standard output. A failure
-// carries git's own message.
+// carries git's own message, and unwraps to the cause.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // fixed binary, explicit argv, no shell
 	var out, errb bytes.Buffer
@@ -138,7 +152,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s: %s", args[0], msg)
+		return "", &gitError{msg: fmt.Sprintf("git %s: %s", args[0], msg), err: err}
 	}
 	return strings.TrimSpace(out.String()), nil
 }
@@ -146,8 +160,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 // hasBranch reports whether the local branch exists. git exits 1 when it
 // does not; any other failure is an error.
 func hasBranch(ctx context.Context, dir, branch string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch) //nolint:gosec // fixed binary, explicit argv, no shell
-	err := cmd.Run()
+	_, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
@@ -155,7 +168,7 @@ func hasBranch(ctx context.Context, dir, branch string) (bool, error) {
 	case errors.As(err, &ee) && ee.ExitCode() == 1:
 		return false, nil
 	}
-	return false, fmt.Errorf("git rev-parse: %w", err)
+	return false, err
 }
 
 // Switch checks out branch in the repository at dir, creating it from HEAD

@@ -32,9 +32,7 @@ func NewID(prefix string) (IssueID, error) {
 		return "", fmt.Errorf("%w: prefix %q must be lowercase letters, digits and inner hyphens, at most 32", ErrInvalid, prefix)
 	}
 	var b [5]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("new id: %w", err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
 	return IssueID(prefix + "-" + idEncoding.EncodeToString(b[:])), nil
 }
 
@@ -108,19 +106,15 @@ func commonPrefix(a, b string) int {
 }
 
 // randomInt63 returns a random non-negative int64, used for write_id.
-func randomInt63() (int64, error) {
+func randomInt63() int64 {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return 0, fmt.Errorf("random: %w", err)
-	}
-	return int64(binary.BigEndian.Uint64(b[:]) >> 1), nil //nolint:gosec // shifted right, fits in int63
+	_, _ = rand.Read(b[:])                           // crypto/rand.Read never fails
+	return int64(binary.BigEndian.Uint64(b[:]) >> 1) //nolint:gosec // shifted right, fits in int63
 }
 
 // newCommentID returns a random 16-character comment ID.
-func newCommentID() (string, error) {
+func newCommentID() string {
 	var b [10]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("comment id: %w", err)
-	}
-	return idEncoding.EncodeToString(b[:]), nil
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
+	return idEncoding.EncodeToString(b[:])
 }

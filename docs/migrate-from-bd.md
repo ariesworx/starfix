@@ -95,6 +95,9 @@ its IDs, and the rest of the file still imports.
 
 - An issue already stored is overwritten only when the file's `updated_at`
   is later. An issue edited in starfix after the export keeps the edit.
+- An overwrite applies whoever holds the issue. One that closes an issue
+  someone has started ends their claim and tells their session, as
+  `close` does.
 - Labels merge. Dependencies and comments are never rewritten.
 - Identical rows are left alone.
 

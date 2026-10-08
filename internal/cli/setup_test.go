@@ -449,3 +449,27 @@ func TestSetupAllGlobal(t *testing.T) {
 		}
 	}
 }
+
+// The printed snippets say where each agent's session id comes from. With
+// no session variable from the harness, sfx mcp picks its own: the server
+// assigns one only to a client that sends none.
+func TestSetupSessionID(t *testing.T) {
+	_, sub := repoWithConfig(t)
+	const picks = " gives sfx mcp none; sfx mcp picks its own per process (m-…) unless STARFIX_SESSION is set\n"
+	for _, tc := range []struct{ agent, want string }{
+		{"claude-code", "# session id: read from CLAUDE_CODE_SESSION_ID\n"},
+		{"codex", "# session id: Codex" + picks},
+		{"gemini", "# session id: Gemini CLI" + picks},
+		{"cursor", "# session id: Cursor" + picks},
+		{"vscode", "# session id: VS Code" + picks},
+		{"junie", "# session id: Junie" + picks},
+		{"jetbrains", "# session id: JetBrains AI Assistant" + picks},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			code, out, errb := runIn(t, t.TempDir(), "-C", sub, "setup", tc.agent)
+			if code != ExitOK || !strings.Contains(out, tc.want) {
+				t.Errorf("sfx setup %s: exit %d, output lacks %q:\n%s%s", tc.agent, code, tc.want, out, errb)
+			}
+		})
+	}
+}

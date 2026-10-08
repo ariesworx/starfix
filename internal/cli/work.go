@@ -125,9 +125,7 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 		}
 		in.Waived[n] = reason
 	}
-	if in.Idem, err = proto.NewIdem("cli"); err != nil {
-		return err
-	}
+	in.Idem = proto.NewIdem("cli")
 	var out proto.FinishResult
 	if err := r.call(ctx, proto.OpFinish, in, &out); err != nil {
 		return err
@@ -161,9 +159,7 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 	if in.Note, err = r.text(strings.Join(pos[1:], " ")); err != nil {
 		return err
 	}
-	if in.Idem, err = proto.NewIdem("cli"); err != nil {
-		return err
-	}
+	in.Idem = proto.NewIdem("cli")
 	return r.write(ctx, proto.OpHandoff, in)
 }
 
@@ -271,10 +267,10 @@ func cmdAway(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	d, err := one(usage, pos, "away")
-	if err != nil {
-		return err
+	if len(pos) != 1 {
+		return usagef(usage, "away needs exactly one duration")
 	}
+	d := pos[0]
 	if _, err := proto.ParseDuration(d); err != nil {
 		return usagef(usage, "%q: %v", d, err)
 	}

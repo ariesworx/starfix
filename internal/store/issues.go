@@ -163,12 +163,18 @@ func mustExist(ctx context.Context, q querier, id IssueID) error {
 	return nil
 }
 
-// GetIssue returns one issue with its labels, or ErrNotFound.
+// GetIssue returns one issue with its labels, from one snapshot, or
+// ErrNotFound.
 func (s *Store) GetIssue(ctx context.Context, id IssueID) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
 	}
-	return loadIssue(ctx, s.r, id)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return Issue{}, fmt.Errorf("get issue %s: %w", id, err)
+	}
+	defer end()
+	return loadIssue(ctx, tx, id)
 }
 
 // normalize refuses, with ErrInvalid, a new issue whose fields are not
@@ -274,7 +280,7 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 	}
 	var out Issue
 	err = s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, in.IdempotencyKey, "create", in, &out); done || err != nil {
+		if done, err := replay(ctx, w, in.IdempotencyKey, "create", in, &out); done || err != nil {
 			return err
 		}
 		var err error
@@ -307,10 +313,7 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 			return Issue{}, fmt.Errorf("parent: %w", err)
 		}
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return Issue{}, err
-	}
+	wid := randomInt63()
 	if _, err := w.exec(ctx, `INSERT INTO issues (id, parent_id, title, body, design, acceptance, notes,
   status, priority, type, assignee, owner, due_at, defer_until, ephemeral, expires_at, pinned, template,
   metadata, created_by, created_at, updated_at, rev, write_id)
@@ -382,7 +385,7 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 			return fmt.Errorf("issue %s at rev %d, not %d: %w", id, before.Rev, expected, ErrConflict)
 		}
 		if patch.Status != nil && before.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateClosed}
 		}
 		if len(sets) == 0 {
 			out = before
@@ -397,7 +400,7 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		}
 		if c.active(w.now) && (patch.Status != nil && *patch.Status != before.Status ||
 			patch.Assignee != nil && *patch.Assignee != before.Assignee) {
-			return fmt.Errorf("%w: issue %s is claimed by %s/%s; %s", ErrInvalid, id, c.Holder.Principal, c.Holder.Session, errClaimedFields)
+			return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
 		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
 			if err := mustExist(ctx, w.tx, *patch.ParentID); err != nil {
@@ -431,9 +434,8 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 	return out, nil
 }
 
-// errClaimedFields ends the refusal of a status or assignee change to a
-// claimed issue. starfixd recognizes that refusal by its "is claimed by"
-// text (internal/server/errors.go) to name the next step.
+// errClaimedFields ends the text of a [StateClaimed] refusal, of a status
+// or assignee change to a claimed issue.
 const errClaimedFields = "status and assignee change only through finish, close or a releasing handoff"
 
 // ErrStatusInProgress refuses update's status in_progress: only start
@@ -447,10 +449,7 @@ const casUpdateSQL = `UPDATE issues SET {sets}, updated_at = ?, rev = rev + 1, w
 // casUpdate writes sets to the issue at before.Rev, stamping rev and
 // write_id, and returns the new state.
 func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []any) (Issue, error) {
-	wid, err := randomInt63()
-	if err != nil {
-		return Issue{}, err
-	}
+	wid := randomInt63()
 	q := strings.Replace(casUpdateSQL, "{sets}", strings.Join(sets, ", "), 1)
 	all := append(append([]any{}, args...), w.now, wid, string(before.ID), int64(before.Rev))
 	n, err := w.exec(ctx, q, all...)
@@ -632,7 +631,7 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 			return err
 		}
 		if before.Status != StatusClosed {
-			return fmt.Errorf("%w: issue %s is not closed", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateNotClosed}
 		}
 		out, err = setStatus(ctx, w, before, OpIssueReopen, []any{string(StatusOpen), nil, nil}, nil)
 		return err
@@ -648,7 +647,7 @@ func (s *Store) setClosed(ctx context.Context, actor Actor, id IssueID, expected
 // them in the event.
 func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force bool) (Issue, error) {
 	if before.Status == StatusClosed {
-		return Issue{}, fmt.Errorf("%w: issue %s is already closed", ErrInvalid, before.ID)
+		return Issue{}, &StateError{ID: before.ID, Reason: StateAlreadyClosed}
 	}
 	items, err := acceptanceItems(ctx, w.tx, before)
 	if err != nil {

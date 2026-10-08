@@ -233,6 +233,52 @@ func TestSetupClaudeDesktopLink(t *testing.T) {
 	}
 }
 
+// On Windows, %APPDATA% need not be under home. When it is, the config is
+// checked from home, even under a directory whose name starts with "..":
+// a link from there out of home is refused, as on macOS.
+func TestSetupClaudeDesktopDotDotDir(t *testing.T) {
+	home, outside := t.TempDir(), t.TempDir()
+	_, sub := repoWithConfig(t)
+	symlink(t, outside, filepath.Join(home, "..x"))
+	d := desktopEnv{goos: "windows", home: home, appdata: filepath.Join(home, "..x", "AppData", "Roaming"), exe: `C:\Users\alice\bin\sfx.exe`}
+	code, _, errb := d.run(t, "-C", sub, "setup", "claude-desktop", "--write")
+	if code != ExitFailure || !strings.Contains(errb, "outside your home directory") || !strings.Contains(errb, "fix: ") {
+		t.Fatalf("exit %d\n%s", code, errb)
+	}
+	if len(snapshot(t, outside)) != 0 {
+		t.Error("wrote through the link")
+	}
+}
+
+// resolve takes a path below its directory, even one whose name only
+// starts with "..", and refuses the directory itself and anything
+// outside it.
+func TestResolveBelowDir(t *testing.T) {
+	dir := t.TempDir()
+	b := fileBase{dir: dir}
+	tests := []struct {
+		name, path string
+		ok         bool
+	}{
+		{name: "..x is inside", path: filepath.Join(dir, "..x"), ok: true},
+		{name: "a file under ..x is inside", path: filepath.Join(dir, "..x", "config.json"), ok: true},
+		{name: "../x is outside", path: filepath.Join(dir, "..", "x")},
+		{name: ".. is outside", path: filepath.Join(dir, "..")},
+		{name: "the directory itself", path: dir},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := b.resolve(tc.path)
+			switch {
+			case tc.ok && (err != nil || got != tc.path):
+				t.Errorf("resolve(%q) = %q, %v; want %q, nil", tc.path, got, err, tc.path)
+			case !tc.ok && err == nil:
+				t.Errorf("resolve(%q) = %q, nil; want an error", tc.path, got)
+			}
+		})
+	}
+}
+
 // A global hook dials whatever server a repository names, so setup says
 // so when it adds one (C-14).
 func TestSetupGlobalHookNote(t *testing.T) {

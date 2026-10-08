@@ -82,7 +82,7 @@ func (s *Store) AddComment(ctx context.Context, actor Actor, id IssueID, body, i
 	}
 	var c Comment
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := w.replay(ctx, idem, "comment", struct {
+		if done, err := replay(ctx, w, idem, "comment", struct {
 			ID   IssueID
 			Body string
 		}{id, body}, &c); done || err != nil {
@@ -121,10 +121,7 @@ func insertComment(ctx context.Context, w *wtx, id IssueID, body string, kind Co
 // insertNote is insertComment for a note that may carry handoff fields:
 // they are stored in handoffs and recorded in the comment's event.
 func insertNote(ctx context.Context, w *wtx, id IssueID, body string, kind CommentKind, f HandoffFields) (Comment, error) {
-	cid, err := newCommentID()
-	if err != nil {
-		return Comment{}, err
-	}
+	cid := newCommentID()
 	// Notes are ordered by created_at, so keep it strictly increasing per
 	// issue: two notes in the same microsecond (or under a test clock) would
 	// otherwise tie, and the random id would decide which is the latest.

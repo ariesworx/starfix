@@ -44,10 +44,10 @@ func decodeCursor(c Cursor) (cursorPos, error) {
 	return p, nil
 }
 
-// List returns issues matching f, oldest first, one page at a time: pass
-// the page's Next as f.Cursor to read the one after it. A status, type or
-// label that is not valid, or a malformed cursor, is refused with
-// ErrInvalid.
+// List returns issues matching f, oldest first, one page at a time, each
+// from one snapshot: pass the page's Next as f.Cursor to read the one
+// after it. A status, type or label that is not valid, or a malformed
+// cursor, is refused with ErrInvalid.
 func (s *Store) List(ctx context.Context, f Filter) (IssuePage, error) {
 	limit := clampLimit(f.Limit, 50, 500)
 	var where []string
@@ -105,7 +105,12 @@ func (s *Store) List(ctx context.Context, f Filter) (IssuePage, error) {
 	q += " ORDER BY i.created_at, i.id LIMIT ?"
 	args = append(args, limit+1)
 
-	rows, err := s.r.QueryContext(ctx, q, args...)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return IssuePage{}, fmt.Errorf("list: %w", err)
+	}
+	defer end()
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return IssuePage{}, fmt.Errorf("list: %w", err)
 	}
@@ -125,5 +130,5 @@ func (s *Store) List(ctx context.Context, f Filter) (IssuePage, error) {
 		page.Issues = page.Issues[:limit]
 		page.Next = encodeCursor(page.Issues[limit-1])
 	}
-	return page, withLabels(ctx, s.r, page.Issues)
+	return page, withLabels(ctx, tx, page.Issues)
 }

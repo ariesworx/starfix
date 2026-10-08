@@ -197,16 +197,22 @@ func itemKey(text string) string {
 }
 
 // AcceptanceItems returns an issue's acceptance items and their state, in
-// order; nil when it has no criteria. A missing issue is ErrNotFound.
+// order, from one snapshot; nil when it has no criteria. A missing issue
+// is ErrNotFound.
 func (s *Store) AcceptanceItems(ctx context.Context, id IssueID) ([]AcceptanceItem, error) {
 	if err := id.Validate(); err != nil {
 		return nil, err
 	}
-	is, err := loadIssue(ctx, s.r, id)
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acceptance items of %s: %w", id, err)
+	}
+	defer end()
+	is, err := loadIssue(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}
-	return acceptanceItems(ctx, s.r, is)
+	return acceptanceItems(ctx, tx, is)
 }
 
 // acceptanceItems parses is's criteria and applies their stored state.
@@ -335,7 +341,7 @@ func (s *Store) Accept(ctx context.Context, actor Actor, id IssueID, a Acceptanc
 			return err
 		}
 		if is.Status == StatusClosed {
-			return fmt.Errorf("%w: issue %s is closed; reopen it first", ErrInvalid, id)
+			return &StateError{ID: id, Reason: StateClosed}
 		}
 		c, err := loadClaim(ctx, w.tx, id)
 		if err != nil {
@@ -410,13 +416,10 @@ func applyAcceptance(ctx context.Context, w *wtx, is Issue, a Acceptance) ([]Acc
 
 // setItemState writes one item's state row, as set by w's actor now.
 func setItemState(ctx context.Context, w *wtx, id IssueID, it AcceptanceItem, state, reason string) error {
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	key := itemKey(it.Text)
 	var n int
-	err = w.tx.QueryRowContext(ctx, `SELECT n FROM acceptance_state WHERE issue_id = ? AND item_key = ?`, string(id), key).Scan(&n)
+	err := w.tx.QueryRowContext(ctx, `SELECT n FROM acceptance_state WHERE issue_id = ? AND item_key = ?`, string(id), key).Scan(&n)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = w.exec(ctx, `INSERT INTO acceptance_state (issue_id, item_key, n, state, reason, by_principal, at, write_id)

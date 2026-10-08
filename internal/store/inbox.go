@@ -107,10 +107,7 @@ func (w *wtx) notify(ctx context.Context, it InboxItem) error {
 	if err != nil {
 		return fmt.Errorf("next inbox id: %w", err)
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	it.ID, it.From, it.At, it.Body = id+1, w.actor.Principal, w.now, brief(it.Body)
 	if _, err := w.exec(ctx, `INSERT INTO inbox
   (id, to_principal, to_session, kind, issue_id, body, from_principal, at, write_id)
@@ -134,10 +131,7 @@ func capUnread(ctx context.Context, w *wtx, principal string) error {
 	if n <= w.lim.InboxUnread {
 		return nil
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	if _, err := w.exec(ctx, `UPDATE inbox SET read_at = ?, write_id = ? WHERE to_principal = ? AND read_at IS NULL
   ORDER BY id LIMIT ?`, w.now, wid, principal, n-w.lim.InboxUnread); err != nil {
 		return fmt.Errorf("cap unread: %w", err)
@@ -297,14 +291,12 @@ func (s *Store) AckInbox(ctx context.Context, actor Actor, ids []int64, all bool
 	}
 	var n int64
 	err := s.write(ctx, actor, func(w *wtx) error {
-		wid, err := randomInt63()
-		if err != nil {
-			return err
-		}
+		wid := randomInt63()
 		q := `UPDATE inbox SET read_at = ?, write_id = ? WHERE ` + inboxFor + ` AND read_at IS NULL`
 		if !all {
 			q += ` AND id IN (` + placeholders(len(args)) + `)`
 		}
+		var err error
 		n, err = w.exec(ctx, q, append([]any{w.now, wid, actor.Principal, actor.Session}, args...)...)
 		if err != nil {
 			return fmt.Errorf("ack inbox: %w", err)

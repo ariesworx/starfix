@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -97,6 +99,54 @@ func TestFetch(t *testing.T) {
 			sums, sig, tag := v.Last()
 			if tag != "v1.2.0" || string(sums) != g.Checksums() || string(sig) != g.Signature() {
 				t.Errorf("verifier saw tag %q, checksums %q, sig %q", tag, sums, sig)
+			}
+		})
+	}
+}
+
+// GitHub redirects an asset download to a signed URL whose query string
+// is a credential. When that request fails, the error names it without
+// the query string.
+func TestFetchRedactsSignedURL(t *testing.T) {
+	const secret = "sig=c2lnbmVkLXRva2Vu" //nolint:gosec // an invented stand-in for a signed URL's token
+	tests := []struct {
+		name   string
+		signed http.HandlerFunc // serves the signed URL
+	}{
+		{name: "connection closed", signed: func(w http.ResponseWriter, _ *http.Request) {
+			if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+		}},
+		{name: "redirect loop", signed: func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/signed?"+secret, http.StatusFound)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/signed" {
+					http.Redirect(w, r, "/signed?"+secret, http.StatusFound)
+					return
+				}
+				tc.signed(w, r)
+			}))
+			t.Cleanup(cdn.Close)
+			g := releasetest.New(t, "v1.2.0")
+			g.AddBinary(t, "sfx", "linux", "amd64", []byte("sfx"))
+			g.Rewrite = func(r *release.Release) {
+				for i := range r.Assets {
+					r.Assets[i].URL = cdn.URL + "/download/" + r.Assets[i].Name
+				}
+			}
+			c := g.Client(&releasetest.Verifier{})
+			rel, err := c.Latest(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Fetch(t.Context(), rel, "sfx", "linux", "amd64")
+			if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), release.ChecksumsName) {
+				t.Errorf("Fetch = %v, want an error naming %s without %q", err, release.ChecksumsName, secret)
 			}
 		})
 	}

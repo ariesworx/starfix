@@ -102,16 +102,13 @@ func checkEpoch(c claimRow, epoch int64) error {
 // writeClaim inserts or updates the claim row. The caller records the
 // event, or explicitly writes quietly.
 func writeClaim(ctx context.Context, w *wtx, c claimRow) error {
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	var p, sess, m, at, exp any
 	if c.Holder.Principal != "" {
 		p, sess, m, at, exp = c.Holder.Principal, c.Holder.Session, c.Holder.Machine, c.ClaimedAt, c.ExpiresAt
 	}
 	if !c.exists {
-		_, err = w.exec(ctx, `INSERT INTO claims
+		_, err := w.exec(ctx, `INSERT INTO claims
   (issue_id, principal, session, machine, epoch, claimed_at, expires_at, rev, write_id)
   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`, string(c.Issue), p, sess, m, c.Epoch, at, exp, wid)
 		if err != nil {

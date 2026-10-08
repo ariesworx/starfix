@@ -172,6 +172,13 @@ func (s *Server) Serve(ctx context.Context, l net.Listener) error {
 		}
 		pause = 0
 		s.mu.Lock()
+		if ctx.Err() != nil {
+			// Accepted as Serve stops: the loop that closes the connections
+			// may have run already, and would never close this one.
+			s.mu.Unlock()
+			_ = c.Close()
+			return nil
+		}
 		full := len(s.conns) >= 2*s.cfg.Limits.Conns
 		if !full {
 			s.conns[c] = struct{}{}
@@ -338,7 +345,9 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		_ = c.Close() // unblocks a pusher stuck writing to a client that stopped reading
 		s.unwatch(sess)
 	}()
-	s.touch(ctx, log, sess.actor, sess.harness)
+	if principal != ProbePrincipal { // a health check, not an agent to list in who
+		s.touch(ctx, log, sess.actor, sess.harness)
+	}
 	idle := time.Duration(s.cfg.Limits.IdleTimeout)
 	for {
 		if sess.watching() {
@@ -365,7 +374,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 			return
 		}
 		if f.T != proto.FrameReq {
-			_ = s.send(sess, f.ID, nil, proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+			_ = s.send(sess, f.ID, nil, proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server",
 				fmt.Sprintf("unexpected %q frame after the handshake", f.T)))
 			return
 		}
@@ -445,7 +454,10 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bridge frame: %w", err)
 	}
-	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) || store.Reserved(f.Principal) {
+	// The upgrade's probe, alone of the reserved names, is welcomed: it
+	// connects here directly, and Bridge refuses its name to every key.
+	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) ||
+		(store.Reserved(f.Principal) && f.Principal != ProbePrincipal) {
 		return nil, fmt.Errorf("first frame is %q, not a bridge frame with a valid, unreserved principal", f.T)
 	}
 	sess.actor.Principal = f.Principal
@@ -464,7 +476,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 		return sess, errors.Join(e, sess.enc.Encode(w))
 	}
 	if f.T != proto.FrameHello {
-		return refuse(proto.Errf(proto.CodeInvalid, "upgrade starfix to match the server",
+		return refuse(proto.Errf(proto.CodeInvalid, proto.FixUpgrade+" starfix to match the server",
 			fmt.Sprintf("expected a hello, got a %q frame", f.T)))
 	}
 	if e := proto.CheckProto(f.Proto, s.cfg.ProtoMin, s.cfg.ProtoMax, s.cfg.Version); e != nil {
@@ -476,9 +488,7 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	}
 	sess.actor.Session = f.Session
 	if sess.actor.Session == "" {
-		if sess.actor.Session, err = newSessionID(); err != nil {
-			return refuse(proto.Errf(proto.CodeUnavailable, "retry", "server could not create a session id"))
-		}
+		sess.actor.Session = newSessionID()
 	}
 	sess.actor.Machine = f.Machine
 	if sess.actor.Machine == "" {
@@ -505,10 +515,8 @@ var sessionEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").Wit
 
 // newSessionID returns a session id for a client that sent none: "s-" and
 // 16 lowercase base32 characters, 80 random bits.
-func newSessionID() (string, error) {
+func newSessionID() string {
 	var b [10]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("session id: %w", err)
-	}
-	return "s-" + sessionEncoding.EncodeToString(b[:]), nil
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
+	return "s-" + sessionEncoding.EncodeToString(b[:])
 }

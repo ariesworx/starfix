@@ -47,10 +47,7 @@ func insertDep(ctx context.Context, w *wtx, from, to IssueID, typ DepType) error
 			return err
 		}
 	}
-	wid, err := randomInt63()
-	if err != nil {
-		return err
-	}
+	wid := randomInt63()
 	if _, err := w.exec(ctx, `INSERT INTO deps (from_id, to_id, type, created_by, created_at, rev, write_id)
   VALUES (?, ?, ?, ?, ?, 1, ?)`, string(from), string(to), string(typ), w.actor.Principal, w.now, wid); err != nil {
 		return fmt.Errorf("insert dep: %w", err)
@@ -212,10 +209,15 @@ func clampLimit(n, def, maxN int) int {
 // conditional-blocks target on the issue or an ancestor, not deferred (by
 // status or a future defer_until) on the issue or an ancestor, and not a
 // template. Ordered by priority, then age, at most limit (0 means 10, at
-// most 500). Computed at read time.
+// most 500). Computed at read time, from one snapshot.
 func (s *Store) Ready(ctx context.Context, limit int) ([]Issue, error) {
 	limit = clampLimit(limit, 10, 500)
-	rows, err := s.r.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+` FROM issues i
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ready: %w", err)
+	}
+	defer end()
+	rows, err := tx.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+` FROM issues i
 `+readyWhere, s.now(), limit)
 	if err != nil {
 		return nil, fmt.Errorf("ready: %w", err)
@@ -232,15 +234,20 @@ func (s *Store) Ready(ctx context.Context, limit int) ([]Issue, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("ready: %w", err)
 	}
-	return out, withLabels(ctx, s.r, out)
+	return out, withLabels(ctx, tx, out)
 }
 
 // Blocked returns unclosed issues held back by unclosed blockers, their own
 // or an ancestor's, ordered by priority, then age, at most limit (0 means
-// 50, at most 500).
+// 50, at most 500), from one snapshot.
 func (s *Store) Blocked(ctx context.Context, limit int) ([]BlockedIssue, error) {
 	limit = clampLimit(limit, 50, 500)
-	rows, err := s.r.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+`, b.via FROM issues i
+	tx, end, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("blocked: %w", err)
+	}
+	defer end()
+	rows, err := tx.QueryContext(ctx, blockedCTE+`SELECT `+issueCols+`, b.via FROM issues i
 JOIN blocked b ON b.id = i.id
 WHERE i.status <> 'closed'
 ORDER BY i.priority, i.created_at, i.id, (b.via <> i.id)`, s.now())
@@ -269,20 +276,20 @@ ORDER BY i.priority, i.created_at, i.id, (b.via <> i.id)`, s.now())
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("blocked: %w", err)
 	}
-	if err := s.attachBlockers(ctx, out); err != nil {
+	if err := attachBlockers(ctx, tx, out); err != nil {
 		return nil, err
 	}
 	issues := make([]*Issue, len(out))
 	for i := range out {
 		issues[i] = &out[i].Issue
 	}
-	return out, attachLabels(ctx, s.r, issues)
+	return out, attachLabels(ctx, tx, issues)
 }
 
 // attachBlockers fills BlockedBy for each issue: its own unclosed
 // blockers, or those of the ancestor it is blocked through (Via).
-func (s *Store) attachBlockers(ctx context.Context, bs []BlockedIssue) error {
-	by, err := blockerMap(ctx, s.r)
+func attachBlockers(ctx context.Context, q querier, bs []BlockedIssue) error {
+	by, err := blockerMap(ctx, q)
 	if err != nil {
 		return err
 	}
