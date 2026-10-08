@@ -57,7 +57,16 @@ type Settings struct {
 	// Limits bound what one principal can make the server do; see
 	// [Limits]. Zero fields take the defaults.
 	Limits Limits `yaml:"limits"`
+	// Account is the project's default account (design §12.1): what an
+	// issue reports time and tokens against when neither it nor an
+	// ancestor sets one. A code name: lowercase letters, digits and inner
+	// hyphens. Default DefaultAccount.
+	Account string `yaml:"account"`
 }
+
+// DefaultAccount is the account an issue reports against when nothing
+// sets one.
+const DefaultAccount = "internal"
 
 // UnitPattern is what a systemd unit name may look like. It cannot start
 // with "-", so it never reaches systemctl as an option.
@@ -83,8 +92,9 @@ const (
 // them, and AllowUnsafeDolt from flags only. It refuses a password in
 // flags.DSN, which the process list would show; a config file with an
 // unknown key, or with a password and any access for group or others; an
-// admin name that is invalid or reserved; an invalid limit; a systemd
-// unit that is not a unit name; and an unknown log level or format.
+// admin name that is invalid or reserved; an invalid limit; an account
+// that is not a code name; a systemd unit that is not a unit name; and an
+// unknown log level or format.
 func ResolveSettings(flags Settings, configPath string, getenv func(string) string) (Settings, error) {
 	if flags.DSN != "" {
 		cfg, err := mysql.ParseDSN(flags.DSN)
@@ -108,7 +118,7 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 	}
 	env := Settings{DSN: getenv(EnvDSN), Socket: getenv(EnvSocket), Project: getenv(EnvProject),
 		LogLevel: getenv(EnvLogLevel), LogFormat: getenv(EnvLogFormat)}
-	out := Settings{Socket: DefaultSocket, Prefix: "sf", LogLevel: "info", LogFormat: "text"}
+	out := Settings{Socket: DefaultSocket, Prefix: "sf", LogLevel: "info", LogFormat: "text", Account: DefaultAccount}
 	for _, s := range []Settings{file, env, flags} {
 		for _, f := range []struct {
 			dst *string
@@ -116,7 +126,7 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 		}{
 			{&out.DSN, s.DSN}, {&out.Socket, s.Socket}, {&out.Project, s.Project},
 			{&out.Prefix, s.Prefix}, {&out.Latest, s.Latest}, {&out.SystemdUnit, s.SystemdUnit},
-			{&out.LogLevel, s.LogLevel}, {&out.LogFormat, s.LogFormat},
+			{&out.LogLevel, s.LogLevel}, {&out.LogFormat, s.LogFormat}, {&out.Account, s.Account},
 		} {
 			if f.v != "" {
 				*f.dst = f.v
@@ -143,6 +153,9 @@ func ResolveSettings(flags Settings, configPath string, getenv func(string) stri
 		return Settings{}, err
 	}
 	out.Limits = out.Limits.WithDefaults()
+	if !store.ValidAccount(out.Account) {
+		return Settings{}, fmt.Errorf("account %q is not a code name; fix: set account: to 1-64 lowercase letters, digits and inner hyphens, such as %s", out.Account, DefaultAccount)
+	}
 	if out.SystemdUnit != "" && !UnitPattern.MatchString(out.SystemdUnit) {
 		return Settings{}, fmt.Errorf("systemd_unit %q is not a unit name; fix: set it to the service's name, for example starfixd.service", out.SystemdUnit)
 	}

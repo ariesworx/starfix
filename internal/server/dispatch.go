@@ -59,6 +59,7 @@ var handlers = map[string]handler{
 	proto.OpAck:      typed(ack),
 	proto.OpWatch:    typed(watchOp),
 	proto.OpAccept:   typed(accept),
+	proto.OpUsage:    typed(usage),
 }
 
 // typed decodes args strictly into A and calls fn.
@@ -82,7 +83,7 @@ func create(ctx context.Context, s *Server, a store.Actor, in proto.CreateArgs) 
 		ID: store.IssueID(in.ID), IdempotencyKey: in.Idem, ParentID: store.IssueID(in.Parent),
 		Title: in.Title, Body: in.Body, Design: in.Design, Acceptance: in.Acceptance, Notes: in.Notes,
 		Status: store.Status(in.Status), Type: store.IssueType(in.Type),
-		Assignee: in.Assignee, Owner: in.Owner, Labels: in.Labels,
+		Assignee: in.Assignee, Owner: in.Owner, Labels: in.Labels, Account: in.Account,
 	}
 	if in.Priority != nil {
 		p := store.Priority(*in.Priority)
@@ -154,7 +155,11 @@ func show(ctx context.Context, s *Server, a store.Actor, in proto.ShowArgs) (any
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
 	}
-	out := proto.ShowResult{Issue: wireIssue(is), Items: items, Similar: s.similar(ctx, is)}
+	u, err := s.cfg.Store.IssueUsage(ctx, id)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpShow, in.ID, 0, err)
+	}
+	out := proto.ShowResult{Issue: wireIssue(is), Items: items, Similar: s.similar(ctx, is), Usage: s.wireIssueUsage(u)}
 	if claim != nil {
 		c := wireClaim(*claim)
 		out.Claim = &c
@@ -241,7 +246,7 @@ func blocked(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) 
 
 func update(ctx context.Context, s *Server, a store.Actor, in proto.UpdateArgs) (any, *proto.Error) {
 	p := store.IssuePatch{Title: in.Title, Body: in.Body, Design: in.Design, Acceptance: in.Acceptance,
-		Notes: in.Notes, Assignee: in.Assignee, Owner: in.Owner}
+		Notes: in.Notes, Assignee: in.Assignee, Owner: in.Owner, Account: in.Account}
 	if in.Status != nil {
 		st := store.Status(*in.Status)
 		p.Status = &st
@@ -516,5 +521,6 @@ func wireIssue(is store.Issue) proto.Issue {
 		ExpiresAt: is.ExpiresAt, Ephemeral: is.Ephemeral, Pinned: is.Pinned, Template: is.Template,
 		Metadata: is.Metadata, CloseReason: is.CloseReason, CreatedBy: is.CreatedBy, CreatedAt: is.CreatedAt.UTC(),
 		UpdatedAt: is.UpdatedAt.UTC(), ClosedAt: is.ClosedAt, Rev: int64(is.Rev), Labels: is.Labels,
+		Account: is.Account,
 	}
 }

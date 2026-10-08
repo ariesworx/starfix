@@ -144,19 +144,31 @@ func (r UsageRecord) validate(n int, now time.Time) error {
 const usageCols = `principal, session, request_id, machine, harness, model, at, granularity, span_start,
   input, output, cache_write, cache_write_1h, cache_read, added_at`
 
+// UsageBatchError refuses an AddUsage batch of Got records, more than
+// Limits.UsageRecords (Max). It wraps ErrInvalid.
+type UsageBatchError struct{ Max, Got int }
+
+func (e *UsageBatchError) Error() string {
+	return fmt.Sprintf("%v: at most %d usage records per call, not %d", ErrInvalid, e.Max, e.Got)
+}
+
+// Unwrap makes errors.Is(err, ErrInvalid) hold.
+func (e *UsageBatchError) Unwrap() error { return ErrInvalid }
+
 // AddUsage stores the actor's usage records and returns how many were
 // new and how many it already had: a record whose request id the actor's
 // session already reported is ignored, so sending a batch again changes
 // nothing. A call that stores rows records one usage.add event. AddUsage
-// refuses, storing nothing, a batch of more than Limits.UsageRecords or
-// with an invalid record, with ErrInvalid, and one that would take the
-// principal past Limits.UsagePerDay rows in 24 hours, with ErrBusy.
+// refuses, storing nothing, a batch of more than Limits.UsageRecords with
+// a [*UsageBatchError], one with an invalid record with ErrInvalid, and
+// one that would take the principal past Limits.UsagePerDay rows in 24
+// hours with ErrBusy.
 func (s *Store) AddUsage(ctx context.Context, actor Actor, recs []UsageRecord) (UsageAdded, error) {
 	if len(recs) == 0 {
 		return UsageAdded{}, nil
 	}
 	if limit := s.opts.Limits.UsageRecords; len(recs) > limit {
-		return UsageAdded{}, fmt.Errorf("%w: at most %d usage records per call, not %d", ErrInvalid, limit, len(recs))
+		return UsageAdded{}, &UsageBatchError{Max: limit, Got: len(recs)}
 	}
 	now := s.now()
 	from, to := recs[0].At.UTC(), recs[0].At.UTC()
