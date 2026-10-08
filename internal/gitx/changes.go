@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Files to issues (design §12 item 3): the paths an issue's work touched,
@@ -18,8 +23,8 @@ import (
 type Changes struct {
 	// Branch is the checked-out branch; empty for a detached HEAD.
 	Branch string
-	// Commits are the commits on HEAD since it left the default branch,
-	// newest first, at most maxCommits.
+	// Commits are the commits on HEAD's first-parent line since it left
+	// the default branch, newest first, at most maxCommits.
 	Commits []Commit
 	// Uncommitted are the files staged, changed or untracked and not
 	// ignored, in path order.
@@ -75,19 +80,71 @@ func (c Changes) Paths(id string) []string {
 	return out
 }
 
-// IDs returns the issues the changes name, the branch's first, then each
-// trailer's, without repeats. The branch's is read with IDFromBranch and
-// no prefix, so a project prefix with a hyphen reads wrong; callers that
-// know the issue use Paths with its id.
-func (c Changes) IDs() []string {
-	var out []string
-	if id, ok := IDFromBranch(c.Branch, ""); ok {
-		out = append(out, id)
+// gitTimeout bounds one look at the repository by IssuePaths, so a slow
+// one never holds up a renewal or a finish.
+const gitTimeout = 5 * time.Second
+
+// IssuePaths returns the paths the work on each issue in ids touched, in
+// the repository holding dir (ReadChanges), as sfx sends them to the
+// server: only paths it accepts (proto.CheckPath, and no directory
+// prefix), most recent first, at most proto.MaxPaths in all, filled in
+// ids' order. Issues with none are left out. It returns nil when git
+// tells nothing: no git, no repository, a detached HEAD, or a look that
+// takes longer than 5 seconds. Paths are a hint, so it never fails.
+func IssuePaths(ctx context.Context, dir string, ids []string) map[string][]string {
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	ch, err := ReadChanges(ctx, dir)
+	if err != nil {
+		return nil
 	}
-	for _, cm := range c.Commits {
-		if cm.Trailer != "" && !slices.Contains(out, cm.Trailer) {
-			out = append(out, cm.Trailer)
+	var out map[string][]string
+	budget := proto.MaxPaths
+	for _, id := range ids {
+		var ps []string
+		for _, p := range ch.Paths(id) {
+			if len(ps) == budget {
+				break
+			}
+			if proto.CheckPath(p) == nil && !proto.IsPathPrefix(p) {
+				ps = append(ps, p)
+			}
 		}
+		if len(ps) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		out[id] = ps
+		budget -= len(ps)
+	}
+	return out
+}
+
+// RepoRelative returns the paths ps, given relative to dir, relative to
+// the root of the repository holding dir instead, with forward slashes,
+// cleaned, keeping a trailing "/". An absolute path is left as it is, for
+// the server to refuse, and outside a repository each is only cleaned. It
+// never returns nil, so an empty list still says "none".
+func RepoRelative(ctx context.Context, dir string, ps []string) []string {
+	prefix := ""
+	if len(ps) > 0 {
+		prefix, _ = gitRaw(ctx, dir, "rev-parse", "--show-prefix")
+		prefix = strings.TrimSuffix(prefix, "\n")
+	}
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		p = filepath.ToSlash(p)
+		if path.IsAbs(p) {
+			out = append(out, p)
+			continue
+		}
+		rel := path.Join(prefix, p)
+		if strings.HasSuffix(p, "/") {
+			rel += "/"
+		}
+		out = append(out, rel)
 	}
 	return out
 }
@@ -96,11 +153,12 @@ func (c Changes) IDs() []string {
 var hexHash = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 // ReadChanges reads the changes of the repository holding dir: the
-// checked-out branch, its commits since the default branch, and its
-// uncommitted files. A detached HEAD has no changes. The default branch is
-// origin's HEAD, else main or master (local, then origin's), else the
-// branch's upstream; with none of them, there are no commits, only
-// uncommitted files. An error, such as no git or no repository, comes with
+// checked-out branch, its commits since the default branch, following
+// first parents only, so commits a merge brought in are not the branch's,
+// and its uncommitted files. A detached HEAD has no changes. The default
+// branch is origin's HEAD, else main or master (origin's, then local,
+// which may be stale), else the branch's upstream; with none of them,
+// there are no commits, only uncommitted files. An error, such as no git or no repository, comes with
 // no changes; callers that only want what there is treat it as none.
 //
 // It runs git with fixed arguments and without optional locks, so it
@@ -137,8 +195,8 @@ func defaultBase(ctx context.Context, top string) (string, error) {
 	if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
 		return "", nil // an unborn branch: nothing committed yet
 	}
-	for _, ref := range []string{"refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master",
-		"refs/remotes/origin/main", "refs/remotes/origin/master", "@{upstream}"} {
+	for _, ref := range []string{"refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master",
+		"refs/heads/main", "refs/heads/master", "@{upstream}"} {
 		if _, err := git(ctx, top, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
 			continue
 		}
@@ -151,13 +209,13 @@ func defaultBase(ctx context.Context, top string) (string, error) {
 	return "", nil
 }
 
-// commitsSince reads the commits in base..HEAD, newest first: each one's
-// trailer and paths. Split on NUL, a record is two empty fields, which no
+// commitsSince reads the commits in base..HEAD along first parents,
+// newest first: each one's trailer and paths, a merge's being none. Split on NUL, a record is two empty fields, which no
 // message or path can make (a message holds no NUL, and a path is never
 // empty), the hash, the message, and the paths, the first after a
 // newline.
 func commitsSince(ctx context.Context, top, base string) ([]Commit, error) {
-	out, err := gitRaw(ctx, top, "-c", "log.showSignature=false", "log", "--no-color", "--no-renames", "--name-only",
+	out, err := gitRaw(ctx, top, "-c", "log.showSignature=false", "log", "--no-color", "--first-parent", "--diff-merges=off", "--no-renames", "--name-only",
 		"-z", "--max-count="+strconv.Itoa(maxCommits), "--format=%x00%x00%H%x00%B", base+"..HEAD", "--")
 	if err != nil {
 		return nil, err

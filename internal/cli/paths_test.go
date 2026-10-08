@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"slices"
 	"testing"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -43,20 +42,5 @@ func TestPrintReady(t *testing.T) {
 	want := "sf-a1b2  P1  open  free\nsf-c3d4  P0  open  contested  overlaps sf-e5f6, sf-g7h8\n"
 	if got := b.String(); got != want {
 		t.Errorf("printReady =\n%q\nwant\n%q", got, want)
-	}
-}
-
-func TestDeclaredPaths(t *testing.T) {
-	tests := []struct {
-		in   []string
-		want []string
-	}{
-		{nil, []string{}},
-		{[]string{"./docs/x.md", "internal/store/"}, []string{"docs/x.md", "internal/store/"}},
-	}
-	for _, tc := range tests {
-		if got := declaredPaths(tc.in); !slices.Equal(got, tc.want) || got == nil {
-			t.Errorf("declaredPaths(%q) = %q, want %q (never nil)", tc.in, got, tc.want)
-		}
 	}
 }

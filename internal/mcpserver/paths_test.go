@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,22 @@ import (
 
 	"github.com/ariesworx/starfix/internal/proto"
 )
+
+// gitCommit writes each file in dir and commits them all with msg.
+func gitCommit(t *testing.T, dir, msg string, files ...string) {
+	t.Helper()
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(msg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "--all"},
+		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", msg}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil { //nolint:gosec // test fixture
+			t.Fatalf("git %s: %v\n%s", args[0], err, out)
+		}
+	}
+}
 
 // gitRepo makes a repository on branch with one commit on main before it,
 // and the files given left uncommitted, isolated from the user's git
@@ -52,35 +69,6 @@ func gitRepo(t *testing.T, branch string, files ...string) string {
 	return dir
 }
 
-func TestRepoPaths(t *testing.T) {
-	long := strings.Repeat("d/", proto.MaxPathLen/2) + "x.go"
-	dir := gitRepo(t, "feature/sf-a1b2-thing", "a b.go", "dir/c.go", long)
-	tests := []struct {
-		name string
-		dir  string
-		ids  []string
-		want map[string][]string
-	}{
-		{"the branch's issue", dir, []string{"sf-a1b2"}, map[string][]string{"sf-a1b2": {"a b.go", "dir/c.go"}}},
-		{"discovered from the branch", dir, nil, map[string][]string{"sf-a1b2": {"a b.go", "dir/c.go"}}},
-		{"another issue", dir, []string{"sf-zzzz"}, nil},
-		{"not a repository", t.TempDir(), []string{"sf-a1b2"}, nil},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := RepoPaths(t.Context(), tc.dir, tc.ids)
-			if len(got) != len(tc.want) {
-				t.Fatalf("RepoPaths(%v) = %q, want %q", tc.ids, got, tc.want)
-			}
-			for id, ps := range tc.want {
-				if !slices.Equal(got[id], ps) {
-					t.Errorf("RepoPaths(%v)[%s] = %q, want %q (a path the server refuses is left out)", tc.ids, id, got[id], ps)
-				}
-			}
-		})
-	}
-}
-
 // clock is a settable time for the renewal throttle.
 type clock struct {
 	mu sync.Mutex
@@ -113,12 +101,13 @@ func renewPaths(f *fakeConn) []map[string][]string {
 }
 
 // workServer is an MCP server on the repository dir whose fake conn
-// starts and holds every issue asked for, refusing renewals that carry
-// paths when refusePaths is set.
+// starts and holds every issue asked for, refusing a renew, finish or
+// handoff that carries paths when refusePaths is set.
 func workServer(t *testing.T, dir string, refusePaths bool) (*mcp.ClientSession, *Server, *fakeConn, *clock) {
 	t.Helper()
 	var mu sync.Mutex
 	var held []proto.Claim
+	refused := proto.Errf(proto.CodeInvalid, "correct it and retry", "path \"x\" is bad")
 	f := &fakeConn{who: "alice", reply: func(op string, args any) (any, error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -129,11 +118,18 @@ func workServer(t *testing.T, dir string, refusePaths bool) (*mcp.ClientSession,
 			return proto.StartResult{Issue: proto.Issue{ID: id, Type: "task"}, Claim: &proto.Claim{ID: id, Epoch: 1}}, nil
 		case proto.OpRenew:
 			if refusePaths && args.(proto.RenewArgs).Paths != nil {
-				return nil, proto.Errf(proto.CodeInvalid, "correct it and retry", "path \"x\" is bad")
+				return nil, refused
 			}
 			return proto.ClaimsResult{Claims: held}, nil
 		case proto.OpFinish:
+			if refusePaths && args.(proto.FinishArgs).Paths != nil {
+				return nil, refused
+			}
 			return proto.FinishResult{ID: args.(proto.FinishArgs).ID, Rev: 3}, nil
+		case proto.OpHandoff:
+			if refusePaths && args.(proto.HandoffArgs).Paths != nil {
+				return nil, refused
+			}
 		}
 		return proto.WriteResult{ID: "sf-a1b2", Rev: 2}, nil
 	}}
@@ -195,42 +191,93 @@ func TestRenewRefusedPaths(t *testing.T) {
 	}
 }
 
-// finish and handoff carry the issue's paths, which the agent never
-// gives: the tools' schemas have no such field.
-func TestFinishAndHandoffSendPaths(t *testing.T) {
-	dir := gitRepo(t, "feature/sf-a1b2-thing", "a.go", "b/c.go")
-	cs, _, f, _ := workServer(t, dir, false)
-	callTool(t, cs, "handoff", map[string]any{"id": "sf-a1b2", "note": "halfway"})
-	callTool(t, cs, "finish", map[string]any{"id": "sf-a1b2"})
-	want := []string{"a.go", "b/c.go"}
+// sentPaths returns the paths each call of op carried, in order.
+func sentPaths(f *fakeConn, op string) [][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var out [][]string
 	for _, c := range f.calls {
-		var got []string
 		switch a := c.args.(type) {
 		case proto.HandoffArgs:
-			got = a.Paths
+			if op == proto.OpHandoff {
+				out = append(out, a.Paths)
+			}
 		case proto.FinishArgs:
-			got = a.Paths
-		default:
-			continue
-		}
-		if !slices.Equal(got, want) {
-			t.Errorf("%s carried paths %q, want %q", c.op, got, want)
-		}
-	}
-	for _, tool := range []string{"finish", "handoff"} {
-		tools, err := cs.ListTools(t.Context(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, tl := range tools.Tools {
-			b, _ := json.Marshal(tl.InputSchema)
-			if tl.Name == tool && strings.Contains(string(b), "paths") {
-				t.Errorf("%s's schema names paths: %s", tool, b)
+			if op == proto.OpFinish {
+				out = append(out, a.Paths)
 			}
 		}
 	}
+	return out
+}
+
+// finish and handoff carry the issue's paths, which the agent never
+// gives: the tools' schemas have no such field. A server that refuses
+// the paths gets the request again without them.
+func TestFinishAndHandoffSendPaths(t *testing.T) {
+	want := []string{"a.go", "b/c.go"}
+	for _, refuse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("refused %v", refuse), func(t *testing.T) {
+			dir := gitRepo(t, "feature/sf-a1b2-thing", "a.go", "b/c.go")
+			cs, _, f, _ := workServer(t, dir, refuse)
+			for tool, args := range map[string]map[string]any{
+				"handoff": {"id": "sf-a1b2", "note": "halfway"},
+				"finish":  {"id": "sf-a1b2"},
+			} {
+				if res := callTool(t, cs, tool, args); res.IsError {
+					t.Errorf("%s: %s", tool, text(t, res))
+				}
+			}
+			for _, op := range []string{proto.OpHandoff, proto.OpFinish} {
+				got := sentPaths(f, op)
+				if len(got) == 0 || !slices.Equal(got[0], want) {
+					t.Errorf("%s carried paths %q, want %q first", op, got, want)
+				}
+				if refuse && (len(got) != 2 || got[1] != nil) {
+					t.Errorf("%s after its paths were refused carried %q, want a second call without paths", op, got)
+				}
+			}
+		})
+	}
+	cs, _, _, _ := workServer(t, "", false)
+	tools, err := cs.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range tools.Tools {
+		b, _ := json.Marshal(tl.InputSchema)
+		if (tl.Name == "finish" || tl.Name == "handoff") && strings.Contains(string(b), "paths") {
+			t.Errorf("%s's schema names paths: %s", tl.Name, b)
+		}
+	}
+}
+
+// A renewal carries paths for at most proto.MaxPathIssues issues, which
+// the server accepts; the rest go with the next.
+func TestRenewPathIssuesCap(t *testing.T) {
+	dir := gitRepo(t, "feature/refactor")
+	cs, s, f, clk := workServer(t, dir, false)
+	n := proto.MaxPathIssues + 1
+	for i := range n {
+		id := fmt.Sprintf("sf-a%03d", i)
+		gitCommit(t, dir, "work\n\nStarfix: "+id, id+".go")
+		callTool(t, cs, "start", map[string]any{"id": id})
+	}
+	s.Renew(t.Context())
+	clk.add(time.Minute)
+	s.Renew(t.Context())
+	if got, want := issueCounts(renewPaths(f)), []int{proto.MaxPathIssues, n - proto.MaxPathIssues}; !slices.Equal(got, want) {
+		t.Errorf("renewals carried paths for %v issues, want %v", got, want)
+	}
+}
+
+// issueCounts is how many issues each renewal carried paths for.
+func issueCounts(rs []map[string][]string) []int {
+	out := make([]int, len(rs))
+	for i, r := range rs {
+		out[i] = len(r)
+	}
+	return out
 }
 
 // show lists the likely files and the work others hold that overlaps

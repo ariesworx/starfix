@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/ariesworx/starfix/internal/gitx"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -85,7 +86,7 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 	var labels, paths listFlag
 	var id string
 	fs.Var(&labels, "label", "label (repeatable, or comma-separated)")
-	fs.Var(&paths, "paths", "files the work will touch; a directory ends in / (repeatable, or comma-separated)")
+	fs.Var(&paths, "paths", "files the work will touch, relative to here; a directory ends in / (repeatable, or comma-separated)")
 	fs.Var(&labels, "l", "label")
 	fs.StringVar(&id, "id", "", "issue id (default: generated)")
 	pos, err := parse(fs, args, usage)
@@ -103,7 +104,7 @@ func cmdCreate(ctx context.Context, r *runner, args []string) error {
 		Acceptance: f.acceptance, Notes: f.notes, Status: f.status, Type: f.typ, Assignee: f.assignee,
 		Owner: f.owner, Parent: f.parent, Labels: labels, Account: f.account}
 	if len(paths) > 0 {
-		in.Paths = declaredPaths(paths)
+		in.Paths = gitx.RepoRelative(ctx, r.dir, paths)
 	}
 	if f.prio != "" {
 		p, err := priority(f.prio)
@@ -451,7 +452,7 @@ func cmdUpdate(ctx context.Context, r *runner, args []string) error {
 		n++
 	}
 	if set(fs, "paths") {
-		ps := declaredPaths(paths)
+		ps := gitx.RepoRelative(ctx, r.dir, paths)
 		in.Paths = &ps
 		n++
 	}

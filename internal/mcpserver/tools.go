@@ -477,7 +477,14 @@ func (s *Server) register() {
 				args.Discovered = append(args.Discovered, proto.Discovered{Title: d.Title, Type: d.Type, Priority: d.Priority})
 			}
 			var out proto.FinishResult
-			err := c.Call(ctx, proto.OpFinish, args, &out)
+			paths := args.Paths
+			err := proto.RetryWithoutPaths(paths != nil, func(withPaths bool) error {
+				args.Paths = nil
+				if withPaths {
+					args.Paths = paths
+				}
+				return c.Call(ctx, proto.OpFinish, args, &out)
+			})
 			if err == nil {
 				s.claims.drop(in.ID)
 			}
@@ -492,7 +499,14 @@ func (s *Server) register() {
 			if in.Release {
 				args.Epoch = s.claims.epoch(in.ID)
 			}
-			err := c.Call(ctx, proto.OpHandoff, args, &out)
+			paths := args.Paths
+			err := proto.RetryWithoutPaths(paths != nil, func(withPaths bool) error {
+				args.Paths = nil
+				if withPaths {
+					args.Paths = paths
+				}
+				return c.Call(ctx, proto.OpHandoff, args, &out)
+			})
 			if err == nil && in.Release {
 				s.claims.drop(in.ID)
 			}

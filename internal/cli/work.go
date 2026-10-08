@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/gitx"
-	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -127,10 +125,9 @@ func cmdFinish(ctx context.Context, r *runner, args []string) error {
 		}
 		in.Waived[n] = reason
 	}
-	in.Paths = mcpserver.RepoPaths(ctx, r.dir, []string{in.ID})[in.ID]
 	in.Idem = proto.NewIdem("cli")
 	var out proto.FinishResult
-	if err := r.call(ctx, proto.OpFinish, in, &out); err != nil {
+	if err := r.withPaths(ctx, in.ID, &in.Paths, func() error { return r.call(ctx, proto.OpFinish, in, &out) }); err != nil {
 		return err
 	}
 	if r.json {
@@ -162,9 +159,53 @@ func cmdHandoff(ctx context.Context, r *runner, args []string) error {
 	if in.Note, err = r.text(strings.Join(pos[1:], " ")); err != nil {
 		return err
 	}
-	in.Paths = mcpserver.RepoPaths(ctx, r.dir, []string{in.ID})[in.ID]
 	in.Idem = proto.NewIdem("cli")
-	return r.write(ctx, proto.OpHandoff, in)
+	return r.withPaths(ctx, in.ID, &in.Paths, func() error { return r.write(ctx, proto.OpHandoff, in) })
+}
+
+// withPaths sets *paths to the paths the work on issue id touched, read
+// from git, and runs call; if the server refuses the request as invalid
+// while it carried paths, it runs call again without them
+// (proto.RetryWithoutPaths), since paths are only a hint.
+func (r *runner) withPaths(ctx context.Context, id string, paths *[]string, call func() error) error {
+	ps := gitx.IssuePaths(ctx, r.dir, []string{id})[id]
+	return proto.RetryWithoutPaths(ps != nil, func(with bool) error {
+		*paths = nil
+		if with {
+			*paths = ps
+		}
+		return call()
+	})
+}
+
+// sendClaimPaths sends, after away has renewed them, the paths of the
+// work on each claim, read from git: one issue per renew, so the server
+// refusing one issue's paths loses only those. A refusal of them as
+// invalid is passed over, since paths are only a hint and the claims are
+// already renewed.
+func (r *runner) sendClaimPaths(ctx context.Context, lease string, claims []proto.Claim) error {
+	ids := make([]string, len(claims))
+	for i, c := range claims {
+		ids[i] = c.ID
+	}
+	paths := gitx.IssuePaths(ctx, r.dir, ids)
+	for _, id := range ids {
+		ps, ok := paths[id]
+		if !ok {
+			continue
+		}
+		err := proto.RetryWithoutPaths(true, func(with bool) error {
+			if !with {
+				return nil // renewed already; nothing else to send
+			}
+			in := proto.RenewArgs{Lease: lease, All: true, Paths: map[string][]string{id: ps}}
+			return r.call(ctx, proto.OpRenew, in, &proto.ClaimsResult{})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // itemNumbers parses acceptance item numbers.
@@ -278,17 +319,11 @@ func cmdAway(ctx context.Context, r *runner, args []string) error {
 	if _, err := proto.ParseDuration(d); err != nil {
 		return usagef(usage, "%q: %v", d, err)
 	}
-	// The paths go to the issues the repository's branch and trailers
-	// name; the server ignores any this principal does not hold. They are
-	// a hint, so a refusal of them never stops the renewal.
-	in := proto.RenewArgs{Lease: d, All: true, Paths: mcpserver.RepoPaths(ctx, r.dir, nil)}
 	var out proto.ClaimsResult
-	err = r.call(ctx, proto.OpRenew, in, &out)
-	if pe, ok := errors.AsType[*proto.Error](err); ok && pe.Code == proto.CodeInvalid && in.Paths != nil {
-		in.Paths = nil
-		err = r.call(ctx, proto.OpRenew, in, &out)
+	if err := r.call(ctx, proto.OpRenew, proto.RenewArgs{Lease: d, All: true}, &out); err != nil {
+		return err
 	}
-	if err != nil {
+	if err := r.sendClaimPaths(ctx, d, out.Claims); err != nil {
 		return err
 	}
 	if r.json {

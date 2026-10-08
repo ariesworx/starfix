@@ -3,22 +3,10 @@ package cli
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/proto"
 )
-
-// declaredPaths turns --paths values into the paths an issue declares:
-// forward slashes, without a leading "./". The server checks the rest. It
-// is never nil, so an empty --paths sends [] and clears the set.
-func declaredPaths(l []string) []string {
-	out := make([]string, 0, len(l))
-	for _, p := range l {
-		out = append(out, strings.TrimPrefix(filepath.ToSlash(p), "./"))
-	}
-	return out
-}
 
 // printFiles prints an issue's likely files, declared first, and the
 // issues others hold whose files overlap them.

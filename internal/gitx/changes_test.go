@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 func TestBranchFor(t *testing.T) {
@@ -101,9 +104,6 @@ func TestReadChanges(t *testing.T) {
 			t.Errorf("Paths(%q) = %q, want %q", tc.id, got, tc.want)
 		}
 	}
-	if got, want := ch.IDs(), []string{"sf-a1b2", "sf-c3d4"}; !slices.Equal(got, want) {
-		t.Errorf("IDs() = %q, want %q", got, want)
-	}
 }
 
 // Off an issue's branch, its trailer commits still count, and uncommitted
@@ -141,6 +141,114 @@ func TestReadChangesOriginHead(t *testing.T) {
 	}
 	if got, want := ch.Paths("sf-a1b2"), []string{"fix.go"}; !slices.Equal(got, want) {
 		t.Errorf("Paths(sf-a1b2) = %q, want %q", got, want)
+	}
+}
+
+// Commits that reached the branch by a merge, or that the default branch
+// had when the branch left it, are not the branch's work: the log follows
+// first parents only, and the default branch is origin's before a local
+// copy that may be stale.
+func TestReadChangesMerged(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) string
+	}{
+		{"merged another branch", func(t *testing.T) string {
+			dir := newRepo(t)
+			repoGit(t, dir, "switch", "-q", "-c", "other")
+			commit(t, dir, "other work", "other.go")
+			repoGit(t, dir, "switch", "-q", "main")
+			repoGit(t, dir, "switch", "-q", "-c", "feature/sf-a1b2")
+			commit(t, dir, "mine", "mine.go")
+			repoGit(t, dir, "merge", "-q", "--no-edit", "other")
+			return dir
+		}},
+		{"left a newer origin/main than the local main", func(t *testing.T) string {
+			upstream := newRepo(t)
+			dir := filepath.Join(t.TempDir(), "clone")
+			repoGit(t, upstream, "clone", "-q", upstream, dir)
+			commit(t, upstream, "main moved on", "main.go")
+			repoGit(t, dir, "fetch", "-q")
+			repoGit(t, dir, "remote", "set-head", "origin", "-d")
+			repoGit(t, dir, "switch", "-q", "-c", "feature/sf-a1b2", "origin/main")
+			commit(t, dir, "mine", "mine.go")
+			return dir
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ch, err := ReadChanges(t.Context(), tc.setup(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := ch.Paths("sf-a1b2"), []string{"mine.go"}; !slices.Equal(got, want) {
+				t.Errorf("Paths(sf-a1b2) = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// IssuePaths gives each issue the paths of its work that the server
+// accepts, and nothing when git tells nothing.
+func TestIssuePaths(t *testing.T) {
+	long := strings.Repeat("d/", proto.MaxPathLen/2) + "x.go"
+	dir := newRepo(t)
+	repoGit(t, dir, "switch", "-q", "-c", "feature/sf-a1b2-thing")
+	for _, f := range []string{"a b.go", "dir/c.go", long} {
+		write(t, dir, f, "x")
+	}
+	tests := []struct {
+		name string
+		dir  string
+		ids  []string
+		want map[string][]string
+	}{
+		{"the branch's issue", dir, []string{"sf-a1b2"}, map[string][]string{"sf-a1b2": {"a b.go", "dir/c.go"}}},
+		{"another issue", dir, []string{"sf-zzzz"}, nil},
+		{"not a repository", t.TempDir(), []string{"sf-a1b2"}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IssuePaths(t.Context(), tc.dir, tc.ids)
+			if len(got) != len(tc.want) {
+				t.Fatalf("IssuePaths(%v) = %q, want %q", tc.ids, got, tc.want)
+			}
+			for id, ps := range tc.want {
+				if !slices.Equal(got[id], ps) {
+					t.Errorf("IssuePaths(%v)[%s] = %q, want %q (a path the server refuses is left out)", tc.ids, id, got[id], ps)
+				}
+			}
+		})
+	}
+}
+
+// RepoRelative turns paths given in a directory into the repository's
+// form, relative to its root.
+func TestRepoRelative(t *testing.T) {
+	dir := newRepo(t)
+	sub := filepath.Join(dir, "internal", "store")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		dir  string
+		in   []string
+		want []string
+	}{
+		{"at the root", dir, []string{"a.go", "./docs/"}, []string{"a.go", "docs/"}},
+		{"in a subdirectory", sub, []string{"paths.go", "./", "../cli/"},
+			[]string{"internal/store/paths.go", "internal/store/", "internal/cli/"}},
+		{"absolute, which the server refuses, saying why", sub, []string{"/etc/passwd"}, []string{"/etc/passwd"}},
+		{"outside a repository, as given", t.TempDir(), []string{"./x.go"}, []string{"x.go"}},
+		{"none, to clear", sub, nil, []string{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RepoRelative(t.Context(), tc.dir, tc.in); !slices.Equal(got, tc.want) || got == nil {
+				t.Errorf("RepoRelative(%q) = %q, want %q (never nil)", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -191,12 +299,12 @@ func TestReadChangesNothing(t *testing.T) {
 		t.Errorf("detached HEAD: %+v, %v; want no changes and no error", ch, err)
 	}
 
-	if ch, err := ReadChanges(t.Context(), t.TempDir()); err == nil || len(ch.IDs()) != 0 {
+	if ch, err := ReadChanges(t.Context(), t.TempDir()); err == nil || ch.Branch != "" {
 		t.Errorf("outside a repository: %+v, %v; want no changes and an error", ch, err)
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	if ch, err := ReadChanges(t.Context(), dir); err == nil || len(ch.IDs()) != 0 {
+	if ch, err := ReadChanges(t.Context(), dir); err == nil || ch.Branch != "" {
 		t.Errorf("without git: %+v, %v; want no changes and an error", ch, err)
 	}
 }

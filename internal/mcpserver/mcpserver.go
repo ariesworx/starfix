@@ -15,6 +15,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ariesworx/starfix/internal/gitx"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -47,7 +48,7 @@ type Options struct {
 	// while it runs. Default 60s; negative turns renewal off.
 	RenewEvery time.Duration
 	// Dir is the repository the agent works in. Renew, finish and handoff
-	// send the paths each issue's work touched there ([RepoPaths]); empty
+	// send the paths each issue's work touched there ([gitx.IssuePaths]); empty
 	// sends none.
 	Dir string
 	// PathsEvery is how often a renewal sends a held issue's paths.
@@ -236,25 +237,30 @@ func (s *Server) renewLoop(ctx context.Context) {
 // is many ticks long.
 //
 // Every PathsEvery it also sends the paths each held issue's work touched
-// (RepoPaths). If the server refuses the renewal with them, it renews
-// again without them: paths are never worth a lapsed claim.
+// (gitx.IssuePaths), for at most proto.MaxPathIssues issues at a time;
+// the rest are due at the next tick. If the server refuses the renewal
+// with them, it renews again without them: paths are never worth a
+// lapsed claim.
 func (s *Server) Renew(ctx context.Context) {
 	if !s.claims.any() && !s.link.connected() {
 		return
 	}
 	now := s.now()
 	due := s.claims.due(now, s.opts.PathsEvery)
+	due = due[:min(len(due), proto.MaxPathIssues)]
 	var paths map[string][]string
 	if len(due) > 0 && s.opts.Dir != "" {
-		paths = RepoPaths(ctx, s.opts.Dir, due)
+		paths = gitx.IssuePaths(ctx, s.opts.Dir, due)
 	}
 	var r proto.ClaimsResult
 	err := s.link.with(ctx, true, func(c Conn) error {
-		err := c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease, Paths: paths}, &r)
-		if pe, ok := errors.AsType[*proto.Error](err); ok && pe.Code == proto.CodeInvalid && paths != nil {
-			err = c.Call(ctx, proto.OpRenew, proto.RenewArgs{Lease: Lease}, &r)
-		}
-		return err
+		return proto.RetryWithoutPaths(paths != nil, func(withPaths bool) error {
+			args := proto.RenewArgs{Lease: Lease}
+			if withPaths {
+				args.Paths = paths
+			}
+			return c.Call(ctx, proto.OpRenew, args, &r)
+		})
 	})
 	if err == nil {
 		s.claims.keep(r.Claims)

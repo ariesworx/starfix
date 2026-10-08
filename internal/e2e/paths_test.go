@@ -74,7 +74,7 @@ func TestFilesToIssues(t *testing.T) {
 	st := decode[mcpserver.Started](t, ag.ok("start", map[string]any{"id": held}))
 	gitIn(t, alice.repo, "switch", "-q", "-c", st.Branch)
 	touch(t, alice.repo, "internal/store/paths.go", "docs/cli.md")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	ag.srv.Renew(ctx)
 
@@ -111,13 +111,23 @@ func TestFilesToIssues(t *testing.T) {
 		t.Errorf("ready still names overlaps once the work is finished:\n%s", out)
 	}
 
-	// A person's own terminal: start, change, go away.
+	// A person's own terminal: start two issues, change files for each,
+	// go away. away sends each claim's paths, one issue per request.
 	delete(alice.env, "CLAUDE_CODE_SESSION_ID")
+	side := strings.TrimSpace(alice.ok("create", "Side work"))
+	alice.ok("start", side)
 	alice.ok("start", other, "--branch")
+	touch(t, alice.repo, "side.go")
+	gitIn(t, alice.repo, "add", "side.go")
+	gitIn(t, alice.repo, "-c", "user.name=Alice", "-c", "user.email=alice@example.com",
+		"commit", "-q", "-m", "side work\n\nStarfix: "+side)
 	touch(t, alice.repo, "cmd/tool.go")
 	alice.ok("away", "1h")
 	if got := filePaths(t, bob, other); !slices.Contains(got, "cmd/tool.go") {
-		t.Errorf("paths after sfx away = %q, want cmd/tool.go among them", got)
+		t.Errorf("paths of %s after sfx away = %q, want cmd/tool.go among them", other, got)
+	}
+	if got := filePaths(t, bob, side); !slices.Equal(got, []string{"side.go"}) {
+		t.Errorf("paths of %s after sfx away = %q, want side.go, from its trailer", side, got)
 	}
 	touch(t, alice.repo, "cmd/handoff.go")
 	alice.ok("handoff", other, "halfway")
@@ -134,6 +144,16 @@ func TestFilesToIssues(t *testing.T) {
 	alice.ok("finish", other)
 	if got := filePaths(t, bob, other); !slices.Contains(got, "cmd/finish.go") {
 		t.Errorf("paths after sfx finish = %q, want cmd/finish.go among them", got)
+	}
+
+	// --paths is relative to where sfx runs, like any path on a command
+	// line.
+	if err := os.MkdirAll(filepath.Join(alice.repo, "docs"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	alice.ok("-C", filepath.Join(alice.repo, "docs"), "update", cand, "--paths", "cli.md,./")
+	if got, want := filePaths(t, bob, cand), []string{"docs/", "docs/cli.md"}; !slices.Equal(got, want) {
+		t.Errorf("paths declared from docs/ = %q, want %q", got, want)
 	}
 
 	bob.ok("update", cand, "--paths", "")
