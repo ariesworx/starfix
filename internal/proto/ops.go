@@ -3,6 +3,7 @@ package proto
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -254,6 +255,17 @@ type UsageRecord struct {
 	SpanStart   *time.Time `json:"span_start,omitempty"`
 	Tokens
 }
+
+// UsageRequestID and UsageModel are the shapes the server accepts for a
+// usage record's request id and model. A request id is a harness's
+// request or message id, or several joined; a model is a name as
+// providers spell it, with the prefixes and suffixes gateways add. Both
+// are printable ASCII, so they admit no control or bidi character. One
+// record out of shape refuses its whole batch, so clients check theirs.
+var (
+	UsageRequestID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/+=@-]{0,254}$`)
+	UsageModel     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/+@-]{0,127}$`)
+)
 
 // UsageArgs reports usage records for the caller's session; the
 // principal, session and machine come from the connection.
