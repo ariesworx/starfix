@@ -10,10 +10,11 @@ import (
 )
 
 // cmdTUI shows the live board (internal/board) until q. It needs a
-// terminal on standard input and output, and refuses anything else before
-// it dials, pointing at the listing commands. The first connection is
-// made before the board takes the terminal, so a refusal prints as any
-// command's does; the ones after it are the board's to redial.
+// terminal on standard input and output that is not TERM=dumb, and
+// refuses anything else before it dials, pointing at the listing
+// commands. The first connection is made before the board takes the
+// terminal, so a refusal prints as any command's does; the ones after it
+// are the board's to redial.
 func cmdTUI(ctx context.Context, r *runner, args []string) error {
 	const usage = "tui"
 	fs := r.newFlags("tui")
@@ -27,9 +28,14 @@ func cmdTUI(ctx context.Context, r *runner, args []string) error {
 	if r.json {
 		return usagef(usage, "tui draws a board and prints no JSON; `sfx ready --json` and `sfx list --json` do")
 	}
+	const notHere = "run it in a terminal; for a list that does not update, `sfx ready`, `sfx blocked` or `sfx list`"
+	// Emacs's shell and some CI runners are terminals, but say with
+	// TERM=dumb that they cannot move the cursor the board needs.
+	if r.env.Getenv("TERM") == "dumb" {
+		return proto.Errf(proto.CodeInvalid, notHere, "sfx tui needs a terminal that can move the cursor, and TERM is dumb")
+	}
 	if !board.IsTerminal(r.env.Stdin, r.rawOut) {
-		return proto.Errf(proto.CodeInvalid, "run it in a terminal; for a list that does not update, `sfx ready`, `sfx blocked` or `sfx list`",
-			"sfx tui needs a terminal, and standard input or output is not one")
+		return proto.Errf(proto.CodeInvalid, notHere, "sfx tui needs a terminal, and standard input or output is not one")
 	}
 	live := board.NewLive(func(ctx context.Context, onPush func(proto.Push)) (board.Conn, error) {
 		opts := r.clientOptions()

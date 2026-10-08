@@ -191,8 +191,9 @@ and reads everything afresh. Each redial waits a random time up to a
 limit that starts at 1 s and doubles to 30 s; the limit starts over only
 once a new connection has read the lists. The board is read-only.
 
-`sfx tui` needs a terminal on standard input and output. Anywhere else it
-refuses and points at `sfx ready`, `sfx blocked` and `sfx list`. It
+`sfx tui` needs a terminal on standard input and output, and one that
+does not say `TERM=dumb`. Anywhere else it refuses and points at
+`sfx ready`, `sfx blocked` and `sfx list`. It
 honors [`NO_COLOR`](https://no-color.org): set, the board draws without
 color and marks the selection with `>` alone. Like all output, text from
 the server is escaped (below).
