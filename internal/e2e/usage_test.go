@@ -1,7 +1,12 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -105,5 +110,98 @@ func TestTokenUsage(t *testing.T) {
 	d := decode[mcpserver.Digest](t, ag.ok("digest", map[string]any{}))
 	if !strings.Contains(d.Usage, "claude-opus-4-1 2.4k in") {
 		t.Errorf("mcp digest usage %q", d.Usage)
+	}
+}
+
+// usageHook runs `sfx usage --hook` as this user with the hook input
+// given, keeping its offsets in cache.
+func (u *user) usageHook(cache string, input map[string]string) result {
+	u.w.t.Helper()
+	b, err := json.Marshal(input)
+	if err != nil {
+		u.w.t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	ctx, cancel := context.WithTimeout(u.w.t.Context(), 30*time.Second)
+	defer cancel()
+	code := cli.Run(ctx, []string{"usage", "--hook"}, cli.Env{
+		Stdin: bytes.NewReader(b), Stdout: &out, Stderr: &errb,
+		Getenv:       func(k string) string { return u.env[k] },
+		Hostname:     func() (string, error) { return "laptop-test", nil },
+		UserCacheDir: func() (string, error) { return cache, nil },
+		Version:      "v0.2.0",
+	})
+	return result{code: code, stdout: out.String(), stderr: errb.String()}
+}
+
+// writeClaudeResponse appends one API response to a Claude Code
+// transcript, as Claude Code writes it: a line per content block, each
+// with the response's usage.
+func writeClaudeResponse(t *testing.T, path, session, id string, blocks int, usage map[string]any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the test's temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	enc := json.NewEncoder(f)
+	at := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	for i := range blocks {
+		if err := enc.Encode(map[string]any{"type": "assistant", "sessionId": session, "requestId": "req_" + id,
+			"timestamp": at, "version": "2.1.300", "uuid": fmt.Sprintf("%s-%d", id, i),
+			"message": map[string]any{"id": "msg_" + id, "model": "claude-opus-4-5-20251101", "role": "assistant",
+				"content": []any{map[string]any{"type": "text", "text": "Fixture reply."}}, "usage": usage}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A Claude Code hook run reads the session's transcripts, its subagent's
+// included, and sends their tokens through the SSH server to the daemon;
+// show on the issue the session held then shows them, counted once. The
+// records go to the session the connection names: the hook's session_id,
+// unless STARFIX_SESSION is set, as for prime --hook and sfx mcp.
+func TestUsageHookCapture(t *testing.T) {
+	w := newWorld(t, daemonOpts{})
+	tests := []struct {
+		name, principal string
+		env             map[string]string
+	}{
+		{name: "hook session id", principal: "alice", env: map[string]string{"CLAUDE_CODE_SESSION_ID": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"}},
+		{name: "STARFIX_SESSION wins", principal: "bob", env: map[string]string{"STARFIX_SESSION": "s-agent"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const sess = "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+			u := w.newUser(tc.principal, "")
+			u.env = tc.env
+			task := strings.TrimSpace(u.ok("create", "Do the work"))
+			u.ok("start", task)
+
+			dir := t.TempDir()
+			main := filepath.Join(dir, sess+".jsonl")
+			writeClaudeResponse(t, main, sess, "01Main", 3, map[string]any{"input_tokens": 1200, "output_tokens": 280,
+				"cache_creation_input_tokens": 5000, "cache_read_input_tokens": 90000,
+				"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 1000, "ephemeral_5m_input_tokens": 4000}})
+			writeClaudeResponse(t, filepath.Join(dir, sess, "subagents", "agent-a1.jsonl"), sess, "01Sub", 2,
+				map[string]any{"input_tokens": 1200, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+					"cache_creation": map[string]any{"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": 0}})
+			input := map[string]string{"session_id": sess, "transcript_path": main, "cwd": filepath.Join(u.repo, "src"),
+				"hook_event_name": "Stop"}
+
+			cache := t.TempDir()
+			want := "tokens claude-opus-4-5-20251101: 2.4k in, 300 out, 5k cache write (1k 1h), 90k cache read\n"
+			for run := range 2 {
+				if r := u.usageHook(cache, input); r.code != 0 || r.stdout != "" || r.stderr != "" {
+					t.Fatalf("usage --hook run %d: exit %d, stdout %q, stderr %q; want 0 and nothing", run+1, r.code, r.stdout, r.stderr)
+				}
+				if shown := u.ok("show", task); !strings.Contains(shown, want) {
+					t.Fatalf("show after usage --hook run %d lacks %q:\n%s", run+1, want, shown)
+				}
+			}
+		})
 	}
 }

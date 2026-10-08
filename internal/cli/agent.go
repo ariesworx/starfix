@@ -21,7 +21,7 @@ import (
 func cmdPrime(ctx context.Context, r *runner, args []string) error {
 	const usage = "prime [--hook[=AGENT]]"
 	fs := r.newFlags("prime")
-	var hook hookFlag
+	hook := hookFlag{agents: agentsetup.Hooks()}
 	fs.Var(&hook, "hook", "run as AGENT's SessionStart hook (bare: claude-code): JSON for the harness, and never fail")
 	pos, err := parse(fs, args, usage)
 	if err != nil {
@@ -54,10 +54,13 @@ func cmdPrime(ctx context.Context, r *runner, args []string) error {
 // timeout, so a slow server costs the session a note, not its start.
 const hookTimeout = 10 * time.Second
 
-// hookFlag is --hook's value: the agent whose SessionStart hook prime
-// runs as. Bare --hook is Claude Code's, since setup writes Claude Code's
-// hook that way.
-type hookFlag struct{ agent string }
+// hookFlag is --hook's value: the agent whose hook the command runs as,
+// one of agents. Bare --hook is Claude Code's, since setup writes Claude
+// Code's hooks that way.
+type hookFlag struct {
+	agent  string
+	agents []string
+}
 
 func (h *hookFlag) String() string { return h.agent }
 
@@ -70,20 +73,24 @@ func (h *hookFlag) Set(s string) error {
 		h.agent = "claude-code"
 	case s == "false":
 		h.agent = ""
-	case slices.Contains(agentsetup.Hooks(), s):
+	case slices.Contains(h.agents, s):
 		h.agent = s
 	default:
-		return fmt.Errorf("no hook for %q; agents with one: %s", s, strings.Join(agentsetup.Hooks(), ", "))
+		return fmt.Errorf("no hook for %q; agents with one: %s", s, strings.Join(h.agents, ", "))
 	}
 	return nil
 }
 
-// hookInput is the part of a SessionStart hook's stdin that prime uses.
-// Harnesses send session_id; VS Code may send sessionId instead.
+// hookInput is the part of a hook's stdin that prime and usage use.
+// Harnesses send session_id; VS Code may send sessionId instead. Claude
+// Code sends transcript_path to every hook, and agent_transcript_path,
+// the subagent's own, on SubagentStop.
 type hookInput struct {
-	SessionID      string `json:"session_id"`
-	SessionIDCamel string `json:"sessionId"`
-	Cwd            string `json:"cwd"`
+	SessionID           string `json:"session_id"`
+	SessionIDCamel      string `json:"sessionId"`
+	Cwd                 string `json:"cwd"`
+	TranscriptPath      string `json:"transcript_path"`
+	AgentTranscriptPath string `json:"agent_transcript_path"`
 }
 
 // primeHook prints prime as the agent's SessionStart hook output, whose

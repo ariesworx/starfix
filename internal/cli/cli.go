@@ -35,8 +35,8 @@ const (
 // takes from the process. A field left nil or empty takes the default its
 // comment names; Stdout and Stderr must be set.
 type Env struct {
-	// Stdin is read for a text given as "-", by prime --hook and by sfx
-	// mcp. Default empty.
+	// Stdin is read for a text given as "-", by prime --hook, usage
+	// --hook and sfx mcp. Default empty.
 	Stdin io.Reader
 	// Stdout and Stderr receive all output.
 	Stdout, Stderr io.Writer
@@ -47,6 +47,9 @@ type Env struct {
 	// UserHomeDir finds the home directory, for `setup --global` and a
 	// desktop app's config. Default os.UserHomeDir.
 	UserHomeDir func() (string, error)
+	// UserCacheDir finds the cache directory, where `usage --hook` keeps
+	// its transcript offsets. Default os.UserCacheDir.
+	UserCacheDir func() (string, error)
 	// GOOS and Executable are used only by `setup claude-desktop`: the
 	// platform, and the absolute path of this sfx. Defaults runtime.GOOS,
 	// and sfx's entry on PATH when that is this program, else
@@ -108,6 +111,7 @@ func init() {
 		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
 		{"who", "who [--since DURATION] [-n N]", "list the agents at work and the issues each holds (seen in the last 5m)", cmdWho},
 		{"prime", "prime [--hook[=AGENT]]", "orient a session: your in-progress issues, top ready work, notices", cmdPrime},
+		{"usage", "usage --hook[=AGENT]", "send the session's token counts from the agent's transcript (run by its hooks)", cmdUsage},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"setup", "setup AGENT|--all [--write|--check|--remove] [--global] [--command PATH]", "set agents up: MCP config, instruction pointer, session hook", cmdSetup},
 		{"upgrade", "upgrade [--check] [--rollback]", "replace sfx with the latest verified release; --rollback undoes it", cmdUpgrade},
@@ -139,8 +143,12 @@ type runner struct {
 	dir string
 	// conn is the connection connect opened, if any; Run closes it.
 	conn *mcpserver.RepoConn
-	// session overrides the environment's session id (prime --hook).
+	// session overrides the environment's session id (prime and usage
+	// --hook).
 	session string
+	// quiet drops the server's version warning: a hook's stderr carries
+	// one note at most (usage --hook).
+	quiet bool
 	// onPush, if set before connecting, takes the events the server
 	// pushes (sfx watch).
 	onPush func(proto.Push)
@@ -208,6 +216,9 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.UserHomeDir == nil {
 		env.UserHomeDir = os.UserHomeDir
+	}
+	if env.UserCacheDir == nil {
+		env.UserCacheDir = os.UserCacheDir
 	}
 	if env.GOOS == "" {
 		env.GOOS = runtime.GOOS
@@ -354,7 +365,7 @@ func (r *runner) connect(ctx context.Context) (*mcpserver.RepoConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if w := c.Warning(r.env.Version); w != "" {
+	if w := c.Warning(r.env.Version); w != "" && !r.quiet {
 		_, _ = fmt.Fprintf(r.env.Stderr, "sfx: %s\n", esc(w))
 	}
 	r.conn = c
