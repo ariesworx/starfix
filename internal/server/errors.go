@@ -26,7 +26,6 @@ func command(op string) string {
 // request's target and expected revision, when it has them.
 func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error) *proto.Error {
 	text := err.Error()
-	var held *store.HeldError
 	var stale *store.StaleEpochError
 	var idem *store.IdemError
 	var unmet *store.AcceptanceError
@@ -37,9 +36,6 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
 			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
-
-	case errors.As(err, &held):
-		return s.held(ctx, held)
 
 	case errors.As(err, &forbidden):
 		return forbiddenErr(forbidden)
@@ -184,15 +180,17 @@ func (s *Server) conflict(ctx context.Context, id string, rev int64) *proto.Erro
 
 // held explains a refused start: another session of the caller's own
 // principal holds the issue, which --take overrides, or another principal
-// does, and the next ready issue is named instead (design §12 item 5).
-func (s *Server) held(ctx context.Context, h *store.HeldError) *proto.Error {
+// does, and the next ready issue is named instead (design §12 item 5), as
+// the caller a's own ready would rank it. Only start returns a HeldError,
+// so start calls held rather than mapErr, which has no caller.
+func (s *Server) held(ctx context.Context, a store.Actor, h *store.HeldError) *proto.Error {
 	if h.Own {
 		return proto.Errf(proto.CodeConflict,
 			fmt.Sprintf(proto.FixTakeOver+" with `sfx start %s --take` only if that session has stopped; it loses the claim", h.ID),
 			fmt.Sprintf("%s is held by your session %s", h.ID, h.Session))
 	}
 	msg := fmt.Sprintf("%s is in progress by %s", h.ID, h.By)
-	next, err := s.cfg.Store.Ready(ctx, store.Actor{}, 1)
+	next, err := s.cfg.Store.Ready(ctx, a, 1)
 	if err != nil || len(next) == 0 {
 		return proto.Errf(proto.CodeConflict, fmt.Sprintf(proto.FixLeaveIt+" %s; nothing else is ready, so see `sfx blocked`", h.By),
 			msg+"; nothing else is ready")

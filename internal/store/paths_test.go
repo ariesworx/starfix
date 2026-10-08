@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // filesOf returns an issue's paths as "source:path", in show's order.
@@ -57,18 +59,18 @@ func TestCommitPathsOnRenew(t *testing.T) {
 	if got, want := opsSince(t, s, seq), []Op{OpIssuePaths}; !slices.Equal(got, want) {
 		t.Errorf("first renew with paths recorded %v, want %v", got, want)
 	}
-	if got, want := filesOf(t, s, alice, is.ID), []string{"commit:a.go", "commit:b.go"}; !slices.Equal(got, want) {
-		t.Errorf("files = %v, want %v", got, want)
+	if got, want := filesOf(t, s, alice, is.ID), []string{"commit:b.go", "commit:a.go"}; !slices.Equal(got, want) {
+		t.Errorf("files = %v, want %v: the request's order, most recent first", got, want)
 	}
 
 	clk.add(time.Minute)
 	seq = lastSeq(t, s)
-	mustRenewPaths(t, s, alice, map[IssueID][]string{is.ID: {"b.go"}})
+	mustRenewPaths(t, s, alice, map[IssueID][]string{is.ID: {"a.go", "b.go"}})
 	if got := opsSince(t, s, seq); len(got) != 0 {
 		t.Errorf("renew with known paths recorded %v, want no event", got)
 	}
-	if got, want := filesOf(t, s, alice, is.ID), []string{"commit:b.go", "commit:a.go"}; !slices.Equal(got, want) {
-		t.Errorf("files after refreshing b.go = %v, want %v (most recent first)", got, want)
+	if got, want := filesOf(t, s, alice, is.ID), []string{"commit:a.go", "commit:b.go"}; !slices.Equal(got, want) {
+		t.Errorf("files after refreshing a.go then b.go = %v, want %v (most recent first)", got, want)
 	}
 
 	clk.add(time.Minute)
@@ -134,8 +136,8 @@ func TestDeclaredPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Rev != is.Rev {
-		t.Errorf("rev after a paths-only update = %d, want %d: paths live in their own table, like labels", out.Rev, is.Rev)
+	if out.Rev != is.Rev+1 {
+		t.Errorf("rev after a paths-only update = %d, want %d", out.Rev, is.Rev+1)
 	}
 	if got, want := opsSince(t, s, seq), []Op{OpIssuePaths}; !slices.Equal(got, want) {
 		t.Errorf("update of declared paths recorded %v, want %v", got, want)
@@ -144,16 +146,19 @@ func TestDeclaredPaths(t *testing.T) {
 		t.Errorf("files after update = %v, want %v", got, want)
 	}
 
-	seq = lastSeq(t, s)
-	if _, err := s.UpdateIssue(ctx, alice, is.ID, out.Rev, IssuePatch{Paths: &[]string{"README.md", "docs/a.md"}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := opsSince(t, s, seq); len(got) != 0 {
-		t.Errorf("update to the same set recorded %v, want nothing", got)
+	// A second replace by someone who read the first rev is refused, so
+	// one of two concurrent replaces cannot silently undo the other.
+	if _, err := s.UpdateIssue(ctx, bob, is.ID, is.Rev, IssuePatch{Paths: &[]string{"x"}}); !errors.Is(err, ErrConflict) {
+		t.Errorf("replace at the stale rev %d: %v, want ErrConflict", is.Rev, err)
 	}
 
-	if _, err := s.UpdateIssue(ctx, alice, is.ID, out.Rev+1, IssuePatch{Paths: &[]string{"x"}}); !errors.Is(err, ErrConflict) {
-		t.Errorf("update at a stale rev: %v, want ErrConflict", err)
+	seq = lastSeq(t, s)
+	same, err := s.UpdateIssue(ctx, alice, is.ID, out.Rev, IssuePatch{Paths: &[]string{"README.md", "docs/a.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opsSince(t, s, seq); len(got) != 0 || same.Rev != out.Rev {
+		t.Errorf("update to the same set recorded %v at rev %d, want nothing at rev %d", got, same.Rev, out.Rev)
 	}
 	mustStart(t, s, alice, is.ID)
 	cur, err := s.GetIssue(ctx, is.ID)
@@ -200,6 +205,29 @@ func TestPathsRefused(t *testing.T) {
 			_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "n"}, false, "", []string{"dir/"})
 			return err
 		}},
+		// The request bounds are checked before the paths are, so they
+		// count repeats: the cost is in what was sent.
+		{"finish with more than MaxPaths paths", func() error {
+			_, _, err := s.FinishIssue(ctx, alice, is.ID, 0, Finish{Paths: slices.Repeat([]string{"a.go"}, proto.MaxPaths+1)})
+			return err
+		}},
+		{"renew with more than MaxPaths paths for an issue", func() error {
+			_, err := s.RenewClaims(ctx, alice, DefaultLease, false,
+				map[IssueID][]string{is.ID: slices.Repeat([]string{"a.go"}, proto.MaxPaths+1)})
+			return err
+		}},
+		{"renew with paths for more than MaxPathIssues issues", func() error {
+			m := map[IssueID][]string{}
+			for i := range proto.MaxPathIssues + 1 {
+				m[IssueID(fmt.Sprintf("tst-x%d", i))] = []string{"a.go"}
+			}
+			_, err := s.RenewClaims(ctx, alice, DefaultLease, false, m)
+			return err
+		}},
+		{"update with more than MaxPaths paths", func() error {
+			_, err := s.UpdateIssue(ctx, alice, is.ID, is.Rev+1, IssuePatch{Paths: ptr(slices.Repeat([]string{"a/"}, proto.MaxPaths+1))})
+			return err
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,13 +270,14 @@ func TestPathsCap(t *testing.T) {
 		want    []string
 	}{
 		{"one request over the cap keeps its first, most recent, paths", func() error {
-			_, err := s.RenewClaims(ctx, alice, DefaultLease, false, map[IssueID][]string{is.ID: paths("a", 6)})
+			_, err := s.RenewClaims(ctx, alice, DefaultLease, false,
+				map[IssueID][]string{is.ID: {"a5", "a1", "a4", "a0", "a3", "a2"}})
 			return err
-		}, "", []string{"commit:a0", "commit:a1", "commit:a2", "commit:a3"}},
+		}, "", []string{"commit:a5", "commit:a1", "commit:a4", "commit:a0"}},
 		{"newer paths push out the oldest", func() error {
-			_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "n"}, false, "", []string{"b0", "b1"})
+			_, err := s.HandoffIssue(ctx, alice, is.ID, 0, HandoffNote{Note: "n"}, false, "", []string{"b1", "b0"})
 			return err
-		}, "", []string{"commit:b0", "commit:b1", "commit:a0", "commit:a1"}},
+		}, "", []string{"commit:b1", "commit:b0", "commit:a5", "commit:a1"}},
 		{"declared paths take precedence over commit paths", func() error {
 			cur, err := s.GetIssue(ctx, is.ID)
 			if err != nil {
@@ -256,7 +285,7 @@ func TestPathsCap(t *testing.T) {
 			}
 			_, err = s.UpdateIssue(ctx, alice, is.ID, cur.Rev, IssuePatch{Paths: &[]string{"d0/", "d1"}})
 			return err
-		}, "", []string{"declared:d0/", "declared:d1", "commit:b0", "commit:b1"}},
+		}, "", []string{"declared:d0/", "declared:d1", "commit:b1", "commit:b0"}},
 		{"too many declared paths are refused", func() error {
 			cur, err := s.GetIssue(ctx, is.ID)
 			if err != nil {
@@ -264,11 +293,11 @@ func TestPathsCap(t *testing.T) {
 			}
 			_, err = s.UpdateIssue(ctx, alice, is.ID, cur.Rev, IssuePatch{Paths: ptr(paths("d", 5))})
 			return err
-		}, "at most 4 paths", []string{"declared:d0/", "declared:d1", "commit:b0", "commit:b1"}},
+		}, "at most 4 paths", []string{"declared:d0/", "declared:d1", "commit:b1", "commit:b0"}},
 		{"create with too many declared paths is refused", func() error {
 			_, err := s.CreateIssue(ctx, alice, NewIssue{Title: "y", Paths: paths("d", 5)})
 			return err
-		}, "at most 4 paths", []string{"declared:d0/", "declared:d1", "commit:b0", "commit:b1"}},
+		}, "at most 4 paths", []string{"declared:d0/", "declared:d1", "commit:b1", "commit:b0"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -419,5 +448,122 @@ func TestIssueFiles(t *testing.T) {
 	}
 	if _, err := s.IssueFiles(ctx, alice, "tst-none", 3); !errors.Is(err, ErrNotFound) {
 		t.Errorf("files of a missing issue: %v, want ErrNotFound", err)
+	}
+}
+
+// bulkContested inserts n open P0 issues, each declaring path, in one
+// statement per table: as many through CreateIssue would take minutes.
+func bulkContested(t *testing.T, s *Store, n int, path string) {
+	t.Helper()
+	err := s.write(t.Context(), alice, func(w *wtx) error {
+		for i := range n {
+			id := fmt.Sprintf("tst-bulk%04d", i)
+			if _, err := w.exec(t.Context(), `INSERT INTO issues (id, title, body, design, acceptance, notes, status,
+  priority, type, created_by, created_at, updated_at, rev, write_id)
+  VALUES (?, 'bulk', '', '', '', '', 'open', 0, 'task', 'alice', ?, ?, 1, 1)`, id, w.now, w.now); err != nil {
+				return err
+			}
+			if err := insertPaths(t.Context(), w, IssueID(id), PathDeclared, []string{path}); err != nil {
+				return err
+			}
+		}
+		return w.event(t.Context(), OpIssueCreate, "tst-bulk", nil, nil)
+	})
+	if err != nil {
+		t.Fatalf("bulk insert: %v", err)
+	}
+}
+
+// ready inspects at most max(limit*5, 500) ready issues for overlaps, so
+// its cost under the writer is bounded however long the backlog; issues
+// past that keep their place.
+func TestReadyScanBound(t *testing.T) {
+	s := newStore(t)
+	held := mustCreate(t, s, NewIssue{Title: "held", Paths: []string{"a/"}})
+	mustStart(t, s, alice, held.ID)
+	bulkContested(t, s, 500, "a/x.go")
+	free := mustCreate(t, s, NewIssue{Title: "free", Priority: prio(P4)})
+
+	tests := []struct {
+		limit int
+		first IssueID
+	}{
+		{1, "tst-bulk0000"}, // inspects 500: all contested, so base order
+		{101, free.ID},      // inspects 505, which reaches the free issue
+	}
+	for _, tc := range tests {
+		rs, err := s.Ready(t.Context(), bob, tc.limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rs) == 0 || rs[0].ID != tc.first {
+			var got IssueID
+			if len(rs) > 0 {
+				got = rs[0].ID
+			}
+			t.Errorf("Ready(limit %d) starts with %q, want %s", tc.limit, got, tc.first)
+		}
+	}
+	is, _, err := s.StartIssue(t.Context(), bob, "", 0, false)
+	if err != nil || is.ID != "tst-bulk0000" {
+		t.Errorf("start took %s, %v; want tst-bulk0000, the first of the 500 it inspects", is.ID, err)
+	}
+}
+
+// A path that more than maxPathHolders held issues share, such as go.mod,
+// says nothing about which work collides, so it marks nothing contested.
+func TestReadyIgnoresCommonPaths(t *testing.T) {
+	tests := []struct {
+		holders int
+		overlap bool
+	}{
+		{maxPathHolders, true},
+		{maxPathHolders + 1, false},
+	}
+	for _, tc := range tests {
+		t.Run(fmt.Sprint(tc.holders), func(t *testing.T) {
+			s := newStore(t)
+			for range tc.holders {
+				h := mustCreate(t, s, NewIssue{Title: "held"})
+				mustStart(t, s, alice, h.ID)
+				// The same path twice for one issue counts it once.
+				mustRenewPaths(t, s, alice, map[IssueID][]string{h.ID: {"go.mod"}})
+				cur, err := s.GetIssue(t.Context(), h.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.UpdateIssue(t.Context(), alice, h.ID, cur.Rev, IssuePatch{Paths: &[]string{"go.mod"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cand := mustCreate(t, s, NewIssue{Title: "candidate", Paths: []string{"go.mod"}})
+			rs, err := s.Ready(t.Context(), bob, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rs) != 1 || rs[0].ID != cand.ID || (len(rs[0].Overlaps) > 0) != tc.overlap {
+				t.Errorf("with go.mod held by %d issues, ready = %v, want %s overlapping: %v", tc.holders, readyOverlaps(t, s, bob), cand.ID, tc.overlap)
+			}
+		})
+	}
+}
+
+// A refresh of known paths is quiet only for itself: a finish or handoff
+// that records one still trips the safety net if anything else it
+// changed has no event.
+func TestPathsRefreshKeepsSafetyNet(t *testing.T) {
+	s := newStore(t)
+	is := mustCreate(t, s, NewIssue{Title: "x"})
+	mustStart(t, s, alice, is.ID)
+	mustRenewPaths(t, s, alice, map[IssueID][]string{is.ID: {"a.go"}})
+	err := s.write(t.Context(), alice, func(w *wtx) error {
+		if err := recordCommitPaths(t.Context(), w, is.ID, []string{"a.go"}); err != nil {
+			return err
+		}
+		_, err := w.exec(t.Context(), `UPDATE issues SET notes = 'unrecorded', write_id = ? WHERE id = ?`, randomInt63(), string(is.ID))
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutation without an event") {
+		t.Errorf("a refresh and an unrecorded change: %v, want the mutation without an event refused", err)
 	}
 }

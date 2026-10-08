@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ariesworx/starfix/internal/proto"
 )
 
 // Claims (design §7). Taking an issue leases it to the actor: the holder
@@ -257,7 +259,9 @@ func (s *Store) claims(ctx context.Context, q querier, where string, args ...any
 // paths maps an issue to the paths its work touched, most recent first:
 // they are recorded as commit paths of the claims renewed, at most the
 // paths_per_issue limit in all, taken in the order of the claims
-// returned; issues it does not renew are ignored. A renewal that adds
+// returned; issues it does not renew are ignored. Paths for more than
+// proto.MaxPathIssues issues, or more than proto.MaxPaths for one, are
+// refused with ErrInvalid before anything is renewed. A renewal that adds
 // paths records an issue.paths event for each issue it adds them to.
 func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duration, allSessions bool, paths map[IssueID][]string) ([]Claim, error) {
 	most := MaxClaimLease
@@ -266,6 +270,9 @@ func (s *Store) RenewClaims(ctx context.Context, actor Actor, lease time.Duratio
 	}
 	if err := checkLease(lease, most); err != nil {
 		return nil, err
+	}
+	if len(paths) > proto.MaxPathIssues {
+		return nil, fmt.Errorf("%w: send paths for at most %d issues in one renew, not %d", ErrInvalid, proto.MaxPathIssues, len(paths))
 	}
 	checked := make(map[IssueID][]string, len(paths))
 	for id, ps := range paths {

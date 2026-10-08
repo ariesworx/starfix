@@ -426,6 +426,9 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 		return nil, proto.Errf(proto.CodeNotFound, proto.FixSeeBlocked+" with `sfx blocked`, or create an issue",
 			"nothing is ready to start")
 	}
+	if held, ok := errors.AsType[*store.HeldError](err); ok {
+		return nil, s.held(ctx, a, held)
+	}
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpStart, in.ID, 0, err)
 	}

@@ -117,3 +117,24 @@ func TestDispatchPathsRefused(t *testing.T) {
 		})
 	}
 }
+
+// A start refused because another principal holds the issue names the
+// next ready issue as the caller's own ready would: the caller's own
+// claims do not count as overlaps.
+func TestHeldNamesCallersNextReady(t *testing.T) {
+	s := newServer(t)
+	p0, p1 := 0, 1
+	mine := mustCall[proto.WriteResult](t, s, bob, proto.OpCreate, proto.CreateArgs{Title: "bob's"})
+	near := mustCall[proto.WriteResult](t, s, bob, proto.OpCreate, proto.CreateArgs{Title: "near bob's work", Priority: &p0,
+		Paths: []string{"a.go"}})
+	mustCall[proto.WriteResult](t, s, bob, proto.OpCreate, proto.CreateArgs{Title: "apart", Priority: &p1})
+	theirs := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "alice's"})
+	mustCall[proto.StartResult](t, s, bob, proto.OpStart, proto.StartArgs{ID: mine.ID})
+	mustCall[proto.ClaimsResult](t, s, bob, proto.OpRenew, proto.RenewArgs{Paths: map[string][]string{mine.ID: {"a.go"}}})
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: theirs.ID})
+
+	_, perr := call[proto.Empty](t, s, bob, proto.OpStart, proto.StartArgs{ID: theirs.ID})
+	if perr == nil || !strings.Contains(perr.Message, "next ready: "+near.ID) {
+		t.Errorf("bob's start of alice's issue = %+v, want it to name %s, which only bob's own work overlaps", perr, near.ID)
+	}
+}

@@ -14,12 +14,15 @@ import (
 // whose paths overlap those of an issue another session holds, and show
 // lists an issue's likely files.
 
-// Path bounds. MaxPaths is the most paths a client sends in one request,
-// and the default cap on the paths an issue keeps (the store's
-// paths_per_issue limit); MaxPathLen bounds one path, in bytes.
+// Path bounds. MaxPaths is the most paths one request carries for an
+// issue, repeats included, and the default cap on the paths an issue
+// keeps (the store's paths_per_issue limit). MaxPathIssues is the most
+// issues one renew carries paths for. MaxPathLen bounds one path, in
+// bytes. The server refuses a request past any of them as invalid.
 const (
-	MaxPaths   = 200
-	MaxPathLen = 1024
+	MaxPaths      = 200
+	MaxPathIssues = 50
+	MaxPathLen    = 1024
 )
 
 // CheckPath returns why p is not a path the server records, or nil. A
@@ -88,4 +91,17 @@ type Overlap struct {
 	ID      string `json:"id"`
 	By      string `json:"by"`
 	Session string `json:"session"`
+}
+
+// RetryWithoutPaths runs call with the request's paths and, when it had
+// some and the server refuses the request as invalid, runs it once more
+// without them. Paths are a hint read from git, so a refusal of them must
+// not fail the renewal, finish or handoff they ride on. call is told
+// whether to send them.
+func RetryWithoutPaths(hasPaths bool, call func(withPaths bool) error) error {
+	err := call(hasPaths)
+	if pe, ok := errors.AsType[*Error](err); ok && pe.Code == CodeInvalid && hasPaths {
+		return call(false)
+	}
+	return err
 }

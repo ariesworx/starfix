@@ -1,6 +1,8 @@
 package proto
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -74,4 +76,34 @@ func FuzzCheckPath(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestRetryWithoutPaths(t *testing.T) {
+	invalid := Errf(CodeInvalid, "correct it", "path is bad")
+	busy := Errf(CodeBusy, "retry later", "busy")
+	tests := []struct {
+		name     string
+		hasPaths bool
+		errs     []error // what each call returns, in turn
+		want     []bool  // withPaths for each call made
+		wantErr  error
+	}{
+		{"accepted", true, []error{nil}, []bool{true}, nil},
+		{"paths refused", true, []error{invalid, nil}, []bool{true, false}, nil},
+		{"refused without paths too", true, []error{invalid, invalid}, []bool{true, false}, invalid},
+		{"no paths to drop", false, []error{invalid}, []bool{false}, invalid},
+		{"another refusal", true, []error{busy}, []bool{true}, busy},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []bool
+			err := RetryWithoutPaths(tc.hasPaths, func(withPaths bool) error {
+				got = append(got, withPaths)
+				return tc.errs[len(got)-1]
+			})
+			if !slices.Equal(got, tc.want) || !errors.Is(err, tc.wantErr) {
+				t.Errorf("calls with paths %v, err %v; want %v, %v", got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
 }

@@ -302,7 +302,7 @@ func (s *Store) CreateIssue(ctx context.Context, actor Actor, in NewIssue) (Issu
 		if out, err = insertIssue(ctx, w, id, in, meta); err != nil {
 			return err
 		}
-		if err := setDeclaredPaths(ctx, w, id, declared); err != nil {
+		if _, err := setDeclaredPaths(ctx, w, id, declared); err != nil {
 			return err
 		}
 		if err := w.settle(out); err != nil {
@@ -376,9 +376,10 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // make a cycle with ErrCycle. New acceptance text cannot tick items ("[x]"
 // counts only at create), and text that drops an item still open is
 // refused with an [*AcceptanceError] (Dropped): tick or waive it first,
-// so the change is on the record. Paths replaces the declared paths
-// without moving the rev; more than the paths_per_issue limit is refused
-// with ErrInvalid.
+// so the change is on the record. Paths replaces the declared paths, and
+// moves the rev when that changes them, so two replaces made at one rev
+// conflict rather than merge; more than the paths_per_issue limit is
+// refused with ErrInvalid.
 func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, patch IssuePatch) (Issue, error) {
 	if err := id.Validate(); err != nil {
 		return Issue{}, err
@@ -441,10 +442,22 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 				return err
 			}
 		}
-		if len(sets) > 0 {
+		pathsChanged := false
+		if patch.Paths != nil {
+			if pathsChanged, err = setDeclaredPaths(ctx, w, id, declared); err != nil {
+				return err
+			}
+		}
+		if len(sets) > 0 || pathsChanged {
+			// The paths live in their own table, so a paths-only change
+			// writes the issue row too: two replaces from one rev then
+			// write the same cells and conflict, rather than both
+			// committing and leaving their union.
 			if out, err = casUpdate(ctx, w, before, sets, args); err != nil {
 				return err
 			}
+		}
+		if len(sets) > 0 {
 			b, a := diff(before, out)
 			if err := w.event(ctx, OpIssueUpdate, string(id), b, a); err != nil {
 				return err
@@ -454,9 +467,6 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 					return err
 				}
 			}
-		}
-		if patch.Paths != nil {
-			return setDeclaredPaths(ctx, w, id, declared)
 		}
 		return nil
 	})
@@ -475,14 +485,19 @@ const errClaimedFields = "status and assignee change only through finish, close 
 var ErrStatusInProgress = fmt.Errorf("%w: status in_progress is set only by start, which claims the issue", ErrInvalid)
 
 // casUpdateSQL is the one UPDATE of issues. {sets} comes from a fixed
-// column list, never from input.
-const casUpdateSQL = `UPDATE issues SET {sets}, updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`
+// column list, never from input; each set ends in ", ", and there may be
+// none.
+const casUpdateSQL = `UPDATE issues SET {sets}updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`
 
 // casUpdate writes sets to the issue at before.Rev, stamping rev and
 // write_id, and returns the new state.
 func casUpdate(ctx context.Context, w *wtx, before Issue, sets []string, args []any) (Issue, error) {
 	wid := randomInt63()
-	q := strings.Replace(casUpdateSQL, "{sets}", strings.Join(sets, ", "), 1)
+	var cols string
+	for _, set := range sets {
+		cols += set + ", "
+	}
+	q := strings.Replace(casUpdateSQL, "{sets}", cols, 1)
 	all := append(append([]any{}, args...), w.now, wid, string(before.ID), int64(before.Rev))
 	n, err := w.exec(ctx, q, all...)
 	if err != nil {

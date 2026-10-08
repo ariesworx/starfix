@@ -27,7 +27,8 @@ import (
 // records them only for the claims it renews, which are the actor's own.
 // A new path is history, recorded as one issue.paths event per call; a
 // call that only sees paths already recorded refreshes their last_at,
-// which orders show's list, and is bookkeeping, so it writes quietly.
+// which orders show's list, and is bookkeeping, so it runs through
+// wtx.touch and records no event.
 
 // OpIssuePaths records paths added to an issue, or its declared paths
 // changed. The after state names the source, up to maxEventPaths of the
@@ -86,13 +87,23 @@ type ReadyIssue struct {
 // grows by a bounded amount per call however many paths it carries.
 const maxEventPaths = 20
 
+// maxPathHolders is the most held issues a path may share and still mark
+// an issue contested. A path more of them share, such as go.mod or a
+// changelog, is touched by most work and says nothing about which work
+// collides.
+const maxPathHolders = 10
+
 // pathBatch bounds the placeholders in one statement over paths or ids.
 const pathBatch = 500
 
-// checkPaths refuses, with ErrInvalid, a path proto.CheckPath refuses or,
+// checkPaths refuses, with ErrInvalid, more than proto.MaxPaths paths,
+// counted before repeats are dropped, a path proto.CheckPath refuses or,
 // unless prefixes, a directory prefix; it returns ps without repeats, in
 // their first order.
 func checkPaths(ps []string, prefixes bool) ([]string, error) {
+	if len(ps) > proto.MaxPaths {
+		return nil, fmt.Errorf("%w: send at most %d paths for an issue in one request, not %d", ErrInvalid, proto.MaxPaths, len(ps))
+	}
 	seen := make(map[string]bool, len(ps))
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
@@ -151,12 +162,21 @@ func loadPathRows(ctx context.Context, q querier, id IssueID) ([]pathRow, error)
 	return out, nil
 }
 
+// refreshPathsSQL sets the last_at of known commit paths, each its own:
+// {when} is a "WHEN ? THEN ?" per path, and {in} their placeholders.
+const refreshPathsSQL = `UPDATE issue_paths SET last_at = CASE path {when} END,
+  principal = ?, session = ?, rev = rev + 1, write_id = ?
+  WHERE issue_id = ? AND source = ? AND path IN ({in})`
+
 // recordCommitPaths records ps, checked and most recent first, as id's
 // commit paths: new paths are inserted and one issue.paths event lists
-// them; paths already recorded have their last_at refreshed, quietly when
-// nothing else changed. Past the paths_per_issue limit, less the issue's
-// declared paths, the request keeps its first paths and the issue its
-// most recent. The caller has checked the actor may change id.
+// them; paths already recorded have their last_at refreshed, which is
+// bookkeeping (wtx.touch), so a call that only refreshes records no
+// event. Each path's last_at is the write's time less its index in ps in
+// microseconds, so the request's order survives into show's. Past the
+// paths_per_issue limit, less the issue's declared paths, the request
+// keeps its first paths and the issue its most recent. The caller has
+// checked the actor may change id.
 func recordCommitPaths(ctx context.Context, w *wtx, id IssueID, ps []string) error {
 	if len(ps) == 0 {
 		return nil
@@ -179,30 +199,39 @@ func recordCommitPaths(ctx context.Context, w *wtx, id IssueID, ps []string) err
 		return nil
 	}
 	ps = ps[:min(len(ps), keep)]
-	var added, refreshed []string
-	for _, p := range ps {
+	at := func(i int) time.Time { return w.now.Add(-time.Duration(i) * time.Microsecond) }
+	var added []string
+	var addedAt []time.Time
+	var refreshed []int
+	for i, p := range ps {
 		if known[p] {
-			refreshed = append(refreshed, p)
+			refreshed = append(refreshed, i)
 		} else {
 			added = append(added, p)
+			addedAt = append(addedAt, at(i))
 		}
 	}
 	for chunk := range slices.Chunk(refreshed, pathBatch) {
-		args := []any{w.now, w.actor.Principal, w.actor.Session, randomInt63(), string(id), string(PathCommit)}
-		for _, p := range chunk {
-			args = append(args, p)
+		var when []string
+		var args []any
+		for _, i := range chunk {
+			when = append(when, "WHEN ? THEN ?")
+			args = append(args, ps[i], at(i))
 		}
-		if _, err := w.exec(ctx, `UPDATE issue_paths SET last_at = ?, principal = ?, session = ?, rev = rev + 1, write_id = ?
-  WHERE issue_id = ? AND source = ? AND path IN (`+placeholders(len(chunk))+`)`, args...); err != nil {
+		args = append(args, w.actor.Principal, w.actor.Session, randomInt63(), string(id), string(PathCommit))
+		for _, i := range chunk {
+			args = append(args, ps[i])
+		}
+		q := strings.NewReplacer("{when}", strings.Join(when, " "), "{in}", placeholders(len(chunk))).Replace(refreshPathsSQL)
+		if err := w.touch(ctx, q, args...); err != nil {
 			return fmt.Errorf("refresh paths of %s: %w", id, err)
 		}
 	}
-	if err := insertPaths(ctx, w, id, PathCommit, added); err != nil {
-		return err
-	}
 	if len(added) == 0 {
-		w.quiet = true // only refreshed: bookkeeping, not history
 		return nil
+	}
+	if err := insertPathsAt(ctx, w, id, PathCommit, added, addedAt); err != nil {
+		return err
 	}
 	trimmed, err := trimCommitPaths(ctx, w, id, keep)
 	if err != nil {
@@ -213,13 +242,13 @@ func recordCommitPaths(ctx context.Context, w *wtx, id IssueID, ps []string) err
 
 // setDeclaredPaths replaces id's declared paths with ps, checked: it
 // deletes those not in ps, inserts the new ones, and records one
-// issue.paths event when anything changed. Commit paths past the
-// paths_per_issue limit, less the declared ones, are dropped, oldest
-// first. The caller has checked the actor may change id.
-func setDeclaredPaths(ctx context.Context, w *wtx, id IssueID, ps []string) error {
+// issue.paths event when anything changed, which it reports. Commit
+// paths past the paths_per_issue limit, less the declared ones, are
+// dropped, oldest first. The caller has checked the actor may change id.
+func setDeclaredPaths(ctx context.Context, w *wtx, id IssueID, ps []string) (bool, error) {
 	have, err := loadPathRows(ctx, w.tx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	want := map[string]bool{}
 	for _, p := range ps {
@@ -243,7 +272,7 @@ func setDeclaredPaths(ctx context.Context, w *wtx, id IssueID, ps []string) erro
 		}
 	}
 	if len(added) == 0 && len(removed) == 0 {
-		return nil
+		return false, nil
 	}
 	for chunk := range slices.Chunk(removed, pathBatch) {
 		args := []any{string(id), string(PathDeclared)}
@@ -252,26 +281,34 @@ func setDeclaredPaths(ctx context.Context, w *wtx, id IssueID, ps []string) erro
 		}
 		if _, err := w.exec(ctx, `DELETE FROM issue_paths WHERE issue_id = ? AND source = ? AND path IN (`+
 			placeholders(len(chunk))+`)`, args...); err != nil {
-			return fmt.Errorf("remove declared paths of %s: %w", id, err)
+			return false, fmt.Errorf("remove declared paths of %s: %w", id, err)
 		}
 	}
 	if err := insertPaths(ctx, w, id, PathDeclared, added); err != nil {
-		return err
+		return false, err
 	}
 	trimmed, err := trimCommitPaths(ctx, w, id, w.lim.Paths-len(ps))
 	if err != nil {
-		return err
+		return false, err
 	}
 	slices.Sort(removed)
-	return w.event(ctx, OpIssuePaths, string(id), nil, pathsEvent(PathDeclared, added, removed, trimmed))
+	return true, w.event(ctx, OpIssuePaths, string(id), nil, pathsEvent(PathDeclared, added, removed, trimmed))
 }
 
-// insertPaths inserts new rows for id's paths ps from source.
+// insertPaths inserts new rows for id's paths ps from source, recorded
+// at the write's time.
 func insertPaths(ctx context.Context, w *wtx, id IssueID, source PathSource, ps []string) error {
-	for chunk := range slices.Chunk(ps, pathBatch/10) {
+	return insertPathsAt(ctx, w, id, source, ps, slices.Repeat([]time.Time{w.now}, len(ps)))
+}
+
+// insertPathsAt is insertPaths with each path ps[i] recorded at at[i].
+func insertPathsAt(ctx context.Context, w *wtx, id IssueID, source PathSource, ps []string, at []time.Time) error {
+	for start := 0; start < len(ps); start += pathBatch / 10 {
+		chunk := ps[start:min(start+pathBatch/10, len(ps))]
 		var args []any
-		for _, p := range chunk {
-			args = append(args, string(id), p, string(source), w.actor.Principal, w.actor.Session, w.now, w.now, randomInt63())
+		for i, p := range chunk {
+			t := at[start+i]
+			args = append(args, string(id), p, string(source), w.actor.Principal, w.actor.Session, t, t, randomInt63())
 		}
 		vals := slices.Repeat([]string{"(?, ?, ?, ?, ?, ?, ?, 1, ?)"}, len(chunk))
 		if _, err := w.exec(ctx, `INSERT INTO issue_paths
@@ -352,8 +389,9 @@ type heldPaths struct {
 }
 
 // loadHeld reads the paths of the issues held at now by sessions other
-// than except's. It returns nil when none of them has a path: the common
-// case, which leaves Ready's order alone. The work is bounded by the live
+// than except's, leaving out a path more than maxPathHolders of them
+// share. It returns nil when none of them has a path: the common case,
+// which leaves Ready's order alone. The work is bounded by the live
 // claims times paths_per_issue, read by the claims_expires index and the
 // issue_paths key.
 func loadHeld(ctx context.Context, q querier, except Actor, now time.Time) (*heldPaths, error) {
@@ -390,10 +428,20 @@ func loadHeld(ctx context.Context, q querier, except Actor, now time.Time) (*hel
 	}
 	for id, ps := range byIssue {
 		for _, p := range ps {
-			h.exact[p] = append(h.exact[p], id)
-			for a := range ancestors(p) {
-				h.under[a] = append(h.under[a], id)
+			// Once per issue: an issue's paths are read together, so a
+			// path both declared and committed repeats the last id.
+			if ids := h.exact[p]; len(ids) == 0 || ids[len(ids)-1] != id {
+				h.exact[p] = append(ids, id)
 			}
+		}
+	}
+	for p, ids := range h.exact {
+		if len(ids) > maxPathHolders {
+			delete(h.exact, p)
+			continue
+		}
+		for a := range ancestors(p) {
+			h.under[a] = append(h.under[a], ids...)
 		}
 	}
 	return h, nil
@@ -470,13 +518,20 @@ func (h *heldPaths) match(ps []string, self IssueID) []IssueID {
 // paths.
 const readyBatch = 200
 
+// minReadyScan is the fewest ready issues rankReady inspects for
+// overlaps; it inspects limit*5 when that is more.
+const minReadyScan = 500
+
 // rankReady returns the ids Ready lists for actor at now, best first, at
 // most limit, and the overlaps of those that have any. While no other
 // session holds an issue with paths, it is readyFilter's order. Otherwise
-// an issue whose paths overlap a held issue's is ranked after every one
-// that does not, keeping readyFilter's order within each group: it walks
-// the ready ids in that order, reading their paths a batch at a time, and
-// stops once it has limit without overlaps.
+// it inspects the first max(limit*5, minReadyScan) ready ids, and ranks
+// one whose paths overlap a held issue's after every one that does not,
+// keeping readyFilter's order within each group: it reads their paths a
+// batch at a time, and stops once it has limit without overlaps. Issues
+// past those inspected are never reached, since there are at least limit
+// before them, so the work under the writer (StartIssue runs it there) is
+// bounded however long the backlog.
 func rankReady(ctx context.Context, q querier, actor Actor, now time.Time, limit int) ([]IssueID, map[IssueID][]IssueID, error) {
 	held, err := loadHeld(ctx, q, actor, now)
 	if err != nil {
@@ -486,7 +541,7 @@ func rankReady(ctx context.Context, q querier, actor Actor, now time.Time, limit
 		ids, err := readyIDList(ctx, q, now, limit)
 		return ids, nil, err
 	}
-	all, err := readyIDList(ctx, q, now, 0)
+	all, err := readyIDList(ctx, q, now, max(limit*5, minReadyScan))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -520,16 +575,9 @@ func rankReady(ctx context.Context, q querier, actor Actor, now time.Time, limit
 	return out, kept, nil
 }
 
-// readyIDList returns the ready ids in readyFilter's order, at most limit,
-// or all of them when limit is 0.
+// readyIDList returns the ready ids in readyFilter's order, at most limit.
 func readyIDList(ctx context.Context, q querier, now time.Time, limit int) ([]IssueID, error) {
-	query := blockedCTE + `SELECT i.id FROM issues i ` + readyFilter
-	args := []any{now}
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := q.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, blockedCTE+`SELECT i.id FROM issues i `+readyFilter+` LIMIT ?`, now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("ready: %w", err)
 	}
