@@ -60,12 +60,17 @@ func (w *wtx) guard(ctx context.Context, c claimRow, op string) error {
 		map[string]any{"holder": c.Holder, "epoch": c.Epoch, "op": op})
 }
 
-// ended tells the holder of c, if c is live and held by another session
-// than w's actor, that its claim ended, and why.
+// ended tells the holder of c, if another session than w's actor holds
+// it, that its claim ended, and why. A lapsed claim is told too: the
+// reaper would have, and this write ends the claim before it can.
 func (w *wtx) ended(ctx context.Context, c claimRow, why string) error {
-	if !c.active(w.now) || c.Holder == w.actor {
+	if c.Holder.Principal == "" || c.Holder == w.actor {
 		return nil
 	}
+	lapsed := ""
+	if !c.active(w.now) {
+		lapsed = "lease expired; "
+	}
 	return w.notify(ctx, InboxItem{To: c.Holder.Principal, Session: c.Holder.Session, Kind: InboxClaimLost, Issue: c.Issue,
-		Body: fmt.Sprintf("%s by %s/%s (epoch %d): stop work on it", why, w.actor.Principal, w.actor.Session, c.Epoch)})
+		Body: fmt.Sprintf("%s%s by %s/%s (epoch %d): stop work on it", lapsed, why, w.actor.Principal, w.actor.Session, c.Epoch)})
 }

@@ -710,8 +710,8 @@ func (r *replay) expire(e sevent) {
 
 // release applies a claim.release: a releasing handoff, a close or a
 // finish ended the claim its before state names, which must be the one
-// held. The holder is told unless it released its own claim, or the
-// claim had lapsed.
+// held. The holder is told unless it released its own claim, even of a
+// lapsed claim, as the reaper would have told it.
 func (r *replay) release(e sevent) {
 	c := r.claim(e.target)
 	var b claimState
@@ -725,7 +725,7 @@ func (r *replay) release(e sevent) {
 	}
 	r.released[e.target] = *c
 	r.ends[issueEpoch{e.target, b.Epoch}] = ended{at: e.at, exp: b.ExpiresAt, op: "release"}
-	if who != e.actor && b.ExpiresAt.After(e.at) {
+	if who != e.actor {
 		r.notices = append(r.notices, notice{issue: e.target, to: who, at: e.at, seq: e.seq})
 	}
 	end := e.at

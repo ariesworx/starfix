@@ -614,9 +614,9 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 	return sets, args, nil
 }
 
-// CloseIssue closes an issue, ends any claim on it and returns it; when a
-// live claim was another session's, that session gets a claim.lost inbox
-// item. expected 0 skips the revision check: close wins over concurrent
+// CloseIssue closes an issue, ends any claim on it and returns it; when
+// the claim, live or lapsed, was another session's, that session gets a
+// claim.lost inbox item. expected 0 skips the revision check: close wins over concurrent
 // edits (design §8). An issue with acceptance items neither ticked nor
 // waived is refused with an [*AcceptanceError], one another principal
 // holds with a [*ForbiddenError] unless the actor is an admin, and one
