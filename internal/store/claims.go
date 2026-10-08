@@ -174,6 +174,12 @@ func takeClaim(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Cl
 			return Claim{}, err
 		}
 	}
+	// The claim replaced, live or lapsed, so attribution can end its hold
+	// when the lease ran out rather than at this take.
+	var replaced any // nil, not a nil map, so the state is NULL
+	if !same && c.Holder.Principal != "" {
+		replaced = map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}
+	}
 	if !same {
 		c.Epoch++
 		c.ClaimedAt = w.now
@@ -186,7 +192,7 @@ func takeClaim(ctx context.Context, w *wtx, c claimRow, lease time.Duration) (Cl
 		return Claim{}, err
 	}
 	if !same {
-		if err := w.event(ctx, OpClaimTake, string(c.Issue), nil,
+		if err := w.event(ctx, OpClaimTake, string(c.Issue), replaced,
 			map[string]any{"epoch": c.Epoch, "expires_at": c.ExpiresAt}); err != nil {
 			return Claim{}, err
 		}

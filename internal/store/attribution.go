@@ -18,7 +18,10 @@ import (
 // claim ends, which the log records as one of:
 //
 //   - claim.take of the issue by another session (a takeover, or a take
-//     after the lease lapsed and before the reaper ran);
+//     after the lease lapsed and before the reaper ran). Its before state
+//     holds the replaced claim's expiry, and a hold that lapsed first
+//     ends there; a take recorded before token capture has none, and
+//     ends the hold at the take;
 //   - claim.expire, whose before state holds the lease's expiry, when
 //     the hold really ended;
 //   - issue.close (close and finish end the claim);
@@ -31,9 +34,7 @@ import (
 //     claim, at its lease's expiry if that came first.
 //
 // A hold still open ends now, or when its lease ran out if the reaper has
-// not yet noticed. Renewals are not in the log, so a hold that lapsed
-// before a takeover counts until the takeover, at most a reap interval
-// late. A request record goes to the issues its session held at its
+// not yet noticed. A request record goes to the issues its session held at its
 // time, shared evenly if it held several. A turn or session record is
 // split over its span by time held, sharing each stretch evenly among the
 // issues held then; stretches with nothing held are unattributed.
@@ -226,7 +227,11 @@ func loadHoldsOf(ctx context.Context, q querier, issues []IssueID, now time.Time
 		id := IssueID(e.Target)
 		switch e.Op {
 		case OpClaimTake:
-			end(id, e.At)
+			var b struct {
+				ExpiresAt time.Time `json:"expires_at"`
+			}
+			_ = json.Unmarshal(e.Before, &b) // none before token capture: the take ends the hold
+			end(id, lapsedAt(e.At, b.ExpiresAt))
 			open[id] = &hold{issue: id, key: sessionKey{e.Actor.Principal, e.Actor.Session}, start: e.At}
 		case OpClaimExpire:
 			var b struct {

@@ -175,6 +175,64 @@ func TestIssueUsageExpiry(t *testing.T) {
 	checkUsage(t, "lapsed", mustUsage(t, s, lapsed.ID), MinLease, false, "opus 20/2/?/?/?")
 }
 
+// A take after the lease lapsed, before the reaper ran, ends the lapsed
+// hold at its expiry, which the take's before state records. A take
+// recorded before that state existed still ends the hold, at the take.
+func TestIssueUsageTakeAfterLapse(t *testing.T) {
+	tests := []struct {
+		name   string
+		legacy bool // the take is recorded as before token capture: no before state
+		held   time.Duration
+		models string
+	}{
+		{"before state", false, MinLease + 5*time.Minute, "opus 10/1/?/?/?"},
+		{"older event without before state", true, 10 * time.Minute, "opus 1010/1001/?/?/?"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clk := clockStore(t)
+			ctx := t.Context()
+			t0 := clk.now()
+			is := mustCreate(t, s, NewIssue{Title: "lapsed, then taken"})
+			if _, _, err := s.StartIssue(ctx, alice, is.ID, MinLease, false); err != nil {
+				t.Fatal(err)
+			}
+			clk.add(5 * time.Minute) // the lease ran out at t0+1m; no reap
+			if tc.legacy {
+				legacyTake(t, s, bob, is.ID)
+			} else if _, _, err := s.StartIssue(ctx, bob, is.ID, time.Hour, false); err != nil {
+				t.Fatal(err)
+			}
+			clk.add(5 * time.Minute)
+			mustAddUsage(t, s, alice,
+				rec("in-lease", "opus", t0.Add(30*time.Second), 10, 1),
+				rec("past-lease", "opus", t0.Add(3*time.Minute), 1000, 1000))
+			checkUsage(t, "taken after a lapse", mustUsage(t, s, is.ID), tc.held, false, tc.models)
+		})
+	}
+}
+
+// legacyTake gives id to a as takeClaim did before claim.take recorded
+// the claim it replaced.
+func legacyTake(t *testing.T, s *Store, a Actor, id IssueID) {
+	t.Helper()
+	err := s.write(t.Context(), a, func(w *wtx) error {
+		c, err := loadClaim(t.Context(), w.tx, id)
+		if err != nil {
+			return err
+		}
+		c.Epoch++
+		c.Holder, c.ClaimedAt, c.ExpiresAt = a, w.now, w.now.Add(time.Hour)
+		if err := writeClaim(t.Context(), w, c); err != nil {
+			return err
+		}
+		return w.event(t.Context(), OpClaimTake, string(id), nil, map[string]any{"epoch": c.Epoch, "expires_at": c.ExpiresAt})
+	})
+	if err != nil {
+		t.Fatalf("legacy take of %s: %v", id, err)
+	}
+}
+
 // One session holds two issues at once: a turn record across both is
 // split by time held, and the time no issue was held is unattributed.
 func TestIssueUsageSplitAcrossTwoIssues(t *testing.T) {
