@@ -618,8 +618,9 @@ func TestBridgeUnavailable(t *testing.T) {
 	if !strings.Contains(out.String(), `"c":"auth"`) {
 		t.Fatalf("refusal: %s", out.String())
 	}
-	// S-15: no key may authenticate as the server's own principals.
-	for _, p := range store.ReservedPrincipals {
+	// S-15: no key may authenticate as the server's own principals, the
+	// upgrade's probe among them.
+	for _, p := range append([]string{ProbePrincipal}, store.ReservedPrincipals...) {
 		out.Reset()
 		if err := Bridge(t.Context(), "/nonexistent", p, strings.NewReader(""), &out); err == nil {
 			t.Fatalf("reserved principal %q accepted", p)
@@ -695,6 +696,7 @@ func TestResolveSettings(t *testing.T) {
 			check: func(s Settings) bool { return slices.Equal(s.Admins, []string{"dana", "erin"}) }},
 		{name: "reserved admin refused", path: reserved, err: `admin "starfixd"`},
 		{name: "reserved admin in env refused", path: empty, env: map[string]string{EnvAdmins: "import"}, err: `admin "import"`},
+		{name: "probe principal as admin refused", path: empty, env: map[string]string{EnvAdmins: ProbePrincipal}, err: `admin "starfixd-upgrade"`},
 		{name: "invalid admin refused", path: empty, env: map[string]string{EnvAdmins: "Not Valid"}, err: "is not a principal name"},
 	}
 	for _, tc := range tests {
@@ -875,7 +877,8 @@ func TestDispatchClaims(t *testing.T) {
 }
 
 // A welcomed connection registers its session, with the hello's harness;
-// a harness the store would refuse is dropped, not fatal.
+// a harness the store would refuse is dropped, not fatal. The upgrade's
+// health probe is welcomed but is no agent, so it is not registered.
 func TestHandshakeRegistersAgent(t *testing.T) {
 	s := newServer(t)
 	bridge := func(p string) *proto.Frame { return &proto.Frame{T: proto.FrameBridge, Principal: p} }
@@ -885,6 +888,7 @@ func TestHandshakeRegistersAgent(t *testing.T) {
 	for _, fs := range [][]*proto.Frame{
 		{bridge("alice"), hello("s-1", "claude-code")},
 		{bridge("bob"), hello("s-2", "Not A Harness")},
+		{bridge(ProbePrincipal), hello("upgrade-probe", "")},
 	} {
 		if f, err := handshake(t, s, fs...); err != nil || f.Err != nil {
 			t.Fatalf("handshake: %v %+v", err, f)

@@ -338,7 +338,9 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 		_ = c.Close() // unblocks a pusher stuck writing to a client that stopped reading
 		s.unwatch(sess)
 	}()
-	s.touch(ctx, log, sess.actor, sess.harness)
+	if principal != ProbePrincipal { // a health check, not an agent to list in who
+		s.touch(ctx, log, sess.actor, sess.harness)
+	}
 	idle := time.Duration(s.cfg.Limits.IdleTimeout)
 	for {
 		if sess.watching() {
@@ -445,7 +447,10 @@ func (s *Server) handshake(c net.Conn) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bridge frame: %w", err)
 	}
-	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) || store.Reserved(f.Principal) {
+	// The upgrade's probe, alone of the reserved names, is welcomed: it
+	// connects here directly, and Bridge refuses its name to every key.
+	if f.T != proto.FrameBridge || !PrincipalPattern.MatchString(f.Principal) ||
+		(store.Reserved(f.Principal) && f.Principal != ProbePrincipal) {
 		return nil, fmt.Errorf("first frame is %q, not a bridge frame with a valid, unreserved principal", f.T)
 	}
 	sess.actor.Principal = f.Principal
