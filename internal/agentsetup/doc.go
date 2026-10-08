@@ -9,7 +9,9 @@
 // from [Agent.Targets]: the MCP server registration, a marker-delimited
 // pointer in the agent's instruction file, and, where the harness has
 // one, a SessionStart hook that runs `sfx prime --hook` (Claude Code) or
-// `sfx prime --hook=AGENT`. A desktop app (Claude Desktop) has only its
+// `sfx prime --hook=AGENT`. Claude Code's hook file also gets `sfx usage
+// --hook` on Stop, SubagentStop and SessionEnd, which sends the session's
+// token counts; [UsageHooks] lists the agents that get it. A desktop app (Claude Desktop) has only its
 // user-global MCP config, with one entry per project ([DesktopEntry],
 // [Agent.DesktopTarget]).
 //

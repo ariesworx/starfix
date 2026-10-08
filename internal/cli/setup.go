@@ -148,7 +148,7 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 					continue
 				}
 				if hooks := f.MissingHooks(f.disk.orig, entry); f.Kind == agentsetup.KindHook && len(hooks) > 0 {
-					m = append(m, f.rel+" ("+andList(hooks)+" hooks)")
+					m = append(m, f.rel+" ("+hookList(hooks)+")")
 					continue
 				}
 				m = append(m, f.rel)
@@ -221,12 +221,13 @@ func (r *runner) applySetup(plans []setupPlan, entry agentsetup.Entry, mode setu
 	return nil
 }
 
-// andList joins xs as "a, b and c".
-func andList(xs []string) string {
-	if len(xs) < 2 {
-		return strings.Join(xs, "")
+// hookList names hook events: "SessionStart hook", "Stop and
+// SessionEnd hooks", "A, B and C hooks".
+func hookList(events []string) string {
+	if len(events) < 2 {
+		return strings.Join(events, "") + " hook"
 	}
-	return strings.Join(xs[:len(xs)-1], ", ") + " and " + xs[len(xs)-1]
+	return strings.Join(events[:len(events)-1], ", ") + " and " + events[len(events)-1] + " hooks"
 }
 
 // globalHookNote is said after setup adds or prints hooks in the home
@@ -449,7 +450,7 @@ func (r *runner) printSnippets(plan setupPlan, entry agentsetup.Entry, all, glob
 		case agentsetup.KindPointer:
 			p("\n# pointer: add to %s\n%s", f.rel, f.Snippet(entry))
 		case agentsetup.KindHook:
-			p("\n# %s hooks: merge into %s\n%s", andList(f.MissingHooks(nil, entry)), f.rel, f.Snippet(entry))
+			p("\n# %s: merge into %s\n%s", hookList(f.MissingHooks(nil, entry)), f.rel, f.Snippet(entry))
 			if global {
 				p("# %s\n", globalHookNote)
 			}
