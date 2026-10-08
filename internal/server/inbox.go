@@ -19,18 +19,23 @@ import (
 // queued before each response, so an item committed before a request is
 // answered reaches the client before the answer.
 
-// pusher writes one watch's items to its connection.
+// pusher writes one watch's items, and its issue events if it asked for
+// them, to its connection.
 type pusher struct {
-	w    *store.Watch
-	stop chan struct{}
-	done chan struct{}
+	w *store.Watch
+	// events: the watch was asked for issue events.
+	events bool
+	stop   chan struct{}
+	done   chan struct{}
 	// ended: the resync was sent, or a write failed; nothing more is
 	// pushed. Guarded by session.pushMu.
 	ended bool
 }
 
-// watch starts pushing sess's items, or keeps the pushes already running.
-// After a resync it starts afresh. The pusher goroutine ends when unwatch
+// watch starts pushing sess's items, and with in.Events every issue
+// event, or keeps the pushes already running. After a resync, or when
+// in.Events differs from the running watch's, it starts afresh. The
+// pusher goroutine ends when unwatch
 // stops it, a write fails or the resync is sent, and handle's deferred
 // unwatch waits for it, so it never outlives the connection.
 func (s *Server) watch(ctx context.Context, sess *session, raw json.RawMessage) (any, *proto.Error) {
@@ -46,12 +51,16 @@ func (s *Server) watch(ctx context.Context, sess *session, raw json.RawMessage) 
 		sess.pushMu.Lock()
 		ended := p.ended
 		sess.pushMu.Unlock()
-		if !ended {
+		if !ended && p.events == in.Events {
 			return s.unread(ctx, sess.actor)
 		}
 		s.unwatch(sess)
 	}
-	p := &pusher{w: s.cfg.Store.Watch(sess.actor.Principal, sess.actor.Session),
+	subscribe := s.cfg.Store.Watch
+	if in.Events {
+		subscribe = s.cfg.Store.WatchEvents
+	}
+	p := &pusher{w: subscribe(sess.actor.Principal, sess.actor.Session), events: in.Events,
 		stop: make(chan struct{}), done: make(chan struct{})}
 	sess.push = p
 	go func() {
@@ -80,18 +89,25 @@ func (s *Server) unread(ctx context.Context, a store.Actor) (any, *proto.Error) 
 	return proto.WatchResult{Unread: page.Unread}, nil
 }
 
-// flush writes p's queued items, and the resync if it overflowed. It
-// reports whether p still pushes.
+// flush writes p's queued items, then its issue events, and the resync
+// if it overflowed. It reports whether p still pushes.
 func (s *Server) flush(sess *session, p *pusher) bool {
 	sess.pushMu.Lock()
 	defer sess.pushMu.Unlock()
 	if p.ended {
 		return false
 	}
-	items, _, over := p.w.Take()
+	items, events, over := p.w.Take()
 	for _, it := range items {
 		w := wireInboxItem(it)
 		if !s.pushOne(sess, p, proto.Push{Op: proto.EvInbox, Item: &w}) {
+			return false
+		}
+	}
+	for _, e := range events {
+		w := proto.Event{Seq: e.Seq, At: e.At.UTC(), Principal: e.Actor.Principal, Session: e.Actor.Session,
+			Machine: e.Actor.Machine, Op: string(e.Op), Issue: e.Target}
+		if !s.pushOne(sess, p, proto.Push{Op: proto.EvEvent, Event: &w}) {
 			return false
 		}
 	}

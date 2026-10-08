@@ -45,13 +45,17 @@
 // carrying err with code "version", and the connection closes.
 //
 // Frame type "evt" is a server-pushed event: no id, an op naming the
-// event (EvInbox, EvResync) and its payload in e. The server sends them
-// only to a connection that asked with the watch op, so a client that
-// never watches sees none:
+// event (EvInbox, EvEvent, EvResync) and its payload in e. The server
+// sends them only to a connection that asked with the watch op, and
+// sends EvEvent, every event committed on an issue, only when watch asked
+// for events, so a client that never watches sees none:
 //
 //	client → daemon:  {"t":"req","id":2,"op":"watch"}
 //	daemon → client:  {"t":"res","id":2,"ok":{"unread":0}}
 //	daemon → client:  {"t":"evt","op":"inbox","e":{"id":9,"kind":"claim.lost",…}}
+//	client → daemon:  {"t":"req","id":3,"op":"watch","a":{"events":true}}
+//	daemon → client:  {"t":"res","id":3,"ok":{"unread":0}}
+//	daemon → client:  {"t":"evt","op":"event","e":{"seq":41,"op":"claim.take","issue":"sf-a1b2c3d4",…}}
 //
 // A client ignores frame types, and event ops, it does not know, so the
 // server can add them without a protocol bump; the server refuses unknown

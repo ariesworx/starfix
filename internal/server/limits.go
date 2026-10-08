@@ -115,6 +115,7 @@ func (l Limits) Validate() error {
 var readOps = map[string]bool{
 	proto.OpShow: true, proto.OpList: true, proto.OpReady: true, proto.OpBlocked: true, proto.OpComments: true,
 	proto.OpHistory: true, proto.OpDigest: true, proto.OpWho: true, proto.OpInbox: true, proto.OpWatch: true,
+	proto.OpClaims: true,
 }
 
 // buckets is a token bucket per principal: each holds up to burst tokens,

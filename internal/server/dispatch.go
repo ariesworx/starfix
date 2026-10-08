@@ -60,6 +60,7 @@ var handlers = map[string]handler{
 	proto.OpWatch:    typed(watchOp),
 	proto.OpAccept:   typed(accept),
 	proto.OpUsage:    typed(usage),
+	proto.OpClaims:   typed(claims),
 }
 
 // typed decodes args strictly into A and calls fn.
@@ -531,9 +532,23 @@ func renew(ctx context.Context, s *Server, a store.Actor, in proto.RenewArgs) (a
 	return out, nil
 }
 
+// claims lists every live claim, for a board of who holds what.
+func claims(ctx context.Context, s *Server, _ store.Actor, in proto.LimitArgs) (any, *proto.Error) {
+	now := s.cfg.Store.Now()
+	cs, more, err := s.cfg.Store.ActiveClaims(ctx, in.Limit)
+	if err != nil {
+		return nil, s.mapErr(ctx, proto.OpClaims, "", 0, err)
+	}
+	out := proto.ClaimsResult{Claims: []proto.Claim{}, Now: now, More: more}
+	for _, c := range cs {
+		out.Claims = append(out.Claims, wireClaim(c))
+	}
+	return out, nil
+}
+
 func wireClaim(c store.Claim) proto.Claim {
 	return proto.Claim{ID: string(c.Issue), By: c.Holder.Principal, Session: c.Holder.Session,
-		Machine: c.Holder.Machine, Epoch: c.Epoch, ExpiresAt: c.ExpiresAt.UTC()}
+		Machine: c.Holder.Machine, Epoch: c.Epoch, ClaimedAt: c.ClaimedAt.UTC(), ExpiresAt: c.ExpiresAt.UTC()}
 }
 
 func wireComment(c store.Comment) proto.Comment {

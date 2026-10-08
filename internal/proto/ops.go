@@ -33,6 +33,7 @@ const (
 	OpWho      = "who"       // WhoArgs → WhoResult (protocol 2)
 	OpAccept   = "accept"    // AcceptArgs → AcceptResult (protocol 2)
 	OpUsage    = "usage"     // UsageArgs → UsageResult (protocol 3)
+	OpClaims   = "claims"    // LimitArgs → ClaimsResult (protocol 3)
 )
 
 // WhoArgs selects the agents seen within Since, a duration such as 5m,
@@ -128,7 +129,8 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Event is one entry of an issue's history.
+// Event is one entry of an issue's history. Issue is set only in a
+// pushed event (EvEvent), which carries no Before or After.
 type Event struct {
 	Seq       int64           `json:"seq"`
 	At        time.Time       `json:"at"`
@@ -136,6 +138,7 @@ type Event struct {
 	Session   string          `json:"session,omitempty"`
 	Machine   string          `json:"machine,omitempty"`
 	Op        string          `json:"op"`
+	Issue     string          `json:"issue,omitempty"`
 	Before    json.RawMessage `json:"before,omitempty"`
 	After     json.RawMessage `json:"after,omitempty"`
 }
@@ -485,13 +488,14 @@ type StartResult struct {
 
 // Claim is a lease on an issue. Epoch rises each time a new holder takes
 // it; finish and handoff may pass it to refuse acting on a claim since
-// lost.
+// lost. ClaimedAt is when this holder took it (protocol 3).
 type Claim struct {
 	ID        string    `json:"id"`
 	By        string    `json:"by"`
 	Session   string    `json:"session"`
 	Machine   string    `json:"machine"`
 	Epoch     int64     `json:"epoch"`
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -513,9 +517,13 @@ type RenewArgs struct {
 // a harness session id: one per principal and machine.
 const CLISession = "cli"
 
-// ClaimsResult lists claims, soonest to expire first.
+// ClaimsResult lists claims: renew's soonest to expire first, claims'
+// longest held first. claims also sets Now, the server's clock, and More,
+// the claims left out by its limit (0 takes 100; at most 500).
 type ClaimsResult struct {
-	Claims []Claim `json:"claims"`
+	Claims []Claim   `json:"claims"`
+	Now    time.Time `json:"now,omitzero"`
+	More   int       `json:"more,omitempty"`
 }
 
 // Discovered is work found while doing an issue, filed by finish. Zero

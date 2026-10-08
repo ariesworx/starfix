@@ -2,7 +2,6 @@ package proto
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 )
@@ -21,6 +20,10 @@ const (
 	// EvResync says pushed items were dropped because the client read too
 	// slowly: reread the inbox, and send watch again to resume pushes.
 	EvResync = "resync"
+	// EvEvent carries, to a watch that asked for events, one event
+	// committed on an issue: an Event with its Issue and without its
+	// before and after states (protocol 3).
+	EvEvent = "event"
 )
 
 // InboxItem is one inbox item. Kind is claim.lost, assigned, mention or
@@ -64,53 +67,72 @@ type AckResult struct {
 
 // WatchArgs asks the server to push this connection's new inbox items:
 // its principal's and its own session's, as evt frames, from now until
-// the connection closes or a resync. Watching again after a resync
-// resumes; watching while watched changes nothing.
-type WatchArgs struct{}
+// the connection closes or a resync. With Events it also pushes every
+// event committed on an issue (protocol 3), for a live board. Watching
+// again after a resync resumes; watching while watched changes nothing,
+// unless Events differs, which starts the watch afresh.
+type WatchArgs struct {
+	Events bool `json:"events,omitempty"`
+}
 
 // WatchResult is the unread count when the watch began.
 type WatchResult struct {
 	Unread int `json:"unread"`
 }
 
-// Push is a server-pushed event: an evt frame decoded.
+// Push is a server-pushed event: an evt frame decoded. Item is set for
+// EvInbox, Event for EvEvent.
 type Push struct {
-	Op   string
-	Item *InboxItem
+	Op    string
+	Item  *InboxItem
+	Event *Event
 }
 
 // Frame encodes p as an evt frame.
 func (p Push) Frame() (*Frame, error) {
 	f := &Frame{T: FrameEvent, Op: p.Op}
-	if p.Item != nil {
-		b, err := json.Marshal(p.Item)
-		if err != nil {
-			return nil, fmt.Errorf("encode %s event: %w", p.Op, err)
-		}
-		f.E = b
+	var payload any
+	switch {
+	case p.Item != nil:
+		payload = p.Item
+	case p.Event != nil:
+		payload = p.Event
+	default:
+		return f, nil
 	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s event: %w", p.Op, err)
+	}
+	f.E = b
 	return f, nil
 }
 
-// DecodePush decodes an evt frame. An inbox event without an item is an
-// error; an op this client does not know is returned for the caller to
-// ignore.
+// DecodePush decodes an evt frame. An inbox or event push without its
+// payload is an error; an op this client does not know is returned for
+// the caller to ignore.
 func DecodePush(f *Frame) (Push, error) {
 	if f.T != FrameEvent {
 		return Push{}, fmt.Errorf("decode push: %q is not an event frame", f.T)
 	}
 	p := Push{Op: f.Op}
-	if f.Op != EvInbox {
+	var into any
+	switch f.Op {
+	case EvInbox:
+		p.Item = &InboxItem{}
+		into = p.Item
+	case EvEvent:
+		p.Event = &Event{}
+		into = p.Event
+	default:
 		return p, nil
 	}
 	if len(f.E) == 0 {
-		return Push{}, errors.New("decode push: inbox event without an item")
+		return Push{}, fmt.Errorf("decode push: %s push without its payload", f.Op)
 	}
-	var it InboxItem
-	if err := json.Unmarshal(f.E, &it); err != nil {
+	if err := json.Unmarshal(f.E, into); err != nil {
 		return Push{}, fmt.Errorf("decode push: %w", err)
 	}
-	p.Item = &it
 	return p, nil
 }
 
