@@ -32,7 +32,9 @@ import (
 // update; ready's overlaps and show's files are result fields. Protocol 3
 // had not shipped in a release (v0.2.2 speaks 2), so they join it without
 // another bump; a protocol 2 client sends no paths, and nothing is
-// recorded for it.
+// recorded for it. The live board's reads join it the same way: watch's
+// events, the event push (EvEvent) and the claims op, none of which a
+// protocol 2 client sends.
 const (
 	Proto    = 3
 	ProtoMin = 2

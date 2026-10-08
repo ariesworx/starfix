@@ -222,11 +222,39 @@ func (s *Store) ClaimsOf(ctx context.Context, principal string) ([]Claim, error)
 	return s.claims(ctx, s.r, `principal = ? AND expires_at > ?`, principal, s.now())
 }
 
+// ActiveClaims returns the live claims on every issue, longest held
+// first, at most limit of them (0 means DefaultPage, at most MaxPage),
+// and how many more there are.
+func (s *Store) ActiveClaims(ctx context.Context, limit int) ([]Claim, int, error) {
+	now := s.now()
+	q, done, err := s.beginRead(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer done()
+	cs, err := queryClaims(ctx, q, `principal IS NOT NULL AND expires_at > ? ORDER BY claimed_at, issue_id LIMIT ?`,
+		now, clampLimit(limit, DefaultPage, MaxPage))
+	if err != nil {
+		return nil, 0, err
+	}
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM claims WHERE principal IS NOT NULL AND expires_at > ?`, now).Scan(&n); err != nil {
+		return nil, 0, fmt.Errorf("count claims: %w", err)
+	}
+	return cs, max(0, n-len(cs)), nil
+}
+
 // claims reads the claims that where, a constant condition with
 // placeholders for args, selects, soonest to expire first.
 func (s *Store) claims(ctx context.Context, q querier, where string, args ...any) ([]Claim, error) {
+	return queryClaims(ctx, q, where+` ORDER BY expires_at, issue_id`, args...)
+}
+
+// queryClaims reads the claims that clause, a constant condition with its
+// order and placeholders for args, selects.
+func queryClaims(ctx context.Context, q querier, clause string, args ...any) ([]Claim, error) {
 	rows, err := q.QueryContext(ctx, `SELECT issue_id, principal, session, machine, epoch, claimed_at, expires_at
-  FROM claims WHERE `+where+` ORDER BY expires_at, issue_id`, args...) //nolint:gosec // where is a constant from the callers
+  FROM claims WHERE `+clause, args...) //nolint:gosec // clause is a constant from the callers
 	if err != nil {
 		return nil, fmt.Errorf("claims: %w", err)
 	}

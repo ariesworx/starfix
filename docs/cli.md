@@ -138,6 +138,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 |---|---|
 | `inbox` | List your unread inbox, newest first: 20 items, or `-n N` (at most 100). `--all` includes read items; `--ack ID` (repeatable or comma-separated) or `--ack-all` marks items read |
 | `watch` | Print inbox items as they arrive, until ctrl-c (exit 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it missed items (`sfx inbox` lists them) |
+| `tui` | Show the [live board](#the-live-board) until `q` |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d) and the issues each holds; at most 100 (`-n N`, up to 500), then a count of the rest |
 | `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L`. Under its header it prints the time issues were held (saying when some tokens were split by time), the tokens reported by model, and those no issue was held for |
 | `prime` | Orient a session: your issues in progress, your inbox, the top ready work and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
@@ -151,6 +152,51 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `usage --hook[=AGENT]` | Send the token counts in the session's transcripts that earlier runs have not sent. Run by Claude Code's Stop, SubagentStop and SessionEnd hooks, which `setup claude-code` installs, with the hook's JSON on stdin; bare `--hook` is Claude Code's, the only agent captured so far. It always exits 0 and sends only counts ([Token usage hooks](agents.md#token-usage-hooks-claude-code)) |
 | `upgrade` | Replace `sfx` with the latest release after checking its signature and checksum. `--check` reports and changes nothing; `--rollback` restores the binary the last upgrade replaced. It never runs on its own |
 | `version` | Print the version and protocol |
+
+## The live board
+
+`sfx tui` fills the terminal with a board that keeps itself current:
+
+- **Ready**: the issues nothing holds back, best first, up to 100. An
+  issue whose files overlap work another session holds is marked
+  `[overlaps ID]` ([Files](concepts.md#files-what-an-issue-touches)).
+- **Held**: each issue under a live claim, with its holder as
+  `principal/session` and how long they have held it, on the server's
+  clock. `[lapsed]` marks a lease that ran out before the reaper freed
+  the issue.
+- **Blocked**: the issues held back by open blockers, `[by ID +N]`.
+- **Events**: every change to an issue since the board opened, newest at
+  the bottom, with its time, who made it and what it was.
+
+From 60 columns the board is two columns, ready and blocked beside held,
+with the events below; narrower, it is one.
+
+| Key | Does |
+|---|---|
+| `j`, `k`, arrows | Move the selection |
+| `PgUp`, `PgDn`, `g`, `G` | Move a page, or to the top or bottom |
+| `Enter`, right arrow | Open the selected issue: its fields, claim, dependencies, files, checklist, handoff and body |
+| `Esc`, left arrow, `Backspace` | Go back |
+| `r` | Read everything again |
+| `?` | Show the keys and marks |
+| `q`, `Ctrl-C` | Quit |
+
+The board rides the same SSH connection as every other command, so the
+server opens no port for it. It asks the server to push every change to
+an issue, and reads the lists again only when a change can alter them,
+once per burst; an open issue is read again when a change names it. It
+never polls: the only timer redraws relative times each second. If the
+connection drops, the header says `reconnecting`, and the board redials
+and reads everything afresh. Each redial waits a random time up to a
+limit that starts at 1 s and doubles to 30 s; the limit starts over only
+once a new connection has read the lists. The board is read-only.
+
+`sfx tui` needs a terminal on standard input and output, and one that
+does not say `TERM=dumb`. Anywhere else it refuses and points at
+`sfx ready`, `sfx blocked` and `sfx list`. It
+honors [`NO_COLOR`](https://no-color.org): set, the board draws without
+color and marks the selection with `>` alone. Like all output, text from
+the server is escaped (below).
 
 ## Exit codes
 

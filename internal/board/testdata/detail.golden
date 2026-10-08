@@ -1,0 +1,22 @@
+starfix demo                                                                live
+sf-r2  Tidy the logs
+open, P2, task, assigned to bob
+labels: ops
+depends on sf-r1 (blocks)
+overlaps sf-h1, held by alice/cc-1234
+file: internal/log/log.go (declared)
+acceptance:
+  [x] 1 one line per request
+  [ ] 2 request ids
+
+The logs repeat.
+Keep one line per request, and say which \x1b[31mrequest\x1b[0m it was.
+
+
+
+
+
+
+
+
+esc back  j/k scroll  r refresh  ? help  q quit

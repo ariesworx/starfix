@@ -1,0 +1,12 @@
+starfix demo                                                                                    live
+Ready 2                                            Held 1
+> sf-r1 P1 Clear \x1b[2J the screen \u202eevil       sf-h1 P0 mallory\x07/cc-1234 42m Fix the lexer
+  sf-r2 P2 [overlaps sf-h1] Tidy the logs
+
+Blocked 1
+  sf-b1 P2 [by sf-r1 +1] Ship it
+Events
+  12:00:01 bob/cli claim.take sf-h1
+  12:00:02 bob/cli issue.close sf-x9
+  12:00:00 eve/s\x1b]0;x… issue.update\n sf-r1
+j/k move  enter open  r refresh  ? help  q quit

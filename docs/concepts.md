@@ -184,6 +184,10 @@ minutes, with its principal, machine, harness and the issues it holds. The
 server records a session when it connects, and `sfx mcp` keeps it present
 while the agent runs.
 
+`sfx tui` shows the same work live: what is ready, each held issue with
+its holder and how long they have held it, what is blocked, and every
+change as the server pushes it ([The live board](cli.md#the-live-board)).
+
 ## The digest
 
 `sfx digest` summarizes a time window (`--since 24h` by default, `7d`, a

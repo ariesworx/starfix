@@ -395,7 +395,7 @@ limits:
 | `inbox_keep` | `30d` | How long a read inbox item is kept |
 | `conns` | 1024 | Connections past the handshake; twice this caps sockets still in it |
 | `conns_per_principal` | 32 | One principal's connections |
-| `idle_timeout` | `10m` | A connection that sends nothing this long is closed with a note, unless it watches its inbox (`sfx mcp` and `sfx watch` do) |
+| `idle_timeout` | `10m` | A connection that sends nothing this long is closed with a note, unless it watches its inbox (`sfx mcp`, `sfx watch` and `sfx tui` do) |
 | `write_rate`, `write_burst` | 10, 100 | Each principal's write token bucket: writes a second, and how many at once. Reads are not counted |
 | `refusal_logs` | 20 | Refusal log lines per principal a minute |
 | `usage_records` | 500 | Token usage records in one `usage` call |
