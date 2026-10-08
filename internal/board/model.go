@@ -1,6 +1,8 @@
 package board
 
 import (
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -179,10 +181,19 @@ func (d *Detail) apply(m *Model) {
 	}
 }
 
+// apply puts the event in the tail in seq order, since a push can
+// overtake another and a redial can repeat one. A full tail drops its
+// oldest event, or an arrival older than all of them.
 func (p Pushed) apply(m *Model) {
-	m.tail = append(m.tail, p.Event)
+	i, found := slices.BinarySearchFunc(m.tail, p.Event.Seq, func(e proto.Event, seq int64) int {
+		return cmp.Compare(e.Seq, seq)
+	})
+	if found || (i == 0 && len(m.tail) >= TailMax) {
+		return
+	}
+	m.tail = slices.Insert(m.tail, i, p.Event)
 	if over := len(m.tail) - TailMax; over > 0 {
-		m.tail = append(m.tail[:0], m.tail[over:]...)
+		m.tail = slices.Delete(m.tail, 0, over)
 	}
 }
 
@@ -200,7 +211,7 @@ func Relevant(op string) bool {
 	return true
 }
 
-// Tail returns the pushed events kept, oldest first.
+// Tail returns the pushed events kept, in seq order, oldest first.
 func (m *Model) Tail() []proto.Event { return m.tail }
 
 // Selected returns the selected issue, or "" when nothing is listed.

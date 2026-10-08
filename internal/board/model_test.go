@@ -2,6 +2,7 @@ package board
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,45 @@ func TestRelevant(t *testing.T) {
 		if got := Relevant(op); got != want {
 			t.Errorf("Relevant(%q) = %v, want %v", op, got, want)
 		}
+	}
+}
+
+// The tail is in seq order whatever order events arrive in: a push can
+// overtake another, and a redial can repeat one already shown.
+func TestModelEventOrder(t *testing.T) {
+	full := make([]int64, TailMax)
+	for i := range full {
+		full[i] = int64(i + 10)
+	}
+	// gap is a full tail that lacks seq 50 and runs one further.
+	gap := append(slices.DeleteFunc(slices.Clone(full), func(seq int64) bool { return seq == 50 }), TailMax+10)
+	for _, tc := range []struct {
+		name   string
+		before []int64
+		push   []int64
+		want   []int64
+	}{
+		{name: "in order", push: []int64{1, 2, 3}, want: []int64{1, 2, 3}},
+		{name: "overtaken", push: []int64{1, 3, 2}, want: []int64{1, 2, 3}},
+		{name: "older than all", push: []int64{5, 6, 2}, want: []int64{2, 5, 6}},
+		{name: "repeated", push: []int64{1, 2, 2, 1}, want: []int64{1, 2}},
+		{name: "too old for a full tail", before: full, push: []int64{3}, want: full},
+		{name: "repeated into a full tail", before: full, push: []int64{50}, want: full},
+		{name: "late into a full tail", before: gap, push: []int64{50}, want: append(slices.Clone(full[1:]), TailMax+10)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New("demo")
+			for _, seq := range slices.Concat(tc.before, tc.push) {
+				m.Apply(event(seq, "issue.update", "sf-1"))
+			}
+			var got []int64
+			for _, e := range m.Tail() {
+				got = append(got, e.Seq)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("tail after pushing %v = seq %v, want %v", tc.push, got, tc.want)
+			}
+		})
 	}
 }
 
