@@ -39,6 +39,9 @@ var (
 	// ErrForbidden means the actor may not make this change: another
 	// principal holds the issue, or the change is for admins.
 	ErrForbidden = errors.New("forbidden")
+	// ErrBusy means the actor reached a cap on how much it may add in a
+	// time window, such as its usage records a day; it may retry later.
+	ErrBusy = errors.New("busy")
 
 	// errRetry marks a failure that rerunning the write resolves.
 	errRetry = errors.New("retry")

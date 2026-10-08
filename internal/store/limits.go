@@ -12,8 +12,8 @@ import (
 // would hold the one writer for 17 s, and a principal could grow the
 // registry and another's inbox without end. Zero fields take
 // [DefaultLimits]. A request past a limit is refused with ErrInvalid,
-// except Sessions, InboxUnread and Notices, which drop rows or notices
-// as their fields say.
+// except UsagePerDay, refused with ErrBusy, and Sessions, InboxUnread
+// and Notices, which drop rows or notices as their fields say.
 type Limits struct {
 	// Labels caps the labels on one issue, and so in one create.
 	Labels int `yaml:"labels_per_issue"`
@@ -32,10 +32,18 @@ type Limits struct {
 	// can send another in a minute; the rest are not delivered. Lost
 	// claims are not counted.
 	Notices int `yaml:"notices_per_minute"`
+	// UsageRecords caps the records one AddUsage call may send.
+	UsageRecords int `yaml:"usage_records"`
+	// UsagePerDay caps the usage records one principal may add in 24
+	// hours, counted by when the server stored them. Per principal, not
+	// per session: sessions are the client's to name, so a cap per
+	// session would bound nothing.
+	UsagePerDay int `yaml:"usage_per_day"`
 }
 
 // DefaultLimits are the limits a zero field takes.
-var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10}
+var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10,
+	UsageRecords: 500, UsagePerDay: 50000}
 
 // withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
@@ -43,6 +51,7 @@ func (l Limits) withDefaults() Limits {
 		{&l.Labels, &DefaultLimits.Labels}, {&l.AcceptanceItems, &DefaultLimits.AcceptanceItems},
 		{&l.Deps, &DefaultLimits.Deps}, {&l.Sessions, &DefaultLimits.Sessions},
 		{&l.InboxUnread, &DefaultLimits.InboxUnread}, {&l.Notices, &DefaultLimits.Notices},
+		{&l.UsageRecords, &DefaultLimits.UsageRecords}, {&l.UsagePerDay, &DefaultLimits.UsagePerDay},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -60,6 +69,7 @@ func (l Limits) Validate() error {
 	}{
 		{"labels_per_issue", l.Labels}, {"acceptance_items", l.AcceptanceItems}, {"deps_per_issue", l.Deps},
 		{"sessions_per_principal", l.Sessions}, {"inbox_unread", l.InboxUnread}, {"notices_per_minute", l.Notices},
+		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%w: limit %s is %d; give a positive number, or leave it out for the default", ErrInvalid, f.name, f.v)
