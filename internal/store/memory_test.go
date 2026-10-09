@@ -506,7 +506,7 @@ func TestUserMemoryIdemResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	cols, err := rows.Columns()
 	if err != nil {
 		t.Fatal(err)
