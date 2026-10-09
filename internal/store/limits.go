@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -92,10 +93,12 @@ const (
 const maxPrices = 10000
 
 // maxPlans and maxPlanPrincipals bound the plans limits: every cost
-// report reads every plan and its principals into memory.
+// report reads every plan and its principals into memory, so their
+// product is bounded too, by maxPlanRows.
 const (
 	maxPlans          = 10000
 	maxPlanPrincipals = 1000
+	maxPlanRows       = 100000
 )
 
 // withDefaults returns l with each zero field set from DefaultLimits.
@@ -150,6 +153,11 @@ func (l Limits) Validate() error {
 		if f.v > f.most {
 			return fmt.Errorf("%w: limit %s is %d; it can be at most %d", ErrInvalid, f.name, f.v, f.most)
 		}
+	}
+	plans, per := cmp.Or(l.Plans, DefaultLimits.Plans), cmp.Or(l.PlanPrincipals, DefaultLimits.PlanPrincipals)
+	if plans*per > maxPlanRows {
+		return fmt.Errorf("%w: limits plans times plan_principals is %d × %d; it can be at most %d, so lower one to raise the other",
+			ErrInvalid, plans, per, maxPlanRows)
 	}
 	return nil
 }

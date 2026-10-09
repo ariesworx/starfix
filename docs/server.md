@@ -460,7 +460,7 @@ limits:
 | `memories_per_scope` | 1000 | Memories one principal may author in one scope, forgotten ones included. A new key at the cap first deletes that principal's oldest forgotten memories in the scope; only when live memories fill it is the key refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
 | `prices` | 1000 | Rows of the prices table (at most 10000, since every cost report, show and digest reads them all): a model's rates from one date are one row. A new price past it is refused with `invalid`, and its fix says to replace an existing one or raise the limit; replacing a price is not refused |
 | `plans` | 1000 | Rows of the plans table (at most 10000, since every cost report reads them all): a plan's terms from one month are one row. A new row past it is refused with `invalid`, and its fix says to replace an existing one or raise the limit; replacing a row is not refused |
-| `plan_principals` | 100 | Principals one plan row names (at most 1000) |
+| `plan_principals` | 100 | Principals one plan row names (at most 1000). `plans` times `plan_principals` is at most 100000, the principals a cost report may read, so raising one past its default means lowering the other; the server refuses to start otherwise |
 | `hours_per_day` | 50 | Hours entries one principal may have on one day. Past it a new entry is refused with `invalid`, and its fix says to undo some and log their sum, or raise the limit |
 | `hours_note` | 500 | Bytes in an hours entry's note (at most 65535) |
 
@@ -493,9 +493,13 @@ Fixed caps that no setting changes:
   fee a seat a month, is at most 1,000,000 US dollars; a plan has at most
   100,000 seats.
 - **Hours:** an entry is from a minute to 24 hours, on a day at most a
-  year back and not ahead, and one principal's entries on one day add up
-  to at most 24 hours. `show` names at most 20 people per issue, summing
-  the rest as `(other)`; `sfx log` lists at most 500 entries.
+  year back and at most one past the server's today (UTC), and one
+  principal's entries on one day add up to at most 24 hours. `show`
+  names at most 20 people per issue, summing the rest as `(other)`; `sfx
+  log` lists at most 500 entries. Entries are bounded per day, but the
+  events of logging and undoing them are not: a principal who logs and
+  undoes over and over grows the event log at the write rate, as any
+  write does.
 - **Similar issues:** lookups read closed titles from a cache refreshed on
   close and reopen, or after a minute.
 

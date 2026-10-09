@@ -38,8 +38,29 @@ func TestLimitsDefaultsAndValidate(t *testing.T) {
 			t.Errorf("%+v.Validate() = %v, want ErrInvalid naming %s", tc.l, err, tc.name)
 		}
 	}
-	if err := (Limits{MemoryBody: 65535, MemoryTagLength: 255, MemoryKeyLength: 255, Prices: 10000, HoursNote: 65535, Plans: 10000, PlanPrincipals: 1000}).Validate(); err != nil {
+	if err := (Limits{MemoryBody: 65535, MemoryTagLength: 255, MemoryKeyLength: 255, Prices: 10000, HoursNote: 65535, Plans: 10000, PlanPrincipals: 10}).Validate(); err != nil {
 		t.Errorf("limits at their most: %v, want nil", err)
+	}
+	// A cost report reads every plan's principals: plans times
+	// plan_principals, a zero taking its default, is at most 100,000.
+	for _, tc := range []struct {
+		l  Limits
+		ok bool
+	}{
+		{Limits{}, true}, // 1000 × 100
+		{Limits{Plans: 100, PlanPrincipals: 1000}, true},
+		{Limits{Plans: 10000, PlanPrincipals: 10}, true},
+		{Limits{Plans: 1001}, false},
+		{Limits{PlanPrincipals: 101}, false},
+		{Limits{Plans: 10000, PlanPrincipals: 1000}, false},
+	} {
+		err := tc.l.Validate()
+		if tc.ok && err != nil {
+			t.Errorf("%+v.Validate() = %v, want nil", tc.l, err)
+		}
+		if !tc.ok && (!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "plans times plan_principals")) {
+			t.Errorf("%+v.Validate() = %v, want ErrInvalid naming plans times plan_principals", tc.l, err)
+		}
 	}
 	if err := (Limits{}).Validate(); err != nil {
 		t.Errorf("Limits{}.Validate() = %v, want nil", err)
