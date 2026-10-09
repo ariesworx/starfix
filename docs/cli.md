@@ -131,7 +131,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `label add\|rm ID LABEL...` | Add or remove labels |
 | `comment ID TEXT` | Add a comment (`-` reads stdin) |
 | `comments ID`, `history ID` | List all of an issue's comments, or all its changes; `-n N` shows only the newest N |
-| `log DURATION ID` | Log your hours on an issue ([Human hours](concepts.md#human-hours)): `1.5h`, `90m` or `1h30m`, from a minute to 24 hours, for today (UTC) or `--on DATE`, at most a year back; `--note TEXT` adds one line. It prints the entry's id. `log --undo ENTRY` undoes one of your entries (an admin may undo anyone's). Bare `log` lists entries, newest day first: `--issue ID`, `--by PRINCIPAL`, 50 or `-n N` (at most 500) |
+| `log DURATION ID` | Log your hours on an issue ([Human hours](concepts.md#human-hours)): `1.5h`, `90m` or `1h30m`, from a minute to 24 hours, for today in your time zone or `--on DATE`, at most a year back and a day past today in UTC; `--note TEXT` adds one line. It prints the entry's id. `log --undo ENTRY` undoes one of your entries (an admin may undo anyone's). Bare `log` lists entries, newest day first: `--issue ID`, `--by PRINCIPAL`, 50 or `-n N` (at most 500) |
 
 ### See what is happening
 

@@ -312,7 +312,7 @@ func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error
 		return CostReport{}, err
 	}
 	book := newPriceBook(prices)
-	hours, err := windowHours(ctx, q, `on_date >= ? AND on_date < ?`, startDay(since), endDay(until))
+	hours, err := windowHours(ctx, q, `on_date >= ? AND on_date < ?`, startDay(since), hoursEnd(until, now))
 	if err != nil {
 		return CostReport{}, err
 	}

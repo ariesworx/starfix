@@ -28,7 +28,8 @@ type HoursEntry struct {
 	At        time.Time     `json:"at"`
 }
 
-// NewHours is an entry to log. A zero On is the server's today (UTC).
+// NewHours is an entry to log. On is the logger's calendar day, at most
+// a day past the server's today (UTC); a zero On is that today.
 // Idem, an idempotency key, makes a retry return the first entry.
 type NewHours struct {
 	Issue    IssueID
@@ -84,8 +85,8 @@ func hoursState(e HoursEntry) map[string]any {
 // LogHours records the actor's in.Duration on in.Issue for the day
 // in.On, and returns the entry. It refuses with ErrNotFound an issue
 // that does not exist, and with ErrInvalid a duration under a minute,
-// over a day or not in whole seconds, a day that is not a date, is in the
-// future or is more than a year back, a note longer than
+// over a day or not in whole seconds, a day that is not a date, is more
+// than a day past today (UTC) or is more than a year back, a note longer than
 // Limits.HoursNote or not one line of safe text, and an entry that would
 // take the actor's day past 24 hours; past Limits.HoursPerDay entries
 // that day, it refuses with a [*HoursLimitError].
@@ -93,15 +94,17 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 	if err := in.Issue.Validate(); err != nil {
 		return HoursEntry{}, err
 	}
-	today := s.now().UTC().Truncate(24 * time.Hour)
+	now := s.now()
+	today := startDay(now)
 	on := cmp.Or(in.On, today)
 	switch {
 	case in.Duration < MinHoursEntry || in.Duration > MaxHoursEntry || in.Duration%time.Second != 0:
 		return HoursEntry{}, fmt.Errorf("%w: duration %s must be whole seconds from 1m to 24h", ErrInvalid, in.Duration)
 	case !on.Equal(on.UTC().Truncate(24 * time.Hour)):
 		return HoursEntry{}, fmt.Errorf("%w: on must be a date (midnight UTC), not %s", ErrInvalid, on.Format(time.RFC3339))
-	case on.After(today):
-		return HoursEntry{}, fmt.Errorf("%w: on %s is in the future; today is %s (UTC)", ErrInvalid, on.Format(time.DateOnly), today.Format(time.DateOnly))
+	case on.After(lastDay(now)):
+		return HoursEntry{}, fmt.Errorf("%w: on %s is in the future; today is %s (UTC), and a day logged is at most one past it",
+			ErrInvalid, on.Format(time.DateOnly), today.Format(time.DateOnly))
 	case on.Before(today.AddDate(-1, 0, 0)):
 		return HoursEntry{}, fmt.Errorf("%w: on %s is more than a year back", ErrInvalid, on.Format(time.DateOnly))
 	}
@@ -294,6 +297,20 @@ type hoursSum struct {
 
 // startDay is the first day a window starting at since overlaps.
 func startDay(since time.Time) time.Time { return since.UTC().Truncate(24 * time.Hour) }
+
+// lastDay is the latest day an entry may be for at now: a logger east of
+// UTC may already be on tomorrow.
+func lastDay(now time.Time) time.Time { return startDay(now).AddDate(0, 0, 1) }
+
+// hoursEnd is the first day past those a window ending at until counts:
+// the days it overlaps, and when it reaches now, every day an entry may
+// be for.
+func hoursEnd(until, now time.Time) time.Time {
+	if until.Before(now) {
+		return endDay(until)
+	}
+	return maxTime(endDay(until), lastDay(now).AddDate(0, 0, 1))
+}
 
 // endDay is the first day a window ending before until does not
 // overlap.

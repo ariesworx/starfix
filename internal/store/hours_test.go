@@ -114,7 +114,7 @@ func TestLogHoursRefuses(t *testing.T) {
 		{"under a minute", NewHours{Issue: is.ID, Duration: 59 * time.Second}, ErrInvalid, "duration"},
 		{"part of a second", NewHours{Issue: is.ID, Duration: time.Minute + time.Millisecond}, ErrInvalid, "duration"},
 		{"over a day", NewHours{Issue: is.ID, Duration: 24*time.Hour + time.Minute}, ErrInvalid, "24h"},
-		{"tomorrow", NewHours{Issue: is.ID, Duration: time.Hour, On: day("2026-10-08")}, ErrInvalid, "future"},
+		{"two days on", NewHours{Issue: is.ID, Duration: time.Hour, On: day("2026-10-09")}, ErrInvalid, "future"},
 		{"over a year back", NewHours{Issue: is.ID, Duration: time.Hour, On: day("2025-10-06")}, ErrInvalid, "year"},
 		{"not a date", NewHours{Issue: is.ID, Duration: time.Hour, On: day("2026-10-06").Add(time.Hour)}, ErrInvalid, "date"},
 		{"note too long", NewHours{Issue: is.ID, Duration: time.Hour, Note: strings.Repeat("x", 501)}, ErrInvalid, "note"},
@@ -129,8 +129,10 @@ func TestLogHoursRefuses(t *testing.T) {
 			}
 		})
 	}
-	// A year back exactly is in range, as is 24h.
+	// A year back exactly is in range, as is 24h; so is tomorrow in UTC,
+	// already today for a logger east of it.
 	mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: 24 * time.Hour, On: day("2025-10-07")})
+	mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: time.Hour, On: day("2026-10-08")})
 }
 
 // A principal's entries on one day are bounded in number (limits:
@@ -272,6 +274,38 @@ func TestIssueUsageHours(t *testing.T) {
 	}
 	if u := mustUsage(t, s, mustCreate(t, s, NewIssue{Title: "none"}).ID); u.Logged != 0 || len(u.LoggedBy) != 0 {
 		t.Errorf("IssueUsage(an issue with no hours) logged %s by %v, want none", u.Logged, u.LoggedBy)
+	}
+}
+
+// An entry for tomorrow in UTC, already today for a logger east of it,
+// counts in a digest and in a cost report that reach now, though no UTC
+// moment of its day has come yet.
+func TestHoursAheadOfUTC(t *testing.T) {
+	s, _ := clockStore(t) // 2026-10-07 12:00 UTC
+	is := mustCreate(t, s, NewIssue{Title: "work"})
+	mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: time.Hour, On: day("2026-10-08")})
+	d, err := s.Digest(t.Context(), DigestFilter{Window: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Usage.Logged != time.Hour {
+		t.Errorf("Digest(last hour).Usage = %+v, want 1h logged", d.Usage)
+	}
+	for _, until := range []time.Time{{}, day("2026-10-07").Add(12 * time.Hour)} {
+		r, err := s.CostReport(t.Context(), CostFilter{By: CostByPerson, Since: day("2026-10-07"), Until: until})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Total.Logged != time.Hour {
+			t.Errorf("CostReport(from 7 Oct to %s).Total.Logged = %s, want 1h", until, r.Total.Logged)
+		}
+	}
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByPerson, Since: day("2026-10-06"), Until: day("2026-10-07")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Total.Logged != 0 {
+		t.Errorf("CostReport(6 Oct).Total.Logged = %s, want none", r.Total.Logged)
 	}
 }
 

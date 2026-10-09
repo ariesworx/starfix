@@ -343,8 +343,11 @@ show it, since `show` and `digest` would have to read whole months.
 ### Human hours
 
 People log their own time with `sfx log 1.5h ID`: an entry is one
-person's time on one issue for one day (UTC), from a minute to 24 hours,
-with an optional note. It counts against the issue's account, resolved
+person's time on one issue for one day, from a minute to 24 hours, with
+an optional note. The day is the logger's calendar day: `sfx log` sends
+today's date in your time zone unless `--on` gives another, and the
+server takes any date from a year back to a day past its own today
+(UTC). It counts against the issue's account, resolved
 when read like tokens, and carries no money. A person's entries on one
 day add up to at most 24 hours. Each entry and each undo is an event on
 the issue, so `history` shows it; a person may undo only their own entry,
@@ -354,6 +357,8 @@ and an admin anyone's.
 hours of the days their window overlaps: a day counts whole when the
 window touches it, so the default `digest --since 24h` at a morning
 standup counts yesterday's hours, and windows from midnight to midnight
-count each day once. In `sfx cost` the hours go with their issue's
+count each day once. Days are dates, compared with the window in UTC; a
+window that reaches now also counts entries for tomorrow (UTC), already
+today east of it. In `sfx cost` the hours go with their issue's
 account, epic or issue, or with who logged them; by model they are the
 group `(human)`.

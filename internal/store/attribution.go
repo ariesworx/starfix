@@ -987,9 +987,10 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 }
 
 // hours fills in u.Logged: the entries of the days the window overlaps,
-// up to today, filtered by the digest's By and Label.
+// up to the last day an entry may be for, filtered by the digest's By
+// and Label.
 func (q *digestQuery) hours(ctx context.Context, u *DigestUsage) error {
-	where, args := `on_date >= ? AND on_date <= ?`, []any{startDay(q.f.Since), startDay(q.now)}
+	where, args := `on_date >= ? AND on_date <= ?`, []any{startDay(q.f.Since), lastDay(q.now)}
 	if q.f.By != "" {
 		where, args = where+` AND principal = ?`, append(args, q.f.By)
 	}

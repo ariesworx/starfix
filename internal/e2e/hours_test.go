@@ -20,14 +20,18 @@ func TestHoursAndPlansCLI(t *testing.T) {
 	w := newWorld(t, daemonOpts{admins: []string{"dana"}, now: clk.now})
 	alice, bob, dana := w.newUser("alice", ""), w.newUser("bob", ""), w.newUser("dana", "")
 	alice.env["STARFIX_SESSION"] = "s-agent"
+	// The day logged is the logger's own: at 12:00 UTC on 8 Oct it is
+	// already the 9th for alice, east of UTC, and still the 8th for bob.
+	alice.now = func() time.Time { return clk.now().In(time.FixedZone("east", 14*60*60)) }
+	bob.now = func() time.Time { return clk.now().In(time.FixedZone("west", -11*60*60)) }
 	task := strings.TrimSpace(alice.ok("create", "Do the work"))
 	alice.ok("start", task)
 
 	e := decode[proto.HoursLogResult](t, alice.ok("log", "1h30m", task, "--note", "pairing", "--json"))
-	if e.ID == "" || e.On != "2026-10-08" {
-		t.Fatalf("log --json = %+v, want an entry for today", e)
+	if e.ID == "" || e.On != "2026-10-09" {
+		t.Fatalf("log --json = %+v, want an entry for alice's today, 2026-10-09", e)
 	}
-	if got := bob.ok("log", "15m", task); !strings.HasPrefix(got, "logged 0.25h on "+task+" for ") {
+	if got := bob.ok("log", "15m", task); !strings.HasPrefix(got, "logged 0.25h on "+task+" for 2026-10-08: entry ") {
 		t.Errorf("log 15m = %q", got)
 	}
 	if got := alice.ok("log", "--issue", task); !strings.Contains(got, "alice  "+task+"  1.5h   "+e.ID+"  pairing\n") {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
@@ -61,6 +62,9 @@ type Env struct {
 	// Upgrader overrides what `upgrade` uses. Nil uses GitHub releases,
 	// the built-in release keys and this executable.
 	Upgrader *Upgrader
+	// Now is the time in the user's time zone, whose date `log` sends as
+	// the day worked. Default time.Now.
+	Now func() time.Time
 }
 
 // usageError is a mistake on the command line. usage is the usage line
@@ -229,6 +233,9 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.UserCacheDir == nil {
 		env.UserCacheDir = os.UserCacheDir
+	}
+	if env.Now == nil {
+		env.Now = time.Now
 	}
 	if env.GOOS == "" {
 		env.GOOS = runtime.GOOS

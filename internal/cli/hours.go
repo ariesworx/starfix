@@ -14,7 +14,7 @@ import (
 func cmdLog(ctx context.Context, r *runner, args []string) error {
 	const usage = "log DURATION ID [--on DATE] [--note TEXT] | log --undo ENTRY | log [--issue ID] [--by PRINCIPAL] [-n N]"
 	fs := r.newFlags("log")
-	on := fs.String("on", "", "the day worked, 2006-01-02 (default today, UTC)")
+	on := fs.String("on", "", "the day worked, 2006-01-02 (default today, in your time zone)")
 	note := fs.String("note", "", "a one-line note")
 	undo := fs.String("undo", "", "undo the entry with this id")
 	var list proto.HoursArgs
@@ -64,10 +64,12 @@ func cmdLog(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return usagef(usage, "%q: %v", pos[0], err)
 	}
-	if *on != "" {
-		if _, err := time.Parse(time.DateOnly, *on); err != nil {
-			return usagef(usage, "--on %q must be a date such as 2026-10-08", *on)
-		}
+	// The day is the logger's own, which the server cannot know.
+	if *on == "" {
+		*on = r.env.Now().Format(time.DateOnly)
+	}
+	if _, err := time.Parse(time.DateOnly, *on); err != nil {
+		return usagef(usage, "--on %q must be a date such as 2026-10-08", *on)
 	}
 	in := proto.HoursLogArgs{ID: pos[1], Seconds: int64(d / time.Second), On: *on, Note: *note, Idem: proto.NewIdem("cli")}
 	var out proto.HoursLogResult
