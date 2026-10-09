@@ -113,6 +113,19 @@ func TestDispatchHoursLimit(t *testing.T) {
 	}
 }
 
+// An entry that would take a day past 24 hours is refused with how much
+// more the day holds.
+func TestDispatchHoursDayFull(t *testing.T) {
+	s, _ := newServerClock(t, Limits{}, fixedNow)
+	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
+	mustCall[proto.HoursLogResult](t, s, alice, proto.OpHoursLog, proto.HoursLogArgs{ID: is.ID, Seconds: 22*3600 + 1800})
+	_, perr := call[proto.HoursLogResult](t, s, alice, proto.OpHoursLog, proto.HoursLogArgs{ID: is.ID, Seconds: 2 * 3600})
+	const fix = "you can log at most 1.5h more on 2026-10-07; undo an entry with `sfx log --undo ID` to change it"
+	if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Message, "at most 24h") || perr.Fix != fix {
+		t.Fatalf("2h on a day with 22.5h logged: %+v, want invalid with fix %q", perr, fix)
+	}
+}
+
 func TestDispatchPlans(t *testing.T) {
 	s, _ := newServerClock(t, Limits{}, fixedNow)
 	set := proto.PlanSetArgs{Name: "team", From: "2026-09", Fee: 10_000_000, Seats: 3, Principals: []string{"bob", "alice"}}

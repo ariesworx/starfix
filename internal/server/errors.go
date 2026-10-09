@@ -46,6 +46,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var priceCap *store.PriceLimitError
 	var planCap *store.PlanLimitError
 	var hoursCap *store.HoursLimitError
+	var dayFull *store.HoursDayError
 	switch {
 	case errors.Is(err, store.ErrNotFound) && op == proto.OpHoursDelete:
 		return proto.Errf(proto.CodeNotFound, "find the entry id with `sfx log --issue ID` or `sfx log --by PRINCIPAL`",
@@ -57,6 +58,11 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 
 	case errors.As(err, &forbidden):
 		return forbiddenErr(forbidden)
+
+	case errors.As(err, &dayFull):
+		left := int64((store.MaxHoursEntry - dayFull.Logged) / time.Second)
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("you can log at most %s more on %s; undo an entry with `sfx log --undo ID` to change it",
+			proto.Hours(left), dayFull.On.Format(time.DateOnly)), text)
 
 	case errors.As(err, &stale):
 		msg := fmt.Sprintf("your claim on %s (epoch %d) was lost; it is now epoch %d", stale.ID, stale.Epoch, stale.Current)

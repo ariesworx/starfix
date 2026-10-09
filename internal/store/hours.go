@@ -79,6 +79,22 @@ func (e *HoursLimitError) Error() string {
 // Unwrap makes errors.Is(err, ErrInvalid) hold.
 func (e *HoursLimitError) Unwrap() error { return ErrInvalid }
 
+// HoursDayError refuses an entry that would take Principal's time on
+// the day On past MaxHoursEntry, with Logged already there. It wraps
+// ErrInvalid.
+type HoursDayError struct {
+	Principal string
+	On        time.Time
+	Logged    time.Duration
+}
+
+func (e *HoursDayError) Error() string {
+	return fmt.Sprintf("%v: %s has %s on %s already, and a day holds at most 24h", ErrInvalid, e.Principal, e.Logged, e.On.Format(time.DateOnly))
+}
+
+// Unwrap makes errors.Is(err, ErrInvalid) hold.
+func (e *HoursDayError) Unwrap() error { return ErrInvalid }
+
 // hoursState is an entry as its events record it.
 func hoursState(e HoursEntry) map[string]any {
 	return map[string]any{"id": e.ID, "principal": e.Principal, "on": e.On.Format(time.DateOnly),
@@ -91,8 +107,9 @@ func hoursState(e HoursEntry) map[string]any {
 // over a day or not in whole seconds, a day that is not a date, is more
 // than a day past today (UTC) or is more than a year back, a note longer than
 // Limits.HoursNote or not one line of safe text, and an entry that would
-// take the actor's day past 24 hours; past Limits.HoursPerDay entries
-// that day, it refuses with a [*HoursLimitError].
+// take the actor's day past 24 hours, as a [*HoursDayError]; past
+// Limits.HoursPerDay entries that day, it refuses with a
+// [*HoursLimitError].
 func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEntry, error) {
 	if err := in.Issue.Validate(); err != nil {
 		return HoursEntry{}, err
@@ -152,8 +169,7 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 		case n >= w.lim.HoursPerDay:
 			return &HoursLimitError{Principal: w.actor.Principal, On: on, Max: w.lim.HoursPerDay}
 		case time.Duration(sum)*time.Second+in.Duration > MaxHoursEntry:
-			return fmt.Errorf("%w: %s has %s on %s already, and a day holds at most 24h", ErrInvalid, w.actor.Principal,
-				time.Duration(sum)*time.Second, on.Format(time.DateOnly))
+			return &HoursDayError{Principal: w.actor.Principal, On: on, Logged: time.Duration(sum) * time.Second}
 		}
 		out = HoursEntry{ID: newCommentID(), Issue: in.Issue, Principal: w.actor.Principal, On: on, Duration: in.Duration,
 			Note: in.Note, At: w.now}

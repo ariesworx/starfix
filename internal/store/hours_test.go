@@ -156,8 +156,9 @@ func TestLogHoursPerDay(t *testing.T) {
 
 	// 21h already on 2026-10-05; 3h more fits, a minute past does not.
 	mustLogHours(t, s, bob, NewHours{Issue: is.ID, Duration: 21 * time.Hour, On: day("2026-10-05")})
-	if _, err := s.LogHours(t.Context(), bob, NewHours{Issue: is.ID, Duration: 3*time.Hour + time.Minute, On: day("2026-10-05")}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "24h") {
-		t.Errorf("LogHours taking a day past 24h = %v, want ErrInvalid naming 24h", err)
+	_, err = s.LogHours(t.Context(), bob, NewHours{Issue: is.ID, Duration: 3*time.Hour + time.Minute, On: day("2026-10-05")})
+	if full, ok := errors.AsType[*HoursDayError](err); !ok || !errors.Is(err, ErrInvalid) || full.Logged != 21*time.Hour {
+		t.Errorf("LogHours taking a day past 24h = %v, want a *HoursDayError with 21h logged, wrapping ErrInvalid", err)
 	}
 	mustLogHours(t, s, bob, NewHours{Issue: is.ID, Duration: 3 * time.Hour, On: day("2026-10-05")})
 }
