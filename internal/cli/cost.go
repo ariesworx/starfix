@@ -185,10 +185,9 @@ func cmdAdmin(ctx context.Context, r *runner, args []string) error {
 	if len(missing) > 0 {
 		return usagef(usage, "prices set needs %s; give 0 for what the model does not charge", strings.Join(missing, ", "))
 	}
-	for f, dst := range map[string]*int64{"input": &in.Input, "output": &in.Output, "cache-write": &in.CacheWrite,
-		"cache-write-1h": &in.CacheWrite1h, "cache-read": &in.CacheRead} {
-		if *dst, err = proto.ParseRate(*rates[f]); err != nil {
-			return usagef(usage, "--%s: %v", f, err)
+	for i, dst := range []*int64{&in.Input, &in.Output, &in.CacheWrite, &in.CacheWrite1h, &in.CacheRead} { // rateFlags' order
+		if *dst, err = proto.ParseRate(*rates[rateFlags[i]]); err != nil {
+			return usagef(usage, "--%s: %v", rateFlags[i], err)
 		}
 	}
 	var out proto.PriceSetResult

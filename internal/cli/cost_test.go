@@ -144,6 +144,9 @@ func TestCostUsage(t *testing.T) {
 			"--output, --cache-write, --cache-write-1h, --cache-read"},
 		{"bad rate", append([]string{"-C", empty, "admin", "prices", "set", "m", "--from", "2026-01-01", "--input", "$4"}, rates[2:]...),
 			"--input: not a rate"},
+		// With two bad rates, the first in the usage's order is named.
+		{"two bad rates", []string{"-C", empty, "admin", "prices", "set", "m", "--from", "2026-01-01", "--input", "1", "--output", "x",
+			"--cache-write", "1", "--cache-write-1h", "1", "--cache-read", "-1"}, "--output: not a rate"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
