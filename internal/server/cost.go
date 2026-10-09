@@ -85,6 +85,10 @@ func (s *Server) costFilter(in proto.CostArgs) (store.CostFilter, error) {
 }
 
 func wireCostGroup(g store.CostGroup) proto.CostGroup {
-	return proto.CostGroup{Key: g.Key, Title: g.Title, Tokens: proto.Tokens(g.Tokens), CostUSD: proto.USD(g.Cost.Picodollars),
-		Unpriced: g.Cost.Unpriced, Split: g.Split}
+	out := proto.CostGroup{Key: g.Key, Title: g.Title, Tokens: proto.Tokens(g.Tokens), CostUSD: proto.USD(g.Cost.Picodollars),
+		Unpriced: g.Cost.Unpriced, Split: g.Split, LoggedSeconds: seconds(g.Logged)}
+	if g.Amortized != nil {
+		out.AmortizedUSD = proto.USD(g.Amortized)
+	}
+	return out
 }

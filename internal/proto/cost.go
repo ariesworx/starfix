@@ -94,14 +94,20 @@ type CostArgs struct {
 // and their list-price equivalent, CostUSD, an exact decimal of the
 // priced tokens. Title is an issue's or epic's. Unpriced: some tokens
 // had no price at their time. Split: some came from records shared by
-// time with another group, so that part is an estimate.
+// time with another group, so that part is an estimate. LoggedSeconds is
+// the time people logged by hand on the days the window overlaps.
+// AmortizedUSD is the group's part of the subscription plans' monthly
+// totals, an exact decimal, sent in every group once the server has a
+// plan (protocol 4).
 type CostGroup struct {
 	Key   string `json:"key"`
 	Title string `json:"title,omitempty"`
 	Tokens
-	CostUSD  string `json:"cost_usd"`
-	Unpriced bool   `json:"unpriced,omitempty"`
-	Split    bool   `json:"split,omitempty"`
+	CostUSD       string `json:"cost_usd"`
+	Unpriced      bool   `json:"unpriced,omitempty"`
+	Split         bool   `json:"split,omitempty"`
+	LoggedSeconds int64  `json:"logged_seconds,omitempty"`
+	AmortizedUSD  string `json:"amortized_usd,omitempty"`
 }
 
 // CostResult is a cost report. Groups are by cost, largest first; Total
