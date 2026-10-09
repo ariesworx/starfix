@@ -455,6 +455,7 @@ Agreed 6 Oct 2026. Extends item 10.
 | 1 | Schema, `starfixd` core, SSH transport, issues/deps/labels/comments, ready via CTE, events, CLI CRUD, bd JSONL import, version handshake | Real bd backlogs imported and round-tripped |
 | 2 | MCP server (work and issue tools), `start`/`finish`, git awareness, next-step errors, `starfixd --dev`, token budget in CI, `digest` (MCP and CLI), prime, `sfx upgrade` and `starfixd upgrade`, `setup` for Claude Code, Codex, Gemini, Cursor, VS Code | Agents use it daily on a real project |
 | 3 | Claims with leases, epochs, reaper, agents registry, inbox, event push, handoff, idempotency, files to issues, acceptance checklist, similar closed issues (full-text), live board, time and token reporting, `account` and token capture (§12.1) | Multi-session soak test |
+| 3a | Projects and access (§15): many projects on one server with a database and a writer each, principals, keys and memberships in a control database, server and project admins, `sfx admin` | Two projects on one server; a principal refused in a project it is not a member of; the soak test run across both |
 | 4 | Memory with scopes and tags, migrated from bd `kv.memory.*`; prices, `sfx cost` and `sfx log` (§12.1) | |
 | 5 | Offline cache, outbox, conflict parking and resolution | Partition tests |
 | 6 | Locks, reservations, gates, molecules/formulas, swarm, cross-project | |
@@ -479,3 +480,101 @@ Maintainer, 7 Oct 2026, from the unattended-operation review ([bearings.md §3.1
 8. starfixd gains an autonomy window, narrower default rights, distinct agent identities, parking of a person's lapsed claim during a window, and git push fencing by claim epoch. They are staged after the security review, before any release that enables unattended work.
 9. SSH stays the only transport; an HTTPS transport waits.
 10. WireGuard is a documented, optional layer in front of the server's SSH port; nothing in starfix requires it.
+
+Maintainer, 9 Oct 2026, on projects and access (§15):
+
+11. One server serves many projects. Each project has its own Dolt database and its own writer; no writer is shared between projects.
+12. Access is managed with `sfx admin` only. No admin tool over MCP and no web page for now.
+13. Public keys move into the store, in this stage, and must work on AWS, DigitalOcean and Azure as well as Google Cloud.
+14. Two admin tiers: server admins with total control, and project admins, a role a principal may hold on one or more projects.
+15. A project admin may add new people.
+
+## 15. Projects and access
+
+Designed 9 Oct 2026; nothing here is built. Until it is, one server holds one project, a principal is a line in `authorized_keys`, and admins are a list in the config file.
+
+**Goal.** One server, many projects. A project has one or more developers, remote or not, each running from one to hundreds of agent sessions. A principal has access to zero or more projects.
+
+### 15.1 Databases
+
+- **One Dolt database per project**, all in the one `dolt sql-server`, on the one machine. A project's database is exactly today's schema, so the migrations and the store's queries do not change, and the `project` column §3 planned for `issues` is not needed.
+- **One `Store` per project** inside the one `starfixd`: its own writer connection, its own readers, its own event log, reaper and event push. A busy project does not queue another's writes; they still share the machine's CPU, memory and disk. A project's store opens on first use and closes when idle, so connections and memory follow the projects in use, not the projects that exist.
+- **A control database** holds what is not a project's: `projects`, `principals`, `principal_keys`, `members`, and its own event log, so that every grant, revocation and key change is history (rule 7). It has its own writer.
+- **Routing.** The hello already names the project (`proj`), so a current client and its `.starfix.yaml` work unchanged: the daemon looks the project up instead of comparing it to the one it was started with. `sfx admin` opens a control connection, which names no project; that, and the admin ops, raise the protocol version (rule 10).
+- **Limits** become per principal per project where they protect a project (connections, registry rows, write rate, inbox), with the server totals kept. New caps (rule 18): projects, open stores, principals, keys per principal, members per project.
+
+| Table | Columns |
+|---|---|
+| `projects` | `id` (UUID), `name`, `prefix`, `account`, `db_name`, `state` (`active` / `archived`), `rev` |
+| `principals` | `name`, `state` (`active` / `disabled`), `created_by`, `rev` |
+| `principal_keys` | `fingerprint` (SHA-256), `principal`, `key` (the public key line), `comment`, `added_by`, `added_at` |
+| `members` | (`principal`, `project`), `role` (`member` / `admin`), `added_by`, `rev` |
+
+### 15.2 Keys
+
+A key names a principal and nothing else. What a principal may reach is in `members`, so no table ties a key to a project. A key that should reach fewer projects than its owner (CI, a cloud sandbox) gets a principal of its own, as the server guide already advises. Only public keys are stored.
+
+sshd still authenticates, and the forced command still names the principal:
+
+```text
+Match User starfix
+    AuthorizedKeysCommand /usr/local/bin/starfixd keys %t %k
+    AuthorizedKeysCommandUser starfix
+```
+
+- `starfixd keys` asks the daemon over its socket for the offered key and prints, for a key of an active principal, the line used today: `restrict,command="starfixd stdio --principal NAME" KEY`. For any other key, and on any error, it prints nothing, and sshd refuses the key.
+- It runs before authentication, for every key a stranger offers. So the lookup is an in-memory index by fingerprint, reads no database, changes nothing, and is bounded by sshd's `MaxStartups`.
+- `~starfix/.ssh/authorized_keys` stays, read by sshd as before, for the first server admin and as the way in when the daemon is down. `starfixd` gets a command that imports its lines into the store.
+- Disabling a principal, removing a key or ending a membership drops the open connections it allowed. Today that takes `pkill` on the server.
+- The `Match User` block matters: where the image already sets a global `AuthorizedKeysCommand` for its own login service, the block overrides it for the `starfix` account alone.
+
+**Providers.** `AuthorizedKeysCommand` is OpenSSH's, so nothing here belongs to a cloud. From general knowledge of the products, to be checked on a VM of each before the stage's gate:
+
+| Provider | Note |
+|---|---|
+| Google Cloud | OS Login sets a global `AuthorizedKeysCommand`; the `Match` block overrides it for `starfix` |
+| AWS | EC2 Instance Connect, on Ubuntu and Amazon Linux images, does the same |
+| Azure | Plain VMs set none; the Entra ID login extension sets one |
+| DigitalOcean | Droplets set none |
+
+Open, to check on those VMs: sshd runs the command only if the file and every directory above it are owned by root and not writable by others, which the binary swap of `starfixd upgrade` must keep true; SELinux in enforcing mode on RHEL-family images (the guide is tested on Ubuntu 24.04 only). The private-network transport (§2, IAP) is Google Cloud's alone; on the other three a server is reached on a public SSH port with the pinned host key, optionally behind WireGuard (decision 10).
+
+### 15.3 Roles
+
+| Role | Where | May |
+|---|---|---|
+| Server admin | The whole server | Archive projects (creating one is the operator's, §15.5); create and disable any principal; add and remove any key; set any membership and role; act as admin in every project |
+| Project admin | Each project where `members.role` is `admin` | Add and remove the project's members and set their roles; create a principal and its keys; override a held issue and `close --force`, as an admin does today |
+| Member | Each project it belongs to | Work |
+
+- Server admins stay in the config file (`admins:`), read at start, so nothing over the protocol makes one.
+- A handshake for a project the principal is not a member of is refused with `forbidden` and a fix naming the admin command. The store's admin check (`wtx.guard`) reads the project's admins and the server's, live.
+- **A project admin's reach over keys is bounded.** A principal a project admin creates starts as a member of that project only. A project admin may add or remove a principal's keys, or disable it, only while every project that principal belongs to is one they administer. Otherwise a project admin could add a key of their own to someone with access elsewhere and act as them there; past that line it takes a server admin.
+- Principal names are one namespace for the server, so a project admin's new name can collide with another project's person. The refusal says the name is taken, which reveals that it exists.
+
+### 15.4 `sfx admin`
+
+CLI only (rule 12). Sketch:
+
+```text
+starfixd project create NAME [--prefix P] [--account A]   on the server (§15.5, 1)
+sfx admin project list | archive PROJECT                  server admin
+sfx admin status                                          server admin: every project; project admin: theirs
+sfx admin principal add NAME --key FILE [--project P]     project admin: --project is theirs
+sfx admin principal list | disable NAME
+sfx admin key add NAME FILE | list NAME | remove FINGERPRINT
+sfx admin member add NAME [--project P] [--role admin]    default project: this repository's
+sfx admin member list | remove NAME
+```
+
+`project create` prints the UUID and the `.starfix.yaml` to commit.
+
+`status` reports, per project: whether its store is open, connections, sessions seen, writes a minute, write latency and the database's size on disk; and for the server: starfixd's own memory and goroutines, the machine's free memory and disk, and Dolt's memory where starfixd can read it. Dolt is one process, so its memory cannot be split by project.
+
+### 15.5 Open questions
+
+1. **Creating a database.** starfixd's Dolt account may hold no privilege on `*.*` (§7, S-2), and Dolt lets no other account create one: tried on Dolt 2.3.3 on 9 Oct 2026 (to be repeated at `version.Dolt`), an account with `GRANT ALL` on a name pattern (`starfix\_%`), or on the exact name ahead of time, is still refused `CREATE DATABASE`. So a project's database is made on the server, by the operator: `starfixd project create NAME` runs `CREATE DATABASE IF NOT EXISTS`, grants starfixd's account that one database, migrates it and records the project, with a privileged Dolt account whose password is read from a 0600 file or a prompt, never argv (rule 2). Each step is safe to repeat, so a run that failed halfway is run again. If creating projects without a shell on the server is wanted later, the operator can make spare databases ahead of time for `sfx admin` to claim.
+2. **Memory.** One project reached 1.4 GB in the load test. How memory grows with several open databases in one Dolt process is not measured, and it decides the machine size. To be measured at `version.Dolt`, with the idle close above. `sfx admin status` (§15.4) is how an admin watches it afterward.
+3. **Moving an existing server.** Its database becomes the first project's, unchanged; the control database is created beside it; the config file's `project:` names the project to adopt.
+4. **A principal's own keys.** Whether a principal may add a key for itself (a new laptop). Not at first: an agent holding the developer's key could add one of its own.
+5. **Stage 6's cross-project edges** become reads across databases, checked against the reader's memberships.
