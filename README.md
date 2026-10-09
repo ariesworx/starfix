@@ -11,8 +11,8 @@ command line. One small Go server keeps the data in
 [Dolt](https://github.com/dolthub/dolt), a SQL database with Git-style
 history.
 
-> **Status: stage 4 of 7 in progress** (stage 3 waits only on token
-> capture for Codex and Gemini CLI). Issues, claims, handoffs, the inbox,
+> **Status: stage 4 of 7 done** (stage 3 waits only on token capture
+> for Codex and Gemini CLI, a follow-up). Issues, claims, handoffs, the inbox,
 > a live board, scoped memory, token cost (at list price and amortized
 > over plans), people's hours, agent setup and importing from bd (beads)
 > work today. An offline cache comes next. Not ready for production use
@@ -166,7 +166,7 @@ binary, building from source and verifying a download by hand.
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, live board, token capture | In progress. Built: claims, agents registry, inbox, event push, structured handoffs, idempotency, files to issues, acceptance checklists, similar closed issues, the live board, accounts, time and token reporting, and token capture for Claude Code. The stage's gate, a multi-session soak test, passes. Left: token capture for Codex and Gemini CLI, held until the maintainer uses them and their formats can be checked against real files |
-| 4 | Team and personal memory with tags; prices and `sfx cost` | In progress. Built: scoped, tagged memory with pins and issue links (`remember`, `recall`, `forget`, `memories`, `pin`), ranked in `prime` and `start`, private user scope, a secrets lint, and import of bd's memories; prices (`sfx admin prices`), `sfx cost` and the MCP `cost` tool, and the cost in `show` and `digest`; human hours (`sfx log`) in `show`, `digest` and `sfx cost`; subscription plans (`sfx admin plans`) and their amortized cost in `sfx cost` |
+| 4 | Team and personal memory with tags; prices and `sfx cost` | Done. Built: scoped, tagged memory with pins and issue links (`remember`, `recall`, `forget`, `memories`, `pin`), ranked in `prime` and `start`, private user scope, a secrets lint, and import of bd's memories; prices (`sfx admin prices`), `sfx cost` and the MCP `cost` tool, and the cost in `show` and `digest`; human hours (`sfx log`) in `show`, `digest` and `sfx cost`; subscription plans (`sfx admin plans`) and their amortized cost in `sfx cost` |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |
 | 7 | Scheduled digests, GitHub sync, compaction, vectors | |
