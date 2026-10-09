@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math/big"
@@ -559,5 +560,139 @@ func TestCostReportHours(t *testing.T) {
 	}
 	if last := r.Groups[len(r.Groups)-1]; last.Key != "(other)" || last.Logged != 2*time.Hour+15*time.Minute {
 		t.Errorf("CostReport(by issue, limit 2) last group %s logged %s, want (other) logged 2h15m0s", last.Key, last.Logged)
+	}
+}
+
+// amortizedText renders each group's amortized cost: "key=picos", the
+// issue ids named as ids gives them.
+func amortizedText(gs []CostGroup, ids map[string]IssueID) string {
+	names := map[string]string{}
+	for name, id := range ids {
+		names[string(id)] = name
+	}
+	var out []string
+	for _, g := range gs {
+		key := cmp.Or(names[g.Key], g.Key)
+		if g.Amortized == nil {
+			out = append(out, key+"=none")
+			continue
+		}
+		out = append(out, key+"="+g.Amortized.String())
+	}
+	slices.Sort(out)
+	return strings.Join(out, " ")
+}
+
+// amortizedFixture records a plan, team, of 10 USD a seat for 3 seats
+// from September 2026, covering alice and bob; carol is on no plan. In
+// September alice's 100 tokens went to A and bob's 200 to no issue; in
+// October, to 7 Oct 12:00, alice's 50 went to B and bob's 50 to no
+// issue. carol's 1000 tokens in September went to C.
+func amortizedFixture(t *testing.T) (*Store, map[string]IssueID) {
+	t.Helper()
+	s, clk := clockStore(t) // 2026-10-07 12:00
+	ctx := t.Context()
+	now := clk.now()
+	mustSetPlan(t, s, NewPlan{Name: "team", From: month("2026-09"), Fee: 10_000_000, Seats: 3, Principals: []string{"alice", "bob"}})
+	a := mustCreate(t, s, NewIssue{Title: "a", Account: "acme"})
+	b, c := mustCreate(t, s, NewIssue{Title: "b"}), mustCreate(t, s, NewIssue{Title: "c"})
+	carol := Actor{Principal: "carol", Session: "sess-c", Machine: "laptop-c"}
+	hold := func(who Actor, id IssueID, at time.Time) {
+		t.Helper()
+		clk.add(at.Sub(clk.now()))
+		if _, _, err := s.StartIssue(ctx, who, id, time.Hour, false); err != nil {
+			t.Fatal(err)
+		}
+		clk.add(10 * time.Minute)
+		if _, _, err := s.FinishIssue(ctx, who, id, 0, Finish{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hold(alice, a.ID, time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC))
+	hold(carol, c.ID, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC))
+	hold(alice, b.ID, time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC))
+	clk.add(now.Sub(clk.now()))
+	mustAddUsage(t, s, alice, rec("a-sep", "example-large", time.Date(2026, 9, 10, 12, 5, 0, 0, time.UTC), 100, 0),
+		rec("a-oct", "example-large", time.Date(2026, 10, 2, 12, 5, 0, 0, time.UTC), 50, 0))
+	mustAddUsage(t, s, bob, rec("b-sep", "example-large", time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC), 200, 0),
+		rec("b-oct", "example-large", time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC), 50, 0))
+	mustAddUsage(t, s, carol, rec("c-sep", "example-large", time.Date(2026, 9, 11, 12, 5, 0, 0, time.UTC), 1000, 0))
+	return s, map[string]IssueID{"A": a.ID, "B": b.ID, "C": c.ID}
+}
+
+// A plan's monthly total, fee × seats, is split across each month's
+// groups in proportion to the tokens its principals' records gave them
+// that month, the tokens no issue was held for taking theirs into
+// (unattributed), so a whole month sums to the total. A month the window
+// covers in part gets the part its tokens in the window are of the
+// month's. carol, on no plan, adds nothing.
+func TestCostReportAmortized(t *testing.T) {
+	s, ids := amortizedFixture(t)
+	const usd = 1_000_000_000_000 // picodollars
+	tests := []struct {
+		name         string
+		by           CostBy
+		since, until time.Time
+		want         string
+		total        int64
+	}{
+		{"September and October by issue", CostByIssue, month("2026-09"), time.Time{},
+			"(unattributed)=35000000000000 A=10000000000000 B=15000000000000 C=0", 60 * usd},
+		{"by account", CostByAccount, month("2026-09"), time.Time{},
+			"(unattributed)=35000000000000 acme=10000000000000 internal=15000000000000", 60 * usd},
+		{"by person", CostByPerson, month("2026-09"), time.Time{},
+			"alice=25000000000000 bob=35000000000000 carol=0", 60 * usd},
+		{"by model", CostByModel, month("2026-09"), time.Time{}, "example-large=60000000000000", 60 * usd},
+		// From 15 September, the window holds bob's 200 of September's 300
+		// tokens: two thirds of its 30 USD.
+		{"part of September", CostByIssue, day("2026-09-15"), month("2026-10"), "(unattributed)=20000000000000", 20 * usd},
+		{"part of October", CostByIssue, day("2026-10-03"), time.Time{}, "(unattributed)=15000000000000", 15 * usd},
+		{"before the plan", CostByIssue, month("2026-08"), month("2026-09"), "", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := s.CostReport(t.Context(), CostFilter{By: tc.by, Since: tc.since, Until: tc.until, Account: "internal"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := amortizedText(r.Groups, ids); got != tc.want {
+				t.Errorf("CostReport(%s, %s to %s) amortized = %q, want %q", tc.by, tc.since, tc.until, got, tc.want)
+			}
+			if r.Total.Amortized == nil || r.Total.Amortized.Cmp(big.NewInt(tc.total)) != 0 {
+				t.Errorf("CostReport(%s, %s to %s).Total.Amortized = %v, want %d", tc.by, tc.since, tc.until, r.Total.Amortized, tc.total)
+			}
+		})
+	}
+
+	// The groups past the limit carry their amortized cost into (other).
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: month("2026-09"), Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := amortizedText(r.Groups, ids), "(other)=25000000000000 (unattributed)=35000000000000"; got != want {
+		t.Errorf("CostReport(by issue, limit 1) amortized = %q, want %q", got, want)
+	}
+}
+
+// A plan month whose principals reported no tokens still cost its fee:
+// it goes to (unattributed), prorated by the share of the month the
+// window covers. A report on a server with no plans has no amortized
+// cost at all.
+func TestCostReportAmortizedIdle(t *testing.T) {
+	s, _ := clockStore(t) // 2026-10-07 12:00
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: month("2026-10")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Total.Amortized != nil {
+		t.Errorf("CostReport with no plans: Total.Amortized = %s, want none", r.Total.Amortized)
+	}
+	mustSetPlan(t, s, NewPlan{Name: "idle", From: month("2026-10"), Fee: 31_000_000, Seats: 1, Principals: []string{"dave"}})
+	r, err = s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: day("2026-10-01"), Until: day("2026-10-02")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := amortizedText(r.Groups, nil), "(unattributed)=1000000000000"; got != want {
+		t.Errorf("CostReport(1 Oct) of an idle 31 USD plan = %q, want %q (a 31st of it)", got, want)
 	}
 }

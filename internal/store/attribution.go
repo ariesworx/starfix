@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 	"time"
@@ -1085,4 +1086,41 @@ func (q *digestQuery) labeled(ctx context.Context, ids []IssueID) (map[IssueID]b
 		}
 	}
 	return out, nil
+}
+
+// splitExact divides total in proportion to weights, which are not
+// negative, by the largest-remainder method in exact integers: each part
+// is total × weight ÷ the weights' sum, rounded down, and what that
+// leaves goes one each to the parts with the largest remainders, ties to
+// the earlier part. The parts sum to total; with no weight at all, every
+// part is zero.
+func splitExact(total *big.Int, weights []int64) []*big.Int {
+	sum := new(big.Int)
+	for _, w := range weights {
+		sum.Add(sum, big.NewInt(w))
+	}
+	parts := make([]*big.Int, len(weights))
+	rems := make([]*big.Int, len(weights))
+	left := new(big.Int).Set(total)
+	for i, w := range weights {
+		parts[i], rems[i] = new(big.Int), new(big.Int)
+		if sum.Sign() == 0 {
+			continue
+		}
+		parts[i].QuoRem(new(big.Int).Mul(total, big.NewInt(w)), sum, rems[i])
+		left.Sub(left, parts[i])
+	}
+	if sum.Sign() == 0 {
+		return parts
+	}
+	order := make([]int, len(weights))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return rems[b].Cmp(rems[a]) })
+	// Each remainder is under sum, so they leave fewer than len(weights).
+	for _, i := range order[:left.Int64()] {
+		parts[i].Add(parts[i], big.NewInt(1))
+	}
+	return parts
 }
