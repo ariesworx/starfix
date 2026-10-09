@@ -57,6 +57,9 @@ type IssueUsage struct {
 	// an ancestor sets one; AccountFrom is the issue that sets it.
 	Account     string
 	AccountFrom IssueID
+	// LoggedBy is the time people logged on the issue, by principal,
+	// most first; Logged is its sum.
+	LoggedBy []PersonHours
 }
 
 // UsageSummary totals time and tokens.
@@ -74,6 +77,8 @@ type UsageSummary struct {
 	// Cost is the tokens' list-price equivalent, or nil when the server
 	// has no prices at all, so there is no cost to give.
 	Cost *Cost
+	// Logged is the time people logged by hand (sfx log).
+	Logged time.Duration
 }
 
 // ModelUsage is one model's tokens. A count is nil when no record that
@@ -126,6 +131,9 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 	defer end()
 	var out IssueUsage
 	if out.Account, out.AccountFrom, err = resolveAccount(ctx, q, id); err != nil {
+		return IssueUsage{}, err
+	}
+	if out.Logged, out.LoggedBy, err = issueHours(ctx, q, id); err != nil {
 		return IssueUsage{}, err
 	}
 	now := s.now()
@@ -873,11 +881,13 @@ func closeRows(rows *sql.Rows) error {
 }
 
 // DigestUsage totals a digest window's time and tokens. Held is the time
-// issues were held within the window; Models are the tokens of the
-// records whose time is in it. Unattributed is the part of Models no
+// issues were held within the window; Logged the hours logged for the
+// days it overlaps; Models are the tokens of the records whose time is
+// in it. Unattributed is the part of Models no
 // issue was held for. With the digest's By, only that principal's holds
 // and records count; with its Label, only holds of and tokens attributed
-// to issues with the label, so nothing is unattributed.
+// to issues with the label, so nothing is unattributed. By and Label
+// filter the hours by who logged them and by their issue.
 type DigestUsage struct {
 	UsageSummary
 	Unattributed []ModelUsage
@@ -972,6 +982,37 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 		u.Split = u.Split || d.positive() > len(in)
 	}
 	u.Models, u.Unattributed, u.Cost = total.models(), loose.models(), book.costOf(cost)
+	return q.hours(ctx, u)
+}
+
+// hours fills in u.Logged: the entries of the days the window overlaps,
+// up to today, filtered by the digest's By and Label.
+func (q *digestQuery) hours(ctx context.Context, u *DigestUsage) error {
+	where, args := `on_date >= ? AND on_date <= ?`, []any{startDay(q.f.Since), startDay(q.now)}
+	if q.f.By != "" {
+		where, args = where+` AND principal = ?`, append(args, q.f.By)
+	}
+	hs, err := windowHours(ctx, q.tx, where, args...)
+	if err != nil {
+		return err
+	}
+	counts := func(IssueID) bool { return true }
+	if q.f.Label != "" {
+		ids := make([]IssueID, len(hs))
+		for i, h := range hs {
+			ids[i] = h.issue
+		}
+		labeled, err := q.labeled(ctx, ids)
+		if err != nil {
+			return err
+		}
+		counts = func(id IssueID) bool { return labeled[id] }
+	}
+	for _, h := range hs {
+		if counts(h.issue) {
+			u.Logged += h.d
+		}
+	}
 	return nil
 }
 

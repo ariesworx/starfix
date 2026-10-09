@@ -247,3 +247,58 @@ func TestHoursList(t *testing.T) {
 		}
 	}
 }
+
+// show's usage carries the issue's logged hours, in total and by who
+// logged them, most first; another issue's hours are not its.
+func TestIssueUsageHours(t *testing.T) {
+	s, _ := clockStore(t)
+	is, other := mustCreate(t, s, NewIssue{Title: "work"}), mustCreate(t, s, NewIssue{Title: "other"})
+	mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: time.Hour})
+	mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: 30 * time.Minute, On: day("2026-01-01")})
+	mustLogHours(t, s, bob, NewHours{Issue: is.ID, Duration: 2 * time.Hour})
+	mustLogHours(t, s, bob, NewHours{Issue: other.ID, Duration: 5 * time.Hour})
+	u := mustUsage(t, s, is.ID)
+	var by []string
+	for _, p := range u.LoggedBy {
+		by = append(by, fmt.Sprintf("%s %s", p.Principal, p.Duration))
+	}
+	if u.Logged != 3*time.Hour+30*time.Minute || strings.Join(by, ", ") != "bob 2h0m0s, alice 1h30m0s" {
+		t.Errorf("IssueUsage(%s) logged %s by %v, want 3h30m0s by bob 2h0m0s, alice 1h30m0s", is.ID, u.Logged, by)
+	}
+	if u := mustUsage(t, s, mustCreate(t, s, NewIssue{Title: "none"}).ID); u.Logged != 0 || len(u.LoggedBy) != 0 {
+		t.Errorf("IssueUsage(an issue with no hours) logged %s by %v, want none", u.Logged, u.LoggedBy)
+	}
+}
+
+// A digest adds up the hours of the days its window overlaps, so a
+// window from mid-morning counts that whole day, filtered as its other
+// sections are: by who logged them, or by the issue's label.
+func TestDigestUsageHours(t *testing.T) {
+	s, _ := clockStore(t) // 2026-10-07 12:00 UTC
+	web, plain := mustCreate(t, s, NewIssue{Title: "web", Labels: []string{"web"}}), mustCreate(t, s, NewIssue{Title: "plain"})
+	mustLogHours(t, s, alice, NewHours{Issue: web.ID, Duration: time.Hour})                              // today
+	mustLogHours(t, s, alice, NewHours{Issue: plain.ID, Duration: 2 * time.Hour, On: day("2026-10-06")}) // yesterday
+	mustLogHours(t, s, bob, NewHours{Issue: web.ID, Duration: 4 * time.Hour, On: day("2026-10-05")})     // two days back
+	tests := []struct {
+		name string
+		f    DigestFilter
+		want time.Duration
+	}{
+		{"24h reaches into yesterday", DigestFilter{Window: 24 * time.Hour}, 3 * time.Hour},
+		{"from midnight today", DigestFilter{Since: day("2026-10-07")}, time.Hour},
+		{"three days", DigestFilter{Window: 72 * time.Hour}, 7 * time.Hour},
+		{"by bob", DigestFilter{Window: 72 * time.Hour, By: "bob"}, 4 * time.Hour},
+		{"label web", DigestFilter{Window: 72 * time.Hour, Label: "web"}, 5 * time.Hour},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := s.Digest(t.Context(), tc.f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.Usage.Logged != tc.want {
+				t.Errorf("Digest(%+v).Usage.Logged = %s, want %s", tc.f, d.Usage.Logged, tc.want)
+			}
+		})
+	}
+}

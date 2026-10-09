@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -247,6 +249,63 @@ func scanHours(ctx context.Context, q querier, where string, args []any, limit i
 		}
 		e.On, e.At, e.Duration = e.On.UTC(), e.At.UTC(), time.Duration(secs)*time.Second
 		out = append(out, e)
+		return nil
+	})
+	return out, err
+}
+
+// PersonHours is the time one principal logged.
+type PersonHours struct {
+	Principal string
+	Duration  time.Duration
+}
+
+// issueHours is the time logged on id, in total and by principal, most
+// first and then by name.
+func issueHours(ctx context.Context, q querier, id IssueID) (time.Duration, []PersonHours, error) {
+	var total time.Duration
+	var out []PersonHours
+	err := scanAll(ctx, q, "issue hours", `SELECT principal, SUM(seconds) FROM hours WHERE issue_id = ? GROUP BY principal`,
+		[]any{string(id)}, func(rs *sql.Rows) error {
+			var p PersonHours
+			var secs int64
+			if err := rs.Scan(&p.Principal, &secs); err != nil {
+				return err
+			}
+			p.Duration = time.Duration(secs) * time.Second
+			total += p.Duration
+			out = append(out, p)
+			return nil
+		})
+	slices.SortFunc(out, func(a, b PersonHours) int {
+		return cmp.Or(cmp.Compare(b.Duration, a.Duration), strings.Compare(a.Principal, b.Principal))
+	})
+	return total, out, err
+}
+
+// hoursSum is the time one principal logged on one issue.
+type hoursSum struct {
+	issue     IssueID
+	principal string
+	d         time.Duration
+}
+
+// startDay is the first day a window starting at since overlaps.
+func startDay(since time.Time) time.Time { return since.UTC().Truncate(24 * time.Hour) }
+
+// windowHours sums the entries matching where, a constant clause with
+// placeholders for args, by issue and principal.
+func windowHours(ctx context.Context, q querier, where string, args ...any) ([]hoursSum, error) {
+	var out []hoursSum
+	query := `SELECT issue_id, principal, SUM(seconds) FROM hours WHERE ` + where + ` GROUP BY issue_id, principal` //nolint:gosec // constant terms; values are arguments
+	err := scanAll(ctx, q, "hours", query, args, func(rs *sql.Rows) error {
+		var h hoursSum
+		var secs int64
+		if err := rs.Scan(&h.issue, &h.principal, &secs); err != nil {
+			return err
+		}
+		h.d = time.Duration(secs) * time.Second
+		out = append(out, h)
 		return nil
 	})
 	return out, err
