@@ -201,11 +201,12 @@ func (s Status) apply(m *Model) { m.status = s }
 
 // Relevant reports whether an event with op may change what the board
 // lists, so it should read the lists again. Comments, labels, acceptance
-// items and an admin's override note do not; any other op, including one
-// this board does not know, may.
+// items, an admin's override note and logged hours do not; any other op,
+// including one this board does not know, may.
 func Relevant(op string) bool {
 	switch op {
-	case "comment.add", "label.add", "label.remove", "acceptance.tick", "acceptance.untick", "acceptance.waive", "admin.override":
+	case "comment.add", "label.add", "label.remove", "acceptance.tick", "acceptance.untick", "acceptance.waive", "admin.override",
+		"hours.log", "hours.delete":
 		return false
 	}
 	return true

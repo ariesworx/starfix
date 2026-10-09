@@ -39,6 +39,7 @@ func TestRelevant(t *testing.T) {
 		"some.future.op": true,
 		"comment.add":    false, "label.add": false, "label.remove": false, "acceptance.tick": false,
 		"acceptance.untick": false, "acceptance.waive": false, "admin.override": false,
+		"hours.log": false, "hours.delete": false,
 	} {
 		if got := Relevant(op); got != want {
 			t.Errorf("Relevant(%q) = %v, want %v", op, got, want)

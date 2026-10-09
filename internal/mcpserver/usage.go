@@ -19,13 +19,14 @@ const (
 	usageModelLen = 64
 )
 
-// issueUsageLine is show's usage in one line: "held 1h; cost $8.35; opus
-// 950 in, 12k out; split by time". An issue never held, with no tokens, has none.
+// issueUsageLine is show's usage in one line: "held 1h; logged 1.5h;
+// cost $8.35; opus 950 in, 12k out; split by time". An issue never held,
+// with no tokens and no hours logged, has none.
 func issueUsageLine(u proto.IssueUsage) string {
-	if u.HeldSeconds == 0 && len(u.Models) == 0 {
+	parts := heldAndLogged(u.HeldSeconds, len(u.Models) > 0, u.LoggedSeconds)
+	if len(parts) == 0 {
 		return ""
 	}
-	parts := []string{held(u.HeldSeconds)}
 	if u.CostUSD != "" {
 		parts = append(parts, "cost "+costText(u.CostUSD, u.Unpriced))
 	}
@@ -44,7 +45,7 @@ func issueUsageLine(u proto.IssueUsage) string {
 // digestUsageLine is digest's usage in one line, with the tokens no
 // issue was held for.
 func digestUsageLine(u proto.DigestUsage) string {
-	parts := []string{held(u.HeldSeconds)}
+	parts := heldAndLogged(u.HeldSeconds, len(u.Models) > 0, u.LoggedSeconds)
 	if u.CostUSD != "" {
 		parts = append(parts, "cost "+costText(u.CostUSD, u.Unpriced))
 	}
@@ -61,6 +62,19 @@ func digestUsageLine(u proto.DigestUsage) string {
 }
 
 func held(s int64) string { return "held " + proto.Span(time.Duration(s)*time.Second) }
+
+// heldAndLogged starts a usage line: the time held, when anything was
+// held or tokens reported, then the hours people logged, if any.
+func heldAndLogged(heldSeconds int64, tokens bool, logged int64) []string {
+	var parts []string
+	if heldSeconds > 0 || tokens {
+		parts = append(parts, held(heldSeconds))
+	}
+	if logged > 0 {
+		parts = append(parts, "logged "+proto.Hours(logged))
+	}
+	return parts
+}
 
 // modelsLine names the usageModels largest models and their known
 // counts, and how many more there are.

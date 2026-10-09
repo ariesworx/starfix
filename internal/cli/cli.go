@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/ariesworx/starfix/internal/client"
 	"github.com/ariesworx/starfix/internal/mcpserver"
@@ -61,6 +62,9 @@ type Env struct {
 	// Upgrader overrides what `upgrade` uses. Nil uses GitHub releases,
 	// the built-in release keys and this executable.
 	Upgrader *Upgrader
+	// Now is the time in the user's time zone, whose date `log` sends as
+	// the day worked. Default time.Now.
+	Now func() time.Time
 }
 
 // usageError is a mistake on the command line. usage is the usage line
@@ -111,7 +115,8 @@ func init() {
 		{"away", "away DURATION", "extend all your claims, e.g. before going offline (1m to 7d)", cmdAway},
 		{"digest", "digest [--since 24h|7d|DATE|TIME] [--by PRINCIPAL] [--label L]", "summarize what closed, started, stalled, is blocked and was handed off", cmdDigest},
 		{"who", "who [--since DURATION] [-n N]", "list the agents at work and the issues each holds (seen in the last 5m)", cmdWho},
-		{"cost", "cost --since 7d|DATE|TIME [--until DATE|TIME] [--by account|issue|epic|person|model] [-n N]", "report the list-price cost of tokens by account, issue, epic, person or model", cmdCost},
+		{"cost", "cost --since 7d|DATE|TIME [--until DATE|TIME] [--by account|issue|epic|person|model] [-n N]", "report the list-price and amortized cost of tokens, and the hours logged, by account, issue, epic, person or model", cmdCost},
+		{"log", "log DURATION ID [--on DATE] [--note TEXT] | log --undo ENTRY | log [--issue ID] [--by PRINCIPAL] [-n N]", "log your hours on an issue (1.5h, 90m), undo an entry, or list entries", cmdLog},
 		{"remember", "remember KEY TEXT...|- [--scope S] [--tag T]... [--issue ID] [--rev N] [--pin]", "keep a memory for later sessions; --rev replaces one", cmdRemember},
 		{"recall", "recall [TEXT...] [--key K] [--tag T] [--scope S] [-n N]", "search memories by text, key or tag, pinned then newest first", cmdRecall},
 		{"memories", "memories [--scope S] [-n N]", "list the memories you can see, pinned then newest first", cmdMemories},
@@ -122,7 +127,7 @@ func init() {
 		{"usage", "usage --hook[=AGENT]", "send the session's token counts from the agent's transcript (run by its hooks)", cmdUsage},
 		{"mcp", "mcp", "serve the MCP tools for an agent on stdin and stdout", cmdMCP},
 		{"setup", "setup AGENT|--all [--write|--check|--remove] [--global] [--command PATH]", "set agents up: MCP config, instruction pointer, session hook", cmdSetup},
-		{"admin", "admin prices [set MODEL --from DATE|TIME --input USD --output USD --cache-write USD --cache-write-1h USD --cache-read USD]", "list model prices; set one (admins only), in US dollars per million tokens", cmdAdmin},
+		{"admin", "admin prices [set MODEL --from DATE|TIME --input USD --output USD --cache-write USD --cache-write-1h USD --cache-read USD] | admin plans [set NAME --from YYYY-MM --fee USD --seats N [--principal P]...]", "list model prices and subscription plans; set one (admins only)", cmdAdmin},
 		{"upgrade", "upgrade [--check] [--rollback]", "replace sfx with the latest verified release; --rollback undoes it", cmdUpgrade},
 		{"version", "version", "print the starfix version", cmdVersion},
 	}
@@ -228,6 +233,9 @@ func Run(ctx context.Context, args []string, env Env) int {
 	}
 	if env.UserCacheDir == nil {
 		env.UserCacheDir = os.UserCacheDir
+	}
+	if env.Now == nil {
+		env.Now = time.Now
 	}
 	if env.GOOS == "" {
 		env.GOOS = runtime.GOOS

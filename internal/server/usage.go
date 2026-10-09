@@ -35,16 +35,35 @@ func (s *Server) wireIssueUsage(u store.IssueUsage) *proto.IssueUsage {
 		out.Account = s.cfg.Account
 	}
 	out.CostUSD, out.Unpriced = wireCost(u.UsageSummary)
+	out.LoggedSeconds, out.Logged = seconds(u.Logged), wirePeople(u.LoggedBy)
+	return out
+}
+
+// wirePeople converts the time people logged, most first. Past
+// proto.MaxUsageModels, the rest are summed into one proto.OtherModels
+// entry, last.
+func wirePeople(ps []store.PersonHours) []proto.PersonHours {
+	var out []proto.PersonHours
+	for i, p := range ps {
+		if i == proto.MaxUsageModels {
+			out = append(out, proto.PersonHours{Principal: proto.OtherModels})
+		}
+		if i >= proto.MaxUsageModels {
+			out[len(out)-1].Seconds += seconds(p.Duration)
+			continue
+		}
+		out = append(out, proto.PersonHours{Principal: p.Principal, Seconds: seconds(p.Duration)})
+	}
 	return out
 }
 
 // wireDigestUsage is digest's usage, or nil when the window has none.
 func wireDigestUsage(u store.DigestUsage) *proto.DigestUsage {
-	if u.Held == 0 && len(u.Models) == 0 {
+	if u.Held == 0 && len(u.Models) == 0 && u.Logged == 0 {
 		return nil
 	}
 	out := &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed),
-		Split: u.Split}
+		Split: u.Split, LoggedSeconds: seconds(u.Logged)}
 	out.CostUSD, out.Unpriced = wireCost(u.UsageSummary)
 	return out
 }

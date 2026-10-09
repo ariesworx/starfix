@@ -39,7 +39,7 @@ type Cost struct {
 func (r *Cost) mark() { r.set(len(r.Groups) > 0) }
 
 func (s *Server) registerCost() {
-	add(s, tool{name: "cost", desc: "Token cost at list price.", ann: readOnly, retry: true,
+	add(s, tool{name: "cost", desc: "Token cost, plan share and hours.", ann: readOnly, retry: true,
 		enums: enums{"by": costBys}},
 		func(ctx context.Context, c Conn, in CostIn) (Cost, error) { return cost(ctx, c, in) })
 }
@@ -54,7 +54,7 @@ func cost(ctx context.Context, c Conn, in CostIn) (Cost, error) {
 		return Cost{}, err
 	}
 	out := Cost{By: r.By, Since: stamp(r.Since), Until: stamp(r.Until), Groups: []string{}, Truncated: r.Truncated,
-		Total: costText(r.Total.CostUSD, r.Total.Unpriced) + ", " + proto.TokenCount(tokenSum(r.Total.Tokens)) + " tokens"}
+		Total: figures(r.Total)}
 	for _, m := range r.Unpriced[:min(len(r.Unpriced), usageModels)] {
 		name, _ := cut(m, usageModelLen)
 		out.Unpriced = append(out.Unpriced, name)
@@ -77,17 +77,30 @@ func cost(ctx context.Context, c Conn, in CostIn) (Cost, error) {
 	return out, nil
 }
 
-// fold sums groups into one (other) group: their exact cost, the counts
-// any of them knows, and whether any was unpriced or split.
+// fold sums groups into one (other) group: their exact cost and
+// amortized cost, the counts any of them knows, their logged time, and
+// whether any was unpriced or split.
 func fold(gs []proto.CostGroup) (proto.CostGroup, error) {
 	out := proto.CostGroup{Key: proto.OtherModels}
 	pico := new(big.Int)
+	var amortized *big.Int
 	for _, g := range gs {
 		n, err := proto.ParseUSD(g.CostUSD)
 		if err != nil {
 			return out, fmt.Errorf("cost of %s: %w", g.Key, err)
 		}
 		pico.Add(pico, n)
+		if g.AmortizedUSD != "" {
+			a, err := proto.ParseUSD(g.AmortizedUSD)
+			if err != nil {
+				return out, fmt.Errorf("amortized cost of %s: %w", g.Key, err)
+			}
+			if amortized == nil {
+				amortized = new(big.Int)
+			}
+			amortized.Add(amortized, a)
+		}
+		out.LoggedSeconds += g.LoggedSeconds
 		for _, c := range []struct{ in, out **int64 }{
 			{&g.Input, &out.Input}, {&g.Output, &out.Output}, {&g.CacheWrite, &out.CacheWrite},
 			{&g.CacheWrite1h, &out.CacheWrite1h}, {&g.CacheRead, &out.CacheRead},
@@ -104,21 +117,39 @@ func fold(gs []proto.CostGroup) (proto.CostGroup, error) {
 		out.Split = out.Split || g.Split
 	}
 	out.CostUSD = proto.USD(pico)
+	if amortized != nil {
+		out.AmortizedUSD = proto.USD(amortized)
+	}
 	return out, nil
 }
 
-// groupLine is one group: "KEY TITLE: $8.35, 4.3M tokens, split".
+// groupLine is one group: "KEY TITLE: $8.35, amortized $20.00, 4.3M
+// tokens, 1.5h logged, split".
 func groupLine(g proto.CostGroup) string {
 	head := g.Key
 	if g.Title != "" {
 		title, _ := cut(strings.Join(strings.Fields(g.Title), " "), usageModelLen)
 		head += " " + title
 	}
-	line := head + ": " + costText(g.CostUSD, g.Unpriced) + ", " + proto.TokenCount(tokenSum(g.Tokens)) + " tokens"
+	line := head + ": " + figures(g)
 	if g.Split {
 		line += ", split"
 	}
 	return line
+}
+
+// figures are a group's cost, amortized cost when the server has plans,
+// tokens and logged hours, if any.
+func figures(g proto.CostGroup) string {
+	s := costText(g.CostUSD, g.Unpriced)
+	if g.AmortizedUSD != "" {
+		s += ", amortized " + proto.Dollars(g.AmortizedUSD)
+	}
+	s += ", " + proto.TokenCount(tokenSum(g.Tokens)) + " tokens"
+	if g.LoggedSeconds > 0 {
+		s += ", " + proto.Hours(g.LoggedSeconds) + " logged"
+	}
+	return s
 }
 
 // costText is a cost for an agent: "$8.35", "$8.35, some unpriced", or

@@ -22,6 +22,12 @@ func command(op string) string {
 		return "admin prices set"
 	case proto.OpPrices:
 		return "admin prices"
+	case proto.OpHoursLog, proto.OpHoursDelete, proto.OpHours:
+		return "log"
+	case proto.OpPlanSet:
+		return "admin plans set"
+	case proto.OpPlans:
+		return "admin plans"
 	}
 	return strings.ReplaceAll(op, ".", " ")
 }
@@ -38,13 +44,25 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var state *store.StateError
 	var batch *store.UsageBatchError
 	var priceCap *store.PriceLimitError
+	var planCap *store.PlanLimitError
+	var hoursCap *store.HoursLimitError
+	var dayFull *store.HoursDayError
 	switch {
+	case errors.Is(err, store.ErrNotFound) && op == proto.OpHoursDelete:
+		return proto.Errf(proto.CodeNotFound, "find the entry id with `sfx log --issue ID` or `sfx log --by PRINCIPAL`",
+			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
+
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
 			strings.Replace(text, ": "+store.ErrNotFound.Error(), " not found", 1))
 
 	case errors.As(err, &forbidden):
 		return forbiddenErr(forbidden)
+
+	case errors.As(err, &dayFull):
+		left := int64((store.MaxHoursEntry - dayFull.Logged) / time.Second)
+		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("you can log at most %s more on %s; undo an entry with `sfx log --undo ID` to change it",
+			proto.Hours(left), dayFull.On.Format(time.DateOnly)), text)
 
 	case errors.As(err, &stale):
 		msg := fmt.Sprintf("your claim on %s (epoch %d) was lost; it is now epoch %d", stale.ID, stale.Epoch, stale.Current)
@@ -90,6 +108,17 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	case errors.As(err, &priceCap):
 		return proto.Errf(proto.CodeInvalid,
 			"replace an existing price (the same model and --from) instead, or ask the server admin to raise prices under limits: in starfixd's config",
+			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
+
+	case errors.As(err, &planCap):
+		return proto.Errf(proto.CodeInvalid,
+			"replace an existing plan row (the same name and --from) instead, or ask the server admin to raise plans under limits: in starfixd's config",
+			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
+
+	case errors.As(err, &hoursCap):
+		return proto.Errf(proto.CodeInvalid,
+			"combine entries: undo some with `sfx log --undo ENTRY` (`sfx log --by "+hoursCap.Principal+
+				"` lists them) and log their sum, or ask the server admin to raise hours_per_day under limits: in starfixd's config",
 			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
 
 	case errors.Is(err, store.ErrInvalid) && op == proto.OpUsage:

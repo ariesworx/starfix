@@ -26,18 +26,24 @@ func printIssueUsage(w io.Writer, own string, u *proto.IssueUsage) {
 		p(" (default)")
 	}
 	p("\n")
-	if u.HeldSeconds == 0 && len(u.Models) == 0 {
-		return
+	if u.HeldSeconds != 0 || len(u.Models) != 0 {
+		p("held %s", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
+		if u.Split {
+			p("; some tokens split by time with other work")
+		}
+		if u.Capped {
+			p("; tokens partial")
+		}
+		p("\n")
+		printCostLine(w, u.CostUSD, u.Unpriced)
 	}
-	p("held %s", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
-	if u.Split {
-		p("; some tokens split by time with other work")
+	if u.LoggedSeconds > 0 {
+		who := make([]string, len(u.Logged))
+		for i, l := range u.Logged {
+			who[i] = esc(l.Principal) + " " + proto.Hours(l.Seconds)
+		}
+		p("logged %s: %s\n", proto.Hours(u.LoggedSeconds), strings.Join(who, ", "))
 	}
-	if u.Capped {
-		p("; tokens partial")
-	}
-	p("\n")
-	printCostLine(w, u.CostUSD, u.Unpriced)
 	printModels(w, "tokens", u.Models)
 }
 
@@ -47,12 +53,17 @@ func printDigestUsage(w io.Writer, u *proto.DigestUsage) {
 	if u == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(w, "held %s", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
-	if u.Split {
-		_, _ = fmt.Fprint(w, "; some tokens split by time")
+	if u.HeldSeconds != 0 || len(u.Models) != 0 {
+		_, _ = fmt.Fprintf(w, "held %s", proto.Span(time.Duration(u.HeldSeconds)*time.Second))
+		if u.Split {
+			_, _ = fmt.Fprint(w, "; some tokens split by time")
+		}
+		_, _ = fmt.Fprintln(w)
+		printCostLine(w, u.CostUSD, u.Unpriced)
 	}
-	_, _ = fmt.Fprintln(w)
-	printCostLine(w, u.CostUSD, u.Unpriced)
+	if u.LoggedSeconds > 0 {
+		_, _ = fmt.Fprintf(w, "logged %s\n", proto.Hours(u.LoggedSeconds))
+	}
 	printModels(w, "tokens", u.Models)
 	printModels(w, "unattributed", u.Unattributed)
 }

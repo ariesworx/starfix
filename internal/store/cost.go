@@ -191,21 +191,28 @@ type CostFilter struct {
 
 // CostGroup is one group of a cost report: its tokens, summed over
 // models, and their cost. Key is the account, issue id, epic id,
-// principal or model, or one of proto's CostUnattributed, CostNoEpic and
-// OtherModels; Title is the issue's or epic's. Split is set when part of
-// the group's tokens came from records shared by time with another group,
-// so that part is an estimate.
+// principal or model, or one of proto's CostUnattributed, CostNoEpic,
+// CostHuman and OtherModels; Title is the issue's or epic's. Split is set
+// when part of the group's tokens came from records shared by time with
+// another group, so that part is an estimate. Logged is the time people
+// logged on the days the window overlaps. Amortized is the group's part
+// of the plans' monthly totals, in picodollars, or nil when the server
+// has no plans (amortize.go).
 type CostGroup struct {
 	Key   string
 	Title string
 	Tokens
-	Cost  Cost
-	Split bool
+	Cost      Cost
+	Split     bool
+	Logged    time.Duration
+	Amortized *big.Int
 }
 
 // CostReport is the list-price equivalent of a window's tokens. Groups
-// are by cost, largest first, then by tokens and key, and the groups
-// past the limit are summed into one more, last. Total covers every record read.
+// are by cost, largest first, then by amortized cost, tokens, hours
+// logged and key, and the groups past the limit are summed into one
+// more, last. Total covers every record read and every hour logged on a
+// day the window overlaps.
 // Unpriced names the models with tokens and no price in effect at their
 // time. Capped is set when the window held more records than a report
 // reads, so every figure is a lower bound.
@@ -222,6 +229,12 @@ type costAcc struct {
 	tokens modelSum
 	cost   costSum
 	split  bool
+	logged time.Duration
+	// planTokens are the group's tokens in each plan month, by index
+	// into the amortizer's months, and amortized its part of their
+	// totals, nil until split.
+	planTokens map[int]int64
+	amortized  *big.Int
 }
 
 func (a *costAcc) add(book priceBook, model string, at time.Time, t Tokens) {
@@ -233,10 +246,26 @@ func (a *costAcc) merge(b *costAcc) {
 	a.tokens.add(b.tokens.tokens())
 	a.cost.merge(b.cost)
 	a.split = a.split || b.split
+	a.logged += b.logged
+	if b.amortized != nil {
+		a.addAmortized(b.amortized)
+	}
+}
+
+// addAmortized adds n picodollars to the group's amortized cost.
+func (a *costAcc) addAmortized(n *big.Int) {
+	if a.amortized == nil {
+		a.amortized = new(big.Int)
+	}
+	a.amortized.Add(a.amortized, n)
 }
 
 func (a *costAcc) group(key, title string) CostGroup {
-	return CostGroup{Key: key, Title: title, Tokens: a.tokens.tokens(), Cost: a.cost.cost(), Split: a.split}
+	g := CostGroup{Key: key, Title: title, Tokens: a.tokens.tokens(), Cost: a.cost.cost(), Split: a.split, Logged: a.logged}
+	if a.amortized != nil {
+		g.Amortized = new(big.Int).Set(a.amortized)
+	}
+	return g
 }
 
 // CostReport prices the tokens reported in f's window, grouped as f
@@ -283,25 +312,37 @@ func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error
 		return CostReport{}, err
 	}
 	book := newPriceBook(prices)
+	hours, err := windowHours(ctx, q, `on_date >= ? AND on_date < ?`, startDay(since), hoursEnd(until, now))
+	if err != nil {
+		return CostReport{}, err
+	}
+	z, err := newAmortizer(ctx, q, since, until, now)
+	if err != nil {
+		return CostReport{}, err
+	}
 	out := CostReport{Since: since, Until: until, Capped: ur.capped}
 
 	var total costAcc
 	for _, r := range ur.rows {
 		total.add(book, r.model, r.to, r.Tokens)
 	}
+	for _, h := range hours {
+		total.logged += h.d
+	}
 	out.Total = total.group("", "")
 	out.Unpriced = slices.Sorted(maps.Keys(total.cost.unpriced))
 
-	groups, titles, err := costGroups(ctx, q, f, ur.rows, book, now)
+	groups, titles, err := costGroups(ctx, q, f, ur.rows, hours, book, z, now)
 	if err != nil {
 		return CostReport{}, err
 	}
+	out.Total.Amortized = z.total(groups)
 	for k, a := range groups {
 		out.Groups = append(out.Groups, a.group(k, titles[k]))
 	}
 	slices.SortFunc(out.Groups, func(a, b CostGroup) int {
-		return cmp.Or(b.Cost.Picodollars.Cmp(a.Cost.Picodollars), cmp.Compare(total64(b.Tokens), total64(a.Tokens)),
-			strings.Compare(a.Key, b.Key))
+		return cmp.Or(b.Cost.Picodollars.Cmp(a.Cost.Picodollars), cmpPicos(b.Amortized, a.Amortized),
+			cmp.Compare(total64(b.Tokens), total64(a.Tokens)), cmp.Compare(b.Logged, a.Logged), strings.Compare(a.Key, b.Key))
 	})
 	if len(out.Groups) > limit {
 		var other costAcc
@@ -313,9 +354,10 @@ func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error
 	return out, nil
 }
 
-// costGroups accumulates rows by f.By, with the titles of issue and epic
-// groups.
-func costGroups(ctx context.Context, q querier, f CostFilter, rows []usageRow, book priceBook, now time.Time) (map[string]*costAcc, map[string]string, error) {
+// costGroups accumulates rows and hours by f.By, with the titles of
+// issue and epic groups, and splits z's plan months across the groups.
+func costGroups(ctx context.Context, q querier, f CostFilter, rows []usageRow, hours []hoursSum, book priceBook,
+	z *amortizer, now time.Time) (map[string]*costAcc, map[string]string, error) {
 	groups := map[string]*costAcc{}
 	acc := func(key string) *costAcc {
 		a := groups[key]
@@ -331,8 +373,18 @@ func costGroups(ctx context.Context, q querier, f CostFilter, rows []usageRow, b
 			if f.By == CostByModel {
 				key = r.model
 			}
-			acc(key).add(book, r.model, r.to, r.Tokens)
+			a := acc(key)
+			a.add(book, r.model, r.to, r.Tokens)
+			z.note(a, r, r.Tokens)
 		}
+		for _, h := range hours {
+			key := h.principal
+			if f.By == CostByModel {
+				key = proto.CostHuman
+			}
+			acc(key).logged += h.d
+		}
+		z.split(groups, acc)
 		return groups, nil, nil
 	}
 	holds, err := sessionHolds(ctx, q, rows, now)
@@ -353,6 +405,9 @@ func costGroups(ctx context.Context, q querier, f CostFilter, rows []usageRow, b
 				seen[id] = true
 			}
 		}
+	}
+	for _, h := range hours {
+		seen[h.issue] = true
 	}
 	chains, err := loadChains(ctx, q, slices.Sorted(maps.Keys(seen)))
 	if err != nil {
@@ -383,11 +438,16 @@ func costGroups(ctx context.Context, q querier, f CostFilter, rows []usageRow, b
 			buckets[proto.CostUnattributed] = append(buckets[proto.CostUnattributed], un)
 		}
 		for k, b := range buckets {
-			a := acc(k)
-			a.add(book, r.model, r.to, d.share(r.Tokens, b...))
+			a, part := acc(k), d.share(r.Tokens, b...)
+			a.add(book, r.model, r.to, part)
+			z.note(a, r, part)
 			a.split = a.split || len(buckets) > 1
 		}
 	}
+	for _, h := range hours {
+		acc(keyOf(h.issue)).logged += h.d
+	}
+	z.split(groups, acc)
 	return groups, titles, nil
 }
 
@@ -407,6 +467,19 @@ func groupKey(f CostFilter, c chains, id IssueID, titles map[string]string) stri
 	}
 	titles[string(id)] = c[id].title
 	return string(id)
+}
+
+// cmpPicos compares two amounts, nil being none.
+func cmpPicos(a, b *big.Int) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return -b.Sign()
+	case b == nil:
+		return a.Sign()
+	}
+	return a.Cmp(b)
 }
 
 // total64 is the sum of the counts t knows, to rank groups.

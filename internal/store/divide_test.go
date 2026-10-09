@@ -2,6 +2,8 @@ package store
 
 import (
 	"fmt"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,5 +107,37 @@ func TestShareKeepsCacheWrite1hWithinCacheWrite(t *testing.T) {
 				t.Errorf("parts of %s sum to %d 1-hour writes, want %d", tokensText(ModelUsage{Tokens: tc.in}), cw1h, *tc.in.CacheWrite1h)
 			}
 		})
+	}
+}
+
+// splitExact divides an amount in proportion to whole weights, exactly:
+// the parts sum to it, and what floors leave goes to the largest
+// remainders, ties to the earlier part.
+func TestSplitExact(t *testing.T) {
+	huge, _ := new(big.Int).SetString("1000000000000000000000000000000", 10)
+	tests := []struct {
+		total   *big.Int
+		weights []int64
+		want    string
+	}{
+		{big.NewInt(100), []int64{1, 2, 3, 4}, "10 20 30 40"},
+		{big.NewInt(10), []int64{1, 1, 1}, "4 3 3"},
+		{big.NewInt(10), []int64{3, 3, 1}, "4 4 2"},
+		{big.NewInt(7), []int64{0, 1, 0}, "0 7 0"},
+		{big.NewInt(1), []int64{1, 1}, "1 0"},
+		{big.NewInt(0), []int64{5, 5}, "0 0"},
+		{big.NewInt(9), []int64{0, 0}, "0 0"},
+		{huge, []int64{3, 7}, "300000000000000000000000000000 700000000000000000000000000000"},
+		{big.NewInt(1_000_000_007), []int64{1_000_000_000_000, 999_999_999_999, 1}, "500000004 500000003 0"},
+	}
+	for _, tc := range tests {
+		parts := splitExact(tc.total, tc.weights)
+		var got []string
+		for _, p := range parts {
+			got = append(got, p.String())
+		}
+		if strings.Join(got, " ") != tc.want {
+			t.Errorf("splitExact(%s, %v) = %v, want %s", tc.total, tc.weights, got, tc.want)
+		}
 	}
 }
