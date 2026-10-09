@@ -420,7 +420,8 @@ func newMemoryID() string { return newCommentID() }
 // a [*MemoryLimitError], a Rev 0 on a key that exists or a stale Rev with
 // a [*MemoryConflictError], a Rev on a key that is not there, or a link to
 // an issue that is not, with ErrNotFound. With an IdempotencyKey, a
-// repeat returns the first result and writes nothing.
+// repeat returns the first result and writes nothing; a replace that
+// changed nothing records no key, and a repeat of it runs again.
 func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory, error) {
 	if err := in.normalize(s.opts.Limits); err != nil {
 		return Memory{}, err
@@ -453,6 +454,12 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Rev: in.Rev, Current: cur.Rev, By: cur.UpdatedBy}
 		default:
 			out, err = w.replaceMemory(ctx, cur, in)
+			if err == nil && out.Rev == cur.Rev {
+				// Nothing changed and no event carries the key, so a
+				// retry runs again rather than replaying.
+				w.idem = nil
+				return nil
+			}
 		}
 		if err != nil {
 			return err

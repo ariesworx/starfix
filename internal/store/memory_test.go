@@ -487,6 +487,15 @@ func TestRememberIdempotent(t *testing.T) {
 	if _, err := s.Remember(ctx, alice, NewMemory{Key: "k2", Body: "b", IdempotencyKey: "mcp-1"}); !errors.As(err, &ie) {
 		t.Errorf("the key reused for another remember = %v, want an IdemError", err)
 	}
+	// A keyed replace that changes nothing writes nothing, and succeeds.
+	same := NewMemory{Key: "k", Body: "b", Rev: first.Rev, IdempotencyKey: "mcp-3"}
+	for range 2 {
+		got, err := s.Remember(ctx, alice, same)
+		if err != nil || got.Rev != first.Rev || lastSeq(t, s) != seq {
+			t.Fatalf("Remember(%+v) of what is stored = rev %d, %v, %d new events; want rev %d and nothing written",
+				same, got.Rev, err, lastSeq(t, s)-seq, first.Rev)
+		}
+	}
 	gone, err := s.Forget(ctx, alice, ScopeProject, "k", 0, "mcp-2")
 	if err != nil {
 		t.Fatal(err)
