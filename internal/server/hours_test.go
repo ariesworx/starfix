@@ -77,8 +77,26 @@ func TestDispatchHours(t *testing.T) {
 			}
 		})
 	}
-	if got := mustCall[proto.HoursDeleteResult](t, s, alice, proto.OpHoursDelete, proto.HoursDeleteArgs{ID: mine.ID}); got.ID != mine.ID {
-		t.Errorf("hours.delete(own entry) = %+v, want %s", got, mine.ID)
+	undo := proto.HoursDeleteArgs{ID: mine.ID, Idem: "cli-undo"}
+	for range 2 { // the retry, with the same key, returns the entry the first undid
+		if got := mustCall[proto.HoursDeleteResult](t, s, alice, proto.OpHoursDelete, undo); got.ID != mine.ID {
+			t.Errorf("hours.delete(%+v) = %+v, want %s", undo, got, mine.ID)
+		}
+	}
+}
+
+// A retried log whose entry was since undone says so.
+func TestDispatchHoursLogRetriedAfterUndo(t *testing.T) {
+	s, _ := newServerClock(t, Limits{}, fixedNow)
+	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
+	in := proto.HoursLogArgs{ID: is.ID, Seconds: 3600, Idem: "cli-log"}
+	e := mustCall[proto.HoursLogResult](t, s, alice, proto.OpHoursLog, in)
+	if e.Undone {
+		t.Errorf("hours.log(%+v) = %+v, want it live", in, e)
+	}
+	mustCall[proto.HoursDeleteResult](t, s, alice, proto.OpHoursDelete, proto.HoursDeleteArgs{ID: e.ID})
+	if again := mustCall[proto.HoursLogResult](t, s, alice, proto.OpHoursLog, in); again.ID != e.ID || !again.Undone {
+		t.Errorf("hours.log(%+v) retried after its undo = %+v, want entry %s marked undone", in, again, e.ID)
 	}
 }
 

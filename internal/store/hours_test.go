@@ -162,6 +162,35 @@ func TestLogHoursPerDay(t *testing.T) {
 	mustLogHours(t, s, bob, NewHours{Issue: is.ID, Duration: 3 * time.Hour, On: day("2026-10-05")})
 }
 
+// A retried undo, with the same idempotency key, returns the entry it
+// undid rather than not found; and a retried log whose entry was since
+// undone says so.
+func TestHoursRetriedAfterUndo(t *testing.T) {
+	s, _ := clockStore(t)
+	ctx := t.Context()
+	is := mustCreate(t, s, NewIssue{Title: "work"})
+	logged := NewHours{Issue: is.ID, Duration: time.Hour, Idem: "cli-log"}
+	e := mustLogHours(t, s, alice, logged)
+	if _, err := s.DeleteHours(ctx, alice, e.ID, "cli-undo"); err != nil {
+		t.Fatal(err)
+	}
+	seq := lastSeq(t, s)
+	got, err := s.DeleteHours(ctx, alice, e.ID, "cli-undo")
+	if err != nil || got.ID != e.ID {
+		t.Errorf("DeleteHours(%s) retried = %+v, %v; want the entry it undid", e.ID, got, err)
+	}
+	if _, err := s.DeleteHours(ctx, alice, e.ID, "cli-other"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteHours(%s) anew after its undo = %v, want ErrNotFound", e.ID, err)
+	}
+	again := mustLogHours(t, s, alice, logged)
+	if again.ID != e.ID || !again.Undone {
+		t.Errorf("LogHours retried after its undo = %+v, want entry %s marked undone", again, e.ID)
+	}
+	if lastSeq(t, s) != seq {
+		t.Error("a retried undo or log wrote an event")
+	}
+}
+
 // A person may undo their own entry and an admin anyone's; anyone else
 // is refused. Each undo records an event on the issue.
 func TestDeleteHours(t *testing.T) {
@@ -173,7 +202,7 @@ func TestDeleteHours(t *testing.T) {
 	other := mustLogHours(t, s, bob, NewHours{Issue: is.ID, Duration: 3 * time.Hour})
 
 	seq := lastSeq(t, s)
-	_, err := s.DeleteHours(ctx, alice, theirs.ID)
+	_, err := s.DeleteHours(ctx, alice, theirs.ID, "")
 	var forbidden *ForbiddenError
 	if !errors.As(err, &forbidden) {
 		t.Errorf("DeleteHours(bob's entry) as alice = %v, want a *ForbiddenError", err)
@@ -181,17 +210,17 @@ func TestDeleteHours(t *testing.T) {
 	if lastSeq(t, s) != seq {
 		t.Error("a refused DeleteHours wrote an event")
 	}
-	got, err := s.DeleteHours(ctx, alice, mine.ID)
+	got, err := s.DeleteHours(ctx, alice, mine.ID, "")
 	if err != nil || got.ID != mine.ID || got.Note != "mine" {
 		t.Errorf("DeleteHours(own entry) = %+v, %v; want the entry removed", got, err)
 	}
-	if _, err := s.DeleteHours(ctx, dana, theirs.ID); err != nil {
+	if _, err := s.DeleteHours(ctx, dana, theirs.ID, ""); err != nil {
 		t.Errorf("DeleteHours(bob's entry) as admin = %v, want nil", err)
 	}
-	if _, err := s.DeleteHours(ctx, alice, mine.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteHours(ctx, alice, mine.ID, ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("DeleteHours(an entry already undone) = %v, want ErrNotFound", err)
 	}
-	if _, err := s.DeleteHours(ctx, alice, "not an id!"); !errors.Is(err, ErrInvalid) {
+	if _, err := s.DeleteHours(ctx, alice, "not an id!", ""); !errors.Is(err, ErrInvalid) {
 		t.Errorf("DeleteHours(malformed id) = %v, want ErrInvalid", err)
 	}
 	list, err := s.Hours(ctx, HoursFilter{Issue: is.ID})

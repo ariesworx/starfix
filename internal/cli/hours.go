@@ -32,7 +32,7 @@ func cmdLog(ctx context.Context, r *runner, args []string) error {
 			return usagef(usage, "--undo takes no other arguments")
 		}
 		var out proto.HoursDeleteResult
-		if err := r.call(ctx, proto.OpHoursDelete, proto.HoursDeleteArgs{ID: *undo}, &out); err != nil {
+		if err := r.call(ctx, proto.OpHoursDelete, proto.HoursDeleteArgs{ID: *undo, Idem: proto.NewIdem("cli")}, &out); err != nil {
 			return err
 		}
 		if r.json {
@@ -80,7 +80,11 @@ func cmdLog(ctx context.Context, r *runner, args []string) error {
 		r.emit(out)
 		return nil
 	}
-	_, _ = fmt.Fprintf(r.env.Stdout, "logged %s on %s for %s: entry %s\n", proto.Hours(in.Seconds), esc(in.ID), esc(out.On), esc(out.ID))
+	_, _ = fmt.Fprintf(r.env.Stdout, "logged %s on %s for %s: entry %s", proto.Hours(in.Seconds), esc(in.ID), esc(out.On), esc(out.ID))
+	if out.Undone {
+		_, _ = fmt.Fprint(r.env.Stdout, ", since undone")
+	}
+	_, _ = fmt.Fprintln(r.env.Stdout)
 	return nil
 }
 

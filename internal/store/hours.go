@@ -26,6 +26,9 @@ type HoursEntry struct {
 	Duration  time.Duration `json:"duration"`
 	Note      string        `json:"note,omitempty"`
 	At        time.Time     `json:"at"`
+	// Undone marks an entry a retried log returns that has since been
+	// undone.
+	Undone bool `json:"-"`
 }
 
 // NewHours is an entry to log. On is the logger's calendar day, at most
@@ -119,13 +122,22 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 	err := s.write(ctx, actor, func(w *wtx) error {
 		// The request as sent, with no day for today, so a retry after
 		// midnight is the same request.
-		if done, err := replay(ctx, w, in.Idem, "hours.log", struct {
+		done, err := replay(ctx, w, in.Idem, "hours.log", struct {
 			Issue   IssueID
 			Seconds int64
 			On      time.Time
 			Note    string
-		}{in.Issue, int64(in.Duration / time.Second), in.On.UTC(), in.Note}, &out); done || err != nil {
+		}{in.Issue, int64(in.Duration / time.Second), in.On.UTC(), in.Note}, &out)
+		if err != nil {
 			return err
+		}
+		if done {
+			var n int
+			if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM hours WHERE id = ?`, out.ID).Scan(&n); err != nil {
+				return fmt.Errorf("find hours: %w", err)
+			}
+			out.Undone = n == 0
+			return nil
 		}
 		if err := mustExist(ctx, w.tx, in.Issue); err != nil {
 			return err
@@ -162,14 +174,21 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 
 // DeleteHours removes the entry id and returns it. Its principal may
 // remove it, and an admin may remove anyone's; anyone else is refused
-// with a [*ForbiddenError]. A malformed id is ErrInvalid, and an entry
-// that is not there ErrNotFound.
-func (s *Store) DeleteHours(ctx context.Context, actor Actor, id string) (HoursEntry, error) {
+// with a [*ForbiddenError]. A malformed id or idempotency key is
+// ErrInvalid, and an entry that is not there ErrNotFound, unless idem
+// names the undo that removed it, which returns the entry again.
+func (s *Store) DeleteHours(ctx context.Context, actor Actor, id, idem string) (HoursEntry, error) {
 	if !hoursIDPattern.MatchString(id) {
 		return HoursEntry{}, fmt.Errorf("%w: entry %q must be an hours entry id, as sfx log prints it", ErrInvalid, id)
 	}
+	if err := validIdem(idem); err != nil {
+		return HoursEntry{}, err
+	}
 	var out HoursEntry
 	err := s.write(ctx, actor, func(w *wtx) error {
+		if done, err := replay(ctx, w, idem, "hours.delete", id, &out); done || err != nil {
+			return err
+		}
 		rows, err := scanHours(ctx, w.tx, `WHERE id = ?`, []any{id}, 1)
 		switch {
 		case err != nil:
@@ -183,7 +202,10 @@ func (s *Store) DeleteHours(ctx context.Context, actor Actor, id string) (HoursE
 		if _, err := w.exec(ctx, `DELETE FROM hours WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("delete hours: %w", err)
 		}
-		return w.event(ctx, OpHoursDelete, string(out.Issue), hoursState(out), nil)
+		if err := w.event(ctx, OpHoursDelete, string(out.Issue), hoursState(out), nil); err != nil {
+			return err
+		}
+		return w.settle(out)
 	})
 	if err != nil {
 		return HoursEntry{}, err

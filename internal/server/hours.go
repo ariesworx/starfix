@@ -29,13 +29,13 @@ func hoursLog(ctx context.Context, s *Server, a store.Actor, in proto.HoursLogAr
 	if err != nil {
 		return fail(err)
 	}
-	return proto.HoursLogResult{ID: e.ID, On: e.On.Format(time.DateOnly)}, nil
+	return proto.HoursLogResult{ID: e.ID, On: e.On.Format(time.DateOnly), Undone: e.Undone}, nil
 }
 
 // hoursDelete undoes an entry: the caller's own, or anyone's for an
 // admin; the store decides.
 func hoursDelete(ctx context.Context, s *Server, a store.Actor, in proto.HoursDeleteArgs) (any, *proto.Error) {
-	e, err := s.cfg.Store.DeleteHours(ctx, a, in.ID)
+	e, err := s.cfg.Store.DeleteHours(ctx, a, in.ID, in.Idem)
 	if err != nil {
 		return nil, s.mapErr(ctx, proto.OpHoursDelete, in.ID, 0, err)
 	}

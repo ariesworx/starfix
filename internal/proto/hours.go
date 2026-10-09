@@ -33,14 +33,18 @@ type HoursLogArgs struct {
 }
 
 // HoursLogResult is the new entry's id and the day it was logged for.
+// Undone marks a retried log whose entry has since been undone.
 type HoursLogResult struct {
-	ID string `json:"id"`
-	On string `json:"on"`
+	ID     string `json:"id"`
+	On     string `json:"on"`
+	Undone bool   `json:"undone,omitempty"`
 }
 
-// HoursDeleteArgs undoes the entry ID.
+// HoursDeleteArgs undoes the entry ID. Idem, an idempotency key, makes a
+// retry return the entry the first undid.
 type HoursDeleteArgs struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
+	Idem string `json:"idem,omitempty"`
 }
 
 // HoursDeleteResult is the entry undone.
