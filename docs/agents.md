@@ -189,12 +189,12 @@ first release runs SessionEnd async; `--check` names the hooks to fix.
 
 ## Tools
 
-The MCP server offers 23 tools: `prime`, `start`, `finish`, `handoff`,
+The MCP server offers 24 tools: `prime`, `start`, `finish`, `handoff`,
 `ready`, `blocked`, `list`, `show`, `create`, `update`, `close`, `reopen`,
 `dep`, `label`, `comment`, `comments`, `history`, `digest`, `who`,
-`inbox`, `remember`, `recall` and `forget`. There are no admin tools:
-import, export, setup, upgrade and server settings stay on the command
-line.
+`inbox`, `remember`, `recall`, `forget` and `cost`. There are no admin
+tools: import, export, setup, upgrade, prices and server settings stay on
+the command line.
 
 - **Results are compact.** Writes return `{id, rev}`, and lists return the
   id, title, status and priority. A result is capped at about 2,000 tokens;
@@ -220,12 +220,19 @@ line.
   its issue. Pinning is left to people (`sfx pin`). A memory that looks
   like it holds a secret is refused, and the fix tells the agent to name
   where the secret is kept instead.
-- **`show` and `digest` carry time and tokens.** `show` gives the issue's
-  `account` and a one-line `usage`: time held, tokens for the five largest
-  models, and whether any were split by time with other work. `digest`
-  gives the window's `usage` line, with the tokens no issue was held for
-  and whether any were split by time.
+- **`show` and `digest` carry time, cost and tokens.** `show` gives the
+  issue's `account` and a one-line `usage`: time held, cost at list price
+  (`cost $8.35`, `, some unpriced` when a model has no price, or `cost
+  unpriced`), tokens for the five largest models, and whether any were
+  split by time with other work. `digest` gives the window's `usage` line,
+  with the tokens no issue was held for and whether any were split by time.
   No tool sets an account; people do that with `sfx update --account`.
+- **`cost` reports spend.** It takes `by` (`account`, the default,
+  `issue`, `epic`, `person` or `model`), `since` and `until`, and returns
+  a line per group (`ID title: $8.35, 4.3M tokens, split`), the total and
+  the models with no price ([Cost](concepts.md#cost)). It lists 20
+  groups, fewer if they would pass the result cap, and sums the rest as
+  `(other)`, so the groups still add up to the total.
 - **Files come from git, not from the agent.** `sfx mcp` reads the paths
   each held issue's work touched from the repository it was started in,
   and sends them with a renewal (at most every five minutes per issue),

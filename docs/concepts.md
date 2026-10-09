@@ -196,8 +196,9 @@ date or a time): what closed, started, is in progress or stalled, is
 blocked, was handed off, created or discovered. An issue in progress with
 no activity for 48 hours counts as stalled. The digest is structured data
 for a standup or a status report. starfix runs no model; the agent writes
-any narrative. It also totals the time issues were held in the window and
-the tokens reported in it ([below](#accounts-time-and-tokens)).
+any narrative. It also totals the time issues were held in the window,
+the tokens reported in it and their cost at list price
+([below](#accounts-time-and-tokens)).
 
 ## Memory
 
@@ -299,3 +300,21 @@ apart.
 Splitting by time is an estimate when a session switches issues. A
 record is split in whole tokens, so the parts add up to the record: the
 issues' tokens plus the unattributed ones are the total.
+
+### Cost
+
+**Cost** is the tokens' list-price equivalent: what they would cost at
+each model's API rates, whatever plan pays for them. An admin records the
+rates ([Prices](server.md#prices)); a token is priced by its model's
+rate in effect at the record's time, so a price change never rewrites a
+past cost. Cost is worked out when read, like attribution, and exactly:
+an issue's share of a split record is priced as the tokens it got, so the
+issues' costs add up to the record's. A model with no price is shown with
+its tokens and marked unpriced, never guessed at.
+
+`show` gives an issue's running cost, `digest` a window's, and `sfx cost
+--since 7d --by account` a report by account, issue, epic (the nearest
+epic up the parent chain), person (who reported the tokens) or model.
+Tokens no issue was held for are `(unattributed)`, issues under no epic
+are `(no epic)`, and a group is marked `split` when part of it came from
+a record shared with another group. Invoicing stays outside starfix.
