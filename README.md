@@ -13,9 +13,10 @@ history.
 
 > **Status: stage 4 of 7 in progress** (stage 3 waits only on token
 > capture for Codex and Gemini CLI). Issues, claims, handoffs, the inbox,
-> a live board, scoped memory, agent setup and importing from bd (beads)
-> work today. Token prices and an offline cache come next. Not ready for
-> production use yet; see the [roadmap](#roadmap).
+> a live board, scoped memory, token cost (at list price and amortized
+> over plans), people's hours, agent setup and importing from bd (beads)
+> work today. An offline cache comes next. Not ready for production use
+> yet; see the [roadmap](#roadmap).
 
 ## Why starfix
 
@@ -51,7 +52,8 @@ what. starfix makes that safe:
 | Summarize a day or a week for a standup | `digest` | [The digest](docs/concepts.md#the-digest) |
 | Keep what the next session needs to know, for the project, the team or yourself alone | `remember`, `recall`, `memories`, `pin` | [Memory](docs/concepts.md#memory) |
 | See the time and tokens each issue took, by account (tokens from Claude Code so far) | `show`, `digest`, `usage --hook` | [Accounts, time and tokens](docs/concepts.md#accounts-time-and-tokens) |
-| Report what the tokens cost at list price, by account, issue, epic, person or model | `cost`, `admin prices` | [Cost](docs/concepts.md#cost), [Prices](docs/server.md#prices) |
+| Report what the tokens cost at list price, and amortized over subscription plans, by account, issue, epic, person or model | `cost`, `admin prices`, `admin plans` | [Cost](docs/concepts.md#cost), [Prices](docs/server.md#prices), [Plans](docs/server.md#plans) |
+| Log the hours people spend on an issue | `log` | [Human hours](docs/concepts.md#human-hours) |
 | Set up Claude Code, Codex, Gemini CLI, Cursor, VS Code, Junie, JetBrains AI Assistant or Claude Desktop | `setup` | [Agents](docs/agents.md) |
 | Move a bd (beads) backlog over, keeping its IDs | `starfixd import-bd` | [Moving from bd](docs/migrate-from-bd.md) |
 | Reach a server that has no public address, through Google Cloud IAP | `iap:` in `.starfix.yaml` | [Using sfx](docs/cli.md#servers-without-a-public-ip-google-cloud-iap) |
@@ -164,7 +166,7 @@ binary, building from source and verifying a download by hand.
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, live board, token capture | In progress. Built: claims, agents registry, inbox, event push, structured handoffs, idempotency, files to issues, acceptance checklists, similar closed issues, the live board, accounts, time and token reporting, and token capture for Claude Code. The stage's gate, a multi-session soak test, passes. Left: token capture for Codex and Gemini CLI, held until the maintainer uses them and their formats can be checked against real files |
-| 4 | Team and personal memory with tags; prices and `sfx cost` | In progress. Built: scoped, tagged memory with pins and issue links (`remember`, `recall`, `forget`, `memories`, `pin`), ranked in `prime` and `start`, private user scope, a secrets lint, and import of bd's memories; prices (`sfx admin prices`), `sfx cost` and the MCP `cost` tool, and the cost in `show` and `digest`. Left: `sfx log` (human hours), and subscription plans with their amortized cost |
+| 4 | Team and personal memory with tags; prices and `sfx cost` | In progress. Built: scoped, tagged memory with pins and issue links (`remember`, `recall`, `forget`, `memories`, `pin`), ranked in `prime` and `start`, private user scope, a secrets lint, and import of bd's memories; prices (`sfx admin prices`), `sfx cost` and the MCP `cost` tool, and the cost in `show` and `digest`; human hours (`sfx log`) in `show`, `digest` and `sfx cost`; subscription plans (`sfx admin plans`) and their amortized cost in `sfx cost` |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |
 | 7 | Scheduled digests, GitHub sync, compaction, vectors | |

@@ -45,7 +45,10 @@ pinned](cli.md#the-host-key-is-pinned)).
 - **Admins may override.** An admin's change to an issue another
   principal holds is recorded as an `admin.override` event naming the
   holder, and a forced close records the open acceptance items in its
-  close event. Only admins set model prices ([Prices](server.md#prices)).
+  close event. Only admins set model prices ([Prices](server.md#prices))
+  and subscription plans ([Plans](server.md#plans)). A person logs hours
+  only as themselves and undoes only their own; an admin may undo
+  anyone's, on the record.
   Only the server's config file or environment lists admins
   ([Admins](server.md#admins)).
 - **Every change is an event**, written in the same transaction as the

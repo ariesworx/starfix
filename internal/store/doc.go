@@ -12,11 +12,12 @@
 // watch that asks; handoff notes ([Handoff]);
 // acceptance checklists ([AcceptanceItem]); scoped memories ([Memory]),
 // with no text that looks like a credential (internal/secretscan); token
-// usage records ([UsageRecord]) and model prices ([Price]); and the event
-// log ([Event]).
+// usage records ([UsageRecord]), model prices ([Price]), people's logged
+// hours ([HoursEntry]) and subscription plans ([Plan]); and the event log
+// ([Event]).
 // Ready, Blocked, Digest, acceptance items, which issue a usage record
-// belongs to and what it cost ([Store.CostReport]) are computed at read
-// time, with recursive CTEs where they follow the graph; nothing derived
+// belongs to and what it cost, at list price and amortized over plans
+// ([Store.CostReport]), are computed at read time, with recursive CTEs where they follow the graph; nothing derived
 // is stored.
 //
 // The design is docs/design/starfix.md: §3 for the data model, §6 for

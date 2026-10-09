@@ -338,7 +338,8 @@ Only an admin may change an issue another principal holds, or close one
 with acceptance items still open (`close --force`). A change to an issue
 another principal holds is recorded first as an `admin.override` event
 that names the holder; a forced close records the open items in its close
-event. Only an admin may set a model's price ([Prices](#prices)).
+event. Only an admin may set a model's price ([Prices](#prices)) or a
+subscription plan ([Plans](#plans)), or undo another person's hours.
 Nothing over the protocol or MCP reads or changes the list, and a
 reserved name cannot be an admin.
 
@@ -365,6 +366,32 @@ never guessed; until the first price is set, `show` and `digest` show no
 cost at all. Setting the same model and date again replaces the rates;
 setting them to what they are changes nothing. Each change is a
 `price.set` event. Anyone may list prices.
+
+## Plans
+
+A flat-rate plan (a subscription paid per seat a month) costs the same
+whatever its tokens would cost at list price. `sfx cost` shows each
+group's share of the plans' fees as its **amortized cost**, beside the
+list-price equivalent, once an admin records the plans with `sfx admin
+plans set`. For example, with an invented plan:
+
+```sh
+sfx admin plans set team --from 2026-09 --fee 25 --seats 3 \
+  --principal alice --principal bob
+sfx admin plans
+```
+
+The fee is US dollars a seat a month, with at most six decimals; the
+month's total is fee times seats. The principals are those whose usage
+the plan pays for; a principal on no plan adds no amortized cost. Terms
+hold from their month until a later `--from` of the same name, so a
+price rise or a new seat is a new row from its month on, and past months
+keep the terms they had; `--fee 0 --seats 0` ends a plan. Each month's
+total is split across the work by the tokens the principals reported
+that month ([Cost](concepts.md#cost)), when read, never stored. Setting
+the same name and month again replaces the terms; setting them to what
+they are changes nothing. Each change is a `plan.set` event. Anyone may
+list plans.
 
 ## Settings
 
@@ -432,6 +459,10 @@ limits:
 | `memory_tag_length` | 64 | Bytes in one memory tag (at most 255) |
 | `memories_per_scope` | 1000 | Memories one principal may author in one scope, forgotten ones included. A new key at the cap first deletes that principal's oldest forgotten memories in the scope; only when live memories fill it is the key refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
 | `prices` | 1000 | Rows of the prices table (at most 10000, since every cost report, show and digest reads them all): a model's rates from one date are one row. A new price past it is refused with `invalid`, and its fix says to replace an existing one or raise the limit; replacing a price is not refused |
+| `plans` | 1000 | Rows of the plans table (at most 10000, since every cost report reads them all): a plan's terms from one month are one row. A new row past it is refused with `invalid`, and its fix says to replace an existing one or raise the limit; replacing a row is not refused |
+| `plan_principals` | 100 | Principals one plan row names (at most 1000) |
+| `hours_per_day` | 50 | Hours entries one principal may have on one day. Past it a new entry is refused with `invalid`, and its fix says to undo some and log their sum, or raise the limit |
+| `hours_note` | 500 | Bytes in an hours entry's note (at most 65535) |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.
@@ -458,8 +489,13 @@ Fixed caps that no setting changes:
   and the spans that reach into those stretches.
 - **Cost reports:** `cost` covers a window of at most 366 days, prices at
   most 100,000 records and marks the report partial past that, and lists
-  at most 500 groups, summing the rest as `(other)`. A rate is at most
-  1,000,000 US dollars per million tokens.
+  at most 500 groups, summing the rest as `(other)`. A rate, and a plan's
+  fee a seat a month, is at most 1,000,000 US dollars; a plan has at most
+  100,000 seats.
+- **Hours:** an entry is from a minute to 24 hours, on a day at most a
+  year back and not ahead, and one principal's entries on one day add up
+  to at most 24 hours. `show` names at most 20 people per issue, summing
+  the rest as `(other)`; `sfx log` lists at most 500 entries.
 - **Similar issues:** lookups read closed titles from a cache refreshed on
   close and reopen, or after a minute.
 
@@ -571,7 +607,11 @@ how fast one principal can grow it.
 Token usage is one row per harness request in `token_usage`, about 200
 bytes each, also never pruned; a `usage` call adds one summary event, not
 one per row. `usage_per_day` bounds how fast one principal can grow it.
-Prices are at most `prices` rows, and only admins add them.
+Prices are at most `prices` rows and plans at most `plans` rows, and
+only admins add them. Hours entries are one row each in `hours`, about
+100 bytes plus the note, never pruned; `hours_per_day` bounds how many
+one principal may log for a day, and an undo deletes the row, its event
+keeping the history.
 
 An issue's paths are at most `paths_per_issue` rows in `issue_paths`. A
 call that adds paths records one `issue.paths` event listing at most 20;
