@@ -71,8 +71,9 @@ type UsageSummary struct {
 	// Capped is set when more records matched than a read takes, so the
 	// tokens are a lower bound.
 	Capped bool
-	// Cost is the tokens' list-price equivalent.
-	Cost Cost
+	// Cost is the tokens' list-price equivalent, or nil when the server
+	// has no prices at all, so there is no cost to give.
+	Cost *Cost
 }
 
 // ModelUsage is one model's tokens. A count is nil when no record that
@@ -189,7 +190,7 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 		cost.add(book, r.model, r.to, part)
 		out.Split = out.Split || d.split()
 	}
-	out.Models, out.Cost = sum.models(), cost.cost()
+	out.Models, out.Cost = sum.models(), book.costOf(cost)
 	return out, nil
 }
 
@@ -970,7 +971,7 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 		cost.add(book, r.model, r.to, part)
 		u.Split = u.Split || d.positive() > len(in)
 	}
-	u.Models, u.Unattributed, u.Cost = total.models(), loose.models(), cost.cost()
+	u.Models, u.Unattributed, u.Cost = total.models(), loose.models(), book.costOf(cost)
 	return nil
 }
 

@@ -310,7 +310,8 @@ rate in effect at the record's time, so a price change never rewrites a
 past cost. Cost is worked out when read, like attribution, and exactly:
 an issue's share of a split record is priced as the tokens it got, so the
 issues' costs add up to the record's. A model with no price is shown with
-its tokens and marked unpriced, never guessed at.
+its tokens and marked unpriced, never guessed at. A server with no
+prices at all shows no cost.
 
 `show` gives an issue's running cost, `digest` a window's, and `sfx cost
 --since 7d --by account` a report by account, issue, epic (the nearest

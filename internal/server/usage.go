@@ -50,9 +50,9 @@ func wireDigestUsage(u store.DigestUsage) *proto.DigestUsage {
 }
 
 // wireCost is a summary's cost and whether some of it was unpriced, or
-// nothing when it has no tokens.
+// nothing when it has no tokens or the server has no prices.
 func wireCost(u store.UsageSummary) (string, bool) {
-	if len(u.Models) == 0 {
+	if len(u.Models) == 0 || u.Cost == nil {
 		return "", false
 	}
 	return proto.USD(u.Cost.Picodollars), u.Cost.Unpriced

@@ -176,3 +176,18 @@ func TestDispatchCostUnpricedMore(t *testing.T) {
 		t.Errorf("cost names %d unpriced models and %d more, want %d and 2", len(r.Unpriced), r.UnpricedMore, proto.MaxUsageModels)
 	}
 }
+
+// A server with no prices sends no cost in show and digest, rather than
+// calling every token unpriced.
+func TestDispatchUsageCostWithoutPrices(t *testing.T) {
+	s := newServer(t)
+	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
+	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: is.ID})
+	mustCall[proto.UsageResult](t, s, alice, proto.OpUsage, proto.UsageArgs{Records: []proto.UsageRecord{usageRec("r1", time.Now().UTC(), 10)}})
+	if u := mustCall[proto.ShowResult](t, s, alice, proto.OpShow, proto.ShowArgs{ID: is.ID}).Usage; u == nil || u.CostUSD != "" || u.Unpriced {
+		t.Errorf("show(%s).usage = %+v, want tokens and no cost", is.ID, u)
+	}
+	if d := mustCall[proto.DigestResult](t, s, alice, proto.OpDigest, proto.DigestArgs{Since: "1h"}).Usage; d == nil || d.CostUSD != "" || d.Unpriced {
+		t.Errorf("digest.usage = %+v, want tokens and no cost", d)
+	}
+}

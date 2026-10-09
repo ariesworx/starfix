@@ -223,8 +223,9 @@ the command line.
 - **`show` and `digest` carry time, cost and tokens.** `show` gives the
   issue's `account` and a one-line `usage`: time held, cost at list price
   (`cost $8.35`, `, some unpriced` when a model has no price, or `cost
-  unpriced`), tokens for the five largest models, and whether any were
-  split by time with other work. `digest` gives the window's `usage` line,
+  unpriced`; no cost at all when the server has no prices), tokens for
+  the five largest models, and whether any were split by time with
+  other work. `digest` gives the window's `usage` line,
   with the tokens no issue was held for and whether any were split by time.
   No tool sets an account; people do that with `sfx update --account`.
 - **`cost` reports spend.** It takes `by` (`account`, the default,

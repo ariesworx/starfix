@@ -96,8 +96,8 @@ func TestTokenUsage(t *testing.T) {
 	}
 
 	digest := alice.ok("digest")
-	// No model has a price here, so the cost is marked unpriced (cost_test.go).
-	if !strings.Contains(digest, "\nheld 0m\ncost unpriced\ntokens claude-opus-4-1: 2.4k in, 600 out, 5k cache write (1k 1h), 90k cache read\n") {
+	// The server has no prices, so there is no cost line (cost_test.go sets some).
+	if !strings.Contains(digest, "\nheld 0m\ntokens claude-opus-4-1: 2.4k in, 600 out, 5k cache write (1k 1h), 90k cache read\n") {
 		t.Errorf("digest lacks the usage lines:\n%s", digest)
 	}
 	if d := decode[proto.DigestResult](t, alice.ok("digest", "--json")); d.Usage == nil || len(d.Usage.Models) != 1 {
@@ -106,7 +106,7 @@ func TestTokenUsage(t *testing.T) {
 
 	ag := alice.mcp("v0.2.0")
 	is := decode[mcpserver.Issue](t, ag.ok("show", map[string]any{"id": task}))
-	if is.Account != "acme" || is.Usage != "held 0m; cost unpriced; claude-opus-4-1 2.4k in, 600 out, 5k cache write, 90k cache read" {
+	if is.Account != "acme" || is.Usage != "held 0m; claude-opus-4-1 2.4k in, 600 out, 5k cache write, 90k cache read" {
 		t.Errorf("mcp show: account %q usage %q", is.Account, is.Usage)
 	}
 	d := decode[mcpserver.Digest](t, ag.ok("digest", map[string]any{}))

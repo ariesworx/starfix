@@ -361,7 +361,8 @@ one-hour one. A record is priced by the newest price for its model whose
 effective time is no later than the record's, so a new price applies from
 its date on and never rewrites past costs; costs are computed when read,
 never stored. A model with no price in effect is reported as unpriced,
-never guessed. Setting the same model and date again replaces the rates;
+never guessed; until the first price is set, `show` and `digest` show no
+cost at all. Setting the same model and date again replaces the rates;
 setting them to what they are changes nothing. Each change is a
 `price.set` event. Anyone may list prices.
 

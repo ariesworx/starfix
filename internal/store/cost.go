@@ -41,6 +41,16 @@ func newPriceBook(ps []Price) priceBook {
 	return b
 }
 
+// costOf is c's cost, or nil when the book holds no price at all: a
+// server that prices nothing has no cost to give.
+func (b priceBook) costOf(c costSum) *Cost {
+	if len(b) == 0 {
+		return nil
+	}
+	x := c.cost()
+	return &x
+}
+
 // at returns the rates of the newest price for model whose effective time
 // is no later than t, or nil when there is none.
 func (b priceBook) at(model string, t time.Time) *Rates {

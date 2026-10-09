@@ -25,6 +25,19 @@ func cacheRec(id, model string, at time.Time, in, out, cw int64, cw1h *int64, cr
 	return r
 }
 
+// summaryCost is a usage summary's cost as text: "none" when the server
+// has no prices, else its picodollars, then " unpriced" when some tokens
+// had no price.
+func summaryCost(c *Cost) string {
+	switch {
+	case c == nil:
+		return "none"
+	case c.Unpriced:
+		return picos(*c) + " unpriced"
+	}
+	return picos(*c)
+}
+
 // A record is priced by the newest price for its model in effect at its
 // time; a model with no price then is unpriced, never guessed at.
 func TestIssueUsageCost(t *testing.T) {
@@ -56,8 +69,8 @@ func TestIssueUsageCost(t *testing.T) {
 		rec("r5", "late", t0.Add(8*time.Minute), 5, 0), // priced only from later
 	)
 	u := mustUsage(t, s, is.ID)
-	if got, want := picos(u.Cost), "1008500000"; got != want || !u.Cost.Unpriced {
-		t.Errorf("IssueUsage(%s).Cost = %s picodollars, unpriced %v; want %s, unpriced", is.ID, got, u.Cost.Unpriced, want)
+	if got, want := summaryCost(u.Cost), "1008500000 unpriced"; got != want {
+		t.Errorf("IssueUsage(%s).Cost = %s, want %s", is.ID, got, want)
 	}
 
 	// The same tokens with every model priced are fully priced.
@@ -69,8 +82,8 @@ func TestIssueUsageCost(t *testing.T) {
 	mustAddUsage(t, s, bob, rec("b1", "example-large", clk.now(), 2, 1))
 	clk.add(time.Minute)
 	u = mustUsage(t, s, other.ID)
-	if got, want := picos(u.Cost), "4000000"; got != want || u.Cost.Unpriced {
-		t.Errorf("IssueUsage(%s).Cost = %s picodollars, unpriced %v; want %s, priced", other.ID, got, u.Cost.Unpriced, want)
+	if got, want := summaryCost(u.Cost), "4000000"; got != want {
+		t.Errorf("IssueUsage(%s).Cost = %s, want %s", other.ID, got, want)
 	}
 }
 
@@ -102,14 +115,14 @@ func TestIssueUsageCostOfSplitRecord(t *testing.T) {
 		t.Errorf("split = %v and %v, want both split", ua.Split, ub.Split)
 	}
 	sum := new(big.Int)
-	for _, c := range []Cost{ua.Cost, ub.Cost} {
-		if c.Picodollars == nil || c.Picodollars.Sign() <= 0 {
-			t.Fatalf("a part's cost = %s, want a positive part", picos(c))
+	for _, c := range []*Cost{ua.Cost, ub.Cost} {
+		if c == nil || c.Picodollars == nil || c.Picodollars.Sign() <= 0 {
+			t.Fatalf("a part's cost = %s, want a positive part", summaryCost(c))
 		}
 		sum.Add(sum, c.Picodollars)
 	}
 	if sum.Cmp(whole) != 0 {
-		t.Errorf("parts cost %s + %s = %s picodollars, want the whole record's %s", picos(ua.Cost), picos(ub.Cost), sum, whole)
+		t.Errorf("parts cost %s + %s = %s picodollars, want the whole record's %s", summaryCost(ua.Cost), summaryCost(ub.Cost), sum, whole)
 	}
 }
 
@@ -134,13 +147,12 @@ func TestDigestUsageCost(t *testing.T) {
 		rec("loose", "example-large", t0.Add(15*time.Minute), 7, 0),
 		rec("odd", "unknown-model", t0.Add(16*time.Minute), 1, 0))
 	tests := []struct {
-		name     string
-		f        DigestFilter
-		picos    string
-		unpriced bool
+		name string
+		f    DigestFilter
+		want string
 	}{
-		{"everything", DigestFilter{Window: time.Hour}, "214000000", true},
-		{"label web", DigestFilter{Window: time.Hour, Label: "web"}, "200000000", false},
+		{"everything", DigestFilter{Window: time.Hour}, "214000000 unpriced"},
+		{"label web", DigestFilter{Window: time.Hour, Label: "web"}, "200000000"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,11 +160,42 @@ func TestDigestUsageCost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c := d.Usage.Cost; picos(c) != tc.picos || c.Unpriced != tc.unpriced {
-				t.Errorf("Digest(%+v).Usage.Cost = %s picodollars, unpriced %v; want %s, %v", tc.f, picos(c), c.Unpriced, tc.picos, tc.unpriced)
+			if got := summaryCost(d.Usage.Cost); got != tc.want {
+				t.Errorf("Digest(%+v).Usage.Cost = %s, want %s", tc.f, got, tc.want)
 			}
 		})
 	}
+}
+
+// A server with no prices at all has no cost to give, so a summary
+// carries none rather than calling every token unpriced. Once any price
+// exists, a model without one is unpriced.
+func TestUsageCostWithoutPrices(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	is := mustCreate(t, s, NewIssue{Title: "work"})
+	if _, _, err := s.StartIssue(ctx, alice, is.ID, time.Hour, false); err != nil {
+		t.Fatal(err)
+	}
+	clk.add(time.Minute)
+	mustAddUsage(t, s, alice, rec("r1", "example-large", clk.now(), 10, 1))
+	clk.add(time.Minute)
+	check := func(want string) {
+		t.Helper()
+		if got := summaryCost(mustUsage(t, s, is.ID).Cost); got != want {
+			t.Errorf("IssueUsage(%s).Cost = %s, want %s", is.ID, got, want)
+		}
+		d, err := s.Digest(ctx, DigestFilter{Window: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := summaryCost(d.Usage.Cost); got != want {
+			t.Errorf("Digest.Usage.Cost = %s, want %s", got, want)
+		}
+	}
+	check("none")
+	mustSetPrice(t, s, "example-small", day("2026-01-01"), rates(1, 1, 1, 1, 1))
+	check("0 unpriced")
 }
 
 // groupsText renders a report's groups for comparison:
