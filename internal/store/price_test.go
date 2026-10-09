@@ -119,7 +119,7 @@ func TestSetPriceRefuses(t *testing.T) {
 		{"not an admin", alice, "model-a", day("2026-01-01"), ok, ErrForbidden, "prices set is for admins"},
 		{"bad model", dana, "-model", day("2026-01-01"), ok, ErrInvalid, "model"},
 		{"model with a space", dana, "model a", day("2026-01-01"), ok, ErrInvalid, "model"},
-		{"before 2020", dana, "model-a", day("2019-12-31"), ok, ErrInvalid, "from"},
+		{"before 2020", dana, "model-a", day("2019-12-31"), ok, ErrInvalid, "from must be on or after 2020-01-01"},
 		{"over a year ahead", dana, "model-a", now.Add(367 * 24 * time.Hour), ok, ErrInvalid, "from"},
 		{"negative rate", dana, "model-a", day("2026-01-01"), rates(1, -1, 1, 1, 1), ErrInvalid, "output"},
 		{"rate too large", dana, "model-a", day("2026-01-01"), rates(1, 1, 1, MaxRate+1, 1), ErrInvalid, "cache_write_1h"},

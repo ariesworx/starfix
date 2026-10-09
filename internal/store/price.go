@@ -97,7 +97,7 @@ func (r Rates) validate() error {
 // the same model and time, or found it already so. A change records a
 // price.set event; an unchanged price writes nothing. Only an admin may
 // set a price: anyone else is refused with a [*ForbiddenError]. A model
-// out of proto.UsageModel's shape, a time before 2020 or more than
+// out of proto.UsageModel's shape, a time before 2020-01-01 or more than
 // PriceLead ahead, and a rate out of range are refused with ErrInvalid,
 // and a new price past Limits.Prices with a [*PriceLimitError].
 func (s *Store) SetPrice(ctx context.Context, actor Actor, model string, from time.Time, r Rates) (PriceChange, error) {
@@ -109,7 +109,7 @@ func (s *Store) SetPrice(ctx context.Context, actor Actor, model string, from ti
 	case !proto.UsageModel.MatchString(model):
 		return "", fmt.Errorf("%w: model %q must be 1-128 ASCII letters, digits or _.:/+@-, starting with a letter or digit, as the harness reports it", ErrInvalid, model)
 	case from.Before(usageEpoch):
-		return "", fmt.Errorf("%w: from must be after 2020", ErrInvalid)
+		return "", fmt.Errorf("%w: from must be on or after %s", ErrInvalid, usageEpoch.Format(time.DateOnly))
 	case from.After(now.Add(PriceLead)):
 		return "", fmt.Errorf("%w: from %s is more than a year ahead", ErrInvalid, from.Format(time.DateOnly))
 	}
