@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,4 +84,32 @@ func FuzzParseHours(f *testing.F) {
 			t.Fatalf("ParseHours(%q) = %s, and ParseHours(%q) = %s, %v", s, d, d.String(), again, err)
 		}
 	})
+}
+
+// A fee reads as a rate does, in US dollars to the micro-dollar, and
+// says it is an amount rather than a rate when refused.
+func TestParseFee(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int64 // -1 for refused
+	}{
+		{"25", 25_000_000},
+		{"19.99", 19_990_000},
+		{"0", 0},
+		{"0.000001", 1},
+		{"1000000", MaxFee},
+		{"1000000.000001", -1},
+		{"$25", -1},
+		{"-1", -1},
+		{"", -1},
+	}
+	for _, tc := range tests {
+		got, err := ParseFee(tc.in)
+		switch {
+		case tc.want < 0 && (err == nil || !strings.Contains(err.Error(), "not an amount of US dollars")):
+			t.Errorf("ParseFee(%q) = %d, %v; want an error saying it is not an amount", tc.in, got, err)
+		case tc.want >= 0 && (err != nil || got != tc.want):
+			t.Errorf("ParseFee(%q) = %d, %v; want %d", tc.in, got, err, tc.want)
+		}
+	}
 }

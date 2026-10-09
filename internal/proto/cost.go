@@ -195,19 +195,35 @@ var ratePattern = regexp.MustCompile(`^[0-9]{1,7}(\.[0-9]{1,6})?$`)
 // rate, one finer than a micro-dollar, one past MaxRate, and anything
 // but plain decimal digits.
 func ParseRate(s string) (int64, error) {
-	bad := errors.New("not a rate in US dollars per million tokens such as 3 or 0.375, with at most 6 decimals, up to 1000000")
+	n, ok := parseMicros(s)
+	if !ok {
+		return 0, errors.New("not a rate in US dollars per million tokens such as 3 or 0.375, with at most 6 decimals, up to 1000000")
+	}
+	return n, nil
+}
+
+// ParseFee reads a plan's fee in US dollars a seat a month, such as 25 or
+// 19.99, into micro-dollars, as ParseRate reads a rate.
+func ParseFee(s string) (int64, error) {
+	n, ok := parseMicros(s)
+	if !ok {
+		return 0, errors.New("not an amount of US dollars such as 25 or 19.99, with at most 6 decimals, up to 1000000")
+	}
+	return n, nil
+}
+
+// parseMicros reads US dollars, plain decimal digits with at most six
+// decimals and at most MaxRate micro-dollars, into micro-dollars.
+func parseMicros(s string) (int64, bool) {
 	if !ratePattern.MatchString(s) {
-		return 0, bad
+		return 0, false
 	}
 	whole, frac, _ := strings.Cut(s, ".")
 	n := int64(0)
 	for _, c := range whole + (frac + "000000")[:6] {
 		n = n*10 + int64(c-'0')
 	}
-	if n > MaxRate {
-		return 0, bad
-	}
-	return n, nil
+	return n, n <= MaxRate
 }
 
 // FormatRate renders micro-dollars per million tokens as US dollars per

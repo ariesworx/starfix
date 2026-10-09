@@ -61,7 +61,13 @@ func printCost(w io.Writer, c proto.CostResult) {
 		p(": no tokens\n")
 		return
 	}
-	p(", list price\n")
+	amortized := c.Total.AmortizedUSD != ""
+	logged := slices.ContainsFunc(c.Groups, func(g proto.CostGroup) bool { return g.LoggedSeconds > 0 })
+	if amortized {
+		p(", list price and amortized\n")
+	} else {
+		p(", list price\n")
+	}
 	titled := slices.ContainsFunc(c.Groups, func(g proto.CostGroup) bool { return g.Title != "" })
 	var b bytes.Buffer
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
@@ -85,7 +91,18 @@ func printCost(w io.Writer, c proto.CostResult) {
 		case g.Unpriced:
 			marks = append(marks, "unpriced")
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s tokens\t%s\n", usd, proto.TokenCount(tokens(g.Tokens)), strings.Join(marks, " "))
+		_, _ = fmt.Fprintf(tw, "%s\t", usd)
+		if amortized {
+			_, _ = fmt.Fprintf(tw, "%s amortized\t", proto.Dollars(g.AmortizedUSD))
+		}
+		_, _ = fmt.Fprintf(tw, "%s tokens\t", proto.TokenCount(tokens(g.Tokens)))
+		if logged {
+			if g.LoggedSeconds > 0 {
+				_, _ = fmt.Fprintf(tw, "%s logged", proto.Hours(g.LoggedSeconds))
+			}
+			_, _ = fmt.Fprint(tw, "\t")
+		}
+		_, _ = fmt.Fprintf(tw, "%s\n", strings.Join(marks, " "))
 	}
 	_ = tw.Flush()
 	for line := range strings.Lines(b.String()) {
@@ -95,7 +112,15 @@ func printCost(w io.Writer, c proto.CostResult) {
 	if c.Total.Unpriced && isZero(c.Total.CostUSD) {
 		total = "unpriced"
 	}
-	p("total %s, %s tokens\n", total, proto.TokenCount(tokens(c.Total.Tokens)))
+	p("total %s", total)
+	if amortized {
+		p(", %s amortized", proto.Dollars(c.Total.AmortizedUSD))
+	}
+	p(", %s tokens", proto.TokenCount(tokens(c.Total.Tokens)))
+	if c.Total.LoggedSeconds > 0 {
+		p(", %s logged", proto.Hours(c.Total.LoggedSeconds))
+	}
+	p("\n")
 	if slices.ContainsFunc(c.Groups, func(g proto.CostGroup) bool { return g.Split }) {
 		p("split: shared by time with other work, so an estimate\n")
 	}
@@ -149,8 +174,21 @@ func isZero(usd string) bool { return strings.Trim(usd, "0.") == "" }
 var rateFlags = []string{"input", "output", "cache-write", "cache-write-1h", "cache-read"}
 
 func cmdAdmin(ctx context.Context, r *runner, args []string) error {
+	const usage = "admin prices|plans ..."
+	switch {
+	case len(args) == 0 || strings.HasPrefix(args[0], "-"):
+		return usagef(usage, "admin needs prices or plans")
+	case args[0] == "prices":
+		return adminPrices(ctx, r, args[1:])
+	case args[0] == "plans":
+		return adminPlans(ctx, r, args[1:])
+	}
+	return usagef(usage, "unknown admin command %q", args[0])
+}
+
+func adminPrices(ctx context.Context, r *runner, args []string) error {
 	const usage = "admin prices [set MODEL --from DATE|TIME --input USD --output USD --cache-write USD --cache-write-1h USD --cache-read USD]"
-	fs := r.newFlags("admin")
+	fs := r.newFlags("admin prices")
 	var from string
 	fs.StringVar(&from, "from", "", "when the rates take effect: a date (midnight UTC) or an RFC 3339 time")
 	rates := map[string]*string{}
@@ -163,20 +201,16 @@ func cmdAdmin(ctx context.Context, r *runner, args []string) error {
 	}
 	switch {
 	case len(pos) == 0:
-		return usagef(usage, "admin needs prices")
-	case pos[0] != "prices":
-		return usagef(usage, "unknown admin command %q", pos[0])
-	case len(pos) == 1:
 		if set(fs, "from") || slices.ContainsFunc(rateFlags, func(f string) bool { return set(fs, f) }) {
 			return usagef(usage, "only prices set takes rates and --from")
 		}
 		return listPrices(ctx, r)
-	case pos[1] != "set":
-		return usagef(usage, "unknown prices action %q", pos[1])
-	case len(pos) != 3:
+	case pos[0] != "set":
+		return usagef(usage, "unknown prices action %q", pos[0])
+	case len(pos) != 2:
 		return usagef(usage, "prices set needs one model, spelled as the harness reports it")
 	}
-	in := proto.PriceSetArgs{Model: pos[2], From: from}
+	in := proto.PriceSetArgs{Model: pos[1], From: from}
 	var missing []string
 	for _, f := range rateFlags {
 		if !set(fs, f) {

@@ -10,8 +10,8 @@ import (
 
 // Changed summarizes an event in a few words: the fields an update, close
 // or reopen touched, the label, the edge, the acceptance item, the claim's
-// epoch and holder, or the new issue's title. It returns "" for any other
-// op.
+// epoch and holder, the new issue's title, or whose hours on which day.
+// It returns "" for any other op.
 func (e Event) Changed() string {
 	// The summary is best effort: a state that is absent or not an object
 	// leaves its map nil, and it contributes nothing.
@@ -55,6 +55,9 @@ func (e Event) Changed() string {
 			}
 		}
 		return out
+	case "hours.log", "hours.delete":
+		secs, _ := pick["seconds"].(float64)
+		return fmt.Sprintf("%v %s on %v", pick["principal"], Hours(int64(secs)), pick["on"])
 	case "claim.take", "claim.expire", "claim.release":
 		if h, ok := pick["holder"].(map[string]any); ok {
 			return fmt.Sprintf("epoch %v, %v/%v", pick["epoch"], h["principal"], h["session"])
