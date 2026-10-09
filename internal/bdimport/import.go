@@ -29,7 +29,7 @@ type Options struct {
 // failing). See the package documentation for the mapping.
 func Import(ctx context.Context, st *store.Store, r io.Reader, opts Options) (*Report, error) {
 	rep := &Report{DryRun: opts.DryRun, Problems: []Problem{}}
-	lines, err := parse(r, opts.Actor.Principal, rep)
+	lines, mems, err := parse(r, opts.Actor.Principal, rep)
 	if err != nil {
 		return rep, err
 	}
@@ -47,7 +47,10 @@ func Import(ctx context.Context, st *store.Store, r io.Reader, opts Options) (*R
 	if err := im.deps(ctx, lines); err != nil {
 		return rep, err
 	}
-	return rep, im.comments(ctx, lines)
+	if err := im.comments(ctx, lines); err != nil {
+		return rep, err
+	}
+	return rep, im.memories(ctx, mems)
 }
 
 // Fix lines shared by several kinds of problem.
@@ -57,20 +60,35 @@ const (
 	fixStale    = "none needed if starfix holds the right version; otherwise edit it in starfix"
 )
 
-// parse reads every line, maps the issues and reports what it cannot use.
-// A later line with the same ID replaces an earlier one.
-func parse(r io.Reader, principal string, rep *Report) ([]line, error) {
+// parse reads every line, maps the issues and memories, and reports what
+// it cannot use. A later line with the same issue ID, or memory key,
+// replaces an earlier one.
+func parse(r io.Reader, principal string, rep *Report) ([]line, []memLine, error) {
 	var out []line
+	var mems []memLine
 	index := map[store.IssueID]int{}
+	memIndex := map[string]int{}
 	br := bufio.NewReader(r)
 	for n := 1; ; n++ {
 		b, readErr := br.ReadBytes('\n')
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			return nil, fmt.Errorf("read line %d: %w", n, readErr)
+			return nil, nil, fmt.Errorf("read line %d: %w", n, readErr)
 		}
 		if b = bytes.TrimSpace(b); len(b) > 0 {
 			rep.Lines = n
-			if l, ok := parseLine(b, n, principal, rep); ok {
+			switch l, m, ok := parseLine(b, n, principal, rep); {
+			case !ok:
+			case m != nil:
+				if i, dup := memIndex[m.mem.Key]; dup {
+					rep.warn("memory-duplicate", "duplicate", m.mem.Key, n,
+						"remove the earlier line if the last one is not the version to keep",
+						"the same memory key appears on more than one line; the last one is used")
+					mems[i] = *m
+				} else {
+					memIndex[m.mem.Key] = len(mems)
+					mems = append(mems, *m)
+				}
+			default:
 				if i, dup := index[l.issue.ID]; dup {
 					rep.warn("duplicate", "duplicate", string(l.issue.ID), n,
 						"remove the earlier line if the last one is not the version to keep",
@@ -83,22 +101,23 @@ func parse(r io.Reader, principal string, rep *Report) ([]line, error) {
 			}
 		}
 		if readErr != nil {
-			return out, nil
+			return out, mems, nil
 		}
 	}
 }
 
-// parseLine maps b, the text of line n. It returns false for a line it
-// skips or cannot map, having recorded that in rep.
-func parseLine(b []byte, n int, principal string, rep *Report) (line, bool) {
+// parseLine maps b, the text of line n, to an issue, or to a memory when
+// the memory it returns is not nil. It returns false for a line it skips
+// or cannot map, having recorded that in rep.
+func parseLine(b []byte, n int, principal string, rep *Report) (line, *memLine, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil {
 		rep.fail("parse", n, "repair or delete the line, then import again", "line %d is not a JSON object: %v", n, err)
-		return line{}, false
+		return line{}, nil, false
 	}
 	if _, ok := raw["_schema"]; ok {
 		rep.Skipped++
-		return line{}, false
+		return line{}, nil, false
 	}
 	var typ string
 	if t, ok := raw["_type"]; ok {
@@ -107,25 +126,23 @@ func parseLine(b []byte, n int, principal string, rep *Report) (line, bool) {
 	switch typ {
 	case "", "issue":
 	case "memory":
-		rep.Skipped++
-		rep.warn("memory", "memory", "", n, "keep them in bd until starfix memory lands (design §13, stage 4)",
-			"memory records are not imported yet")
-		return line{}, false
+		m, ok := parseMemory(b, raw, n, rep)
+		return line{}, &m, ok
 	default:
 		rep.Skipped++
 		rep.warn("record:"+typ, "record", "", n, fixNone, fmt.Sprintf("records of _type %q are not imported", typ))
-		return line{}, false
+		return line{}, nil, false
 	}
 	var bi bdIssue
 	if err := json.Unmarshal(b, &bi); err != nil {
 		rep.Issues.Failed++
 		rep.fail("invalid", n, fixReexport, "line %d: %v", n, err)
-		return line{}, false
+		return line{}, nil, false
 	}
 	if bi.Status == "tombstone" {
 		rep.Skipped++
 		rep.warn("tombstone", "tombstone", bi.ID, n, fixNone, "tombstones (issues deleted in bd) are skipped")
-		return line{}, false
+		return line{}, nil, false
 	}
 	warn := func(kind, detail string) { warnMapping(rep, kind, detail, bi.ID, n) }
 	l, err := mapIssue(bi, n, principal, warn)
@@ -135,13 +152,13 @@ func parseLine(b []byte, n int, principal string, rep *Report) (line, bool) {
 		if bi.ID != "" {
 			p.IDs = []string{bi.ID}
 		}
-		return line{}, false
+		return line{}, nil, false
 	}
 	for _, f := range unheld(raw) {
 		rep.warn("field:"+f, "field", bi.ID, n, "keep bd's export if you need it; the field has no starfix column yet",
 			fmt.Sprintf("field %s is not stored", f))
 	}
-	return l, true
+	return l, nil, true
 }
 
 // warnMapping reports a change mapIssue made to issue id, on line n, to
