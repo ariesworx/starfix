@@ -76,15 +76,20 @@ func TestLogHours(t *testing.T) {
 }
 
 // A retry with the same idempotency key logs nothing more and returns the
-// first entry.
+// first entry, even once the day has turned.
 func TestLogHoursIdempotent(t *testing.T) {
-	s, _ := clockStore(t)
+	s, clk := clockStore(t)
 	is := mustCreate(t, s, NewIssue{Title: "work"})
 	in := NewHours{Issue: is.ID, Duration: time.Hour, Idem: "cli-1"}
 	first := mustLogHours(t, s, alice, in)
 	again := mustLogHours(t, s, alice, in)
 	if again.ID != first.ID {
 		t.Errorf("LogHours retried = entry %s, want the first, %s", again.ID, first.ID)
+	}
+	// A retry after midnight is the same request: it named no day.
+	clk.add(13 * time.Hour)
+	if late := mustLogHours(t, s, alice, in); late.ID != first.ID || !late.On.Equal(first.On) {
+		t.Errorf("LogHours retried the next day = entry %s on %s, want the first, %s on %s", late.ID, late.On, first.ID, first.On)
 	}
 	list, err := s.Hours(t.Context(), HoursFilter{Issue: is.ID})
 	if err != nil {

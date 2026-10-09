@@ -114,12 +114,14 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 	on = on.UTC()
 	var out HoursEntry
 	err := s.write(ctx, actor, func(w *wtx) error {
+		// The request as sent, with no day for today, so a retry after
+		// midnight is the same request.
 		if done, err := replay(ctx, w, in.Idem, "hours.log", struct {
 			Issue   IssueID
 			Seconds int64
 			On      time.Time
 			Note    string
-		}{in.Issue, int64(in.Duration / time.Second), on, in.Note}, &out); done || err != nil {
+		}{in.Issue, int64(in.Duration / time.Second), in.On.UTC(), in.Note}, &out); done || err != nil {
 			return err
 		}
 		if err := mustExist(ctx, w.tx, in.Issue); err != nil {

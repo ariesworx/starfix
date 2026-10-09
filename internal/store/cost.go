@@ -209,9 +209,10 @@ type CostGroup struct {
 }
 
 // CostReport is the list-price equivalent of a window's tokens. Groups
-// are by cost, largest first, then by tokens and key, and the groups
-// past the limit are summed into one more, last. Total covers every record read
-// and every hour logged on a day the window overlaps.
+// are by cost, largest first, then by amortized cost, tokens, hours
+// logged and key, and the groups past the limit are summed into one
+// more, last. Total covers every record read and every hour logged on a
+// day the window overlaps.
 // Unpriced names the models with tokens and no price in effect at their
 // time. Capped is set when the window held more records than a report
 // reads, so every figure is a lower bound.
