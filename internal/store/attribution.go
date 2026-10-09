@@ -737,20 +737,29 @@ func (d division) parts(n int64) []int64 { return apportion(n, d.weights) }
 
 // share is the part of t in the buckets given: for each count t knows,
 // the sum of those buckets' parts of it. Unknown counts stay unknown.
+// The one-hour cache writes are part of the cache writes, so the
+// five-minute rest and the one-hour part divide separately and each
+// bucket's cache writes are the sum of its two: divided independently,
+// a bucket could get more one-hour writes than writes.
 func (d division) share(t Tokens, buckets ...int) Tokens {
+	sum := func(n int64) *int64 {
+		p, s := d.parts(n), int64(0)
+		for _, b := range buckets {
+			s += p[b]
+		}
+		return &s
+	}
 	var out Tokens
 	for _, c := range []struct{ in, out **int64 }{
-		{&t.Input, &out.Input}, {&t.Output, &out.Output}, {&t.CacheWrite, &out.CacheWrite},
-		{&t.CacheWrite1h, &out.CacheWrite1h}, {&t.CacheRead, &out.CacheRead},
+		{&t.Input, &out.Input}, {&t.Output, &out.Output}, {&t.CacheWrite, &out.CacheWrite}, {&t.CacheRead, &out.CacheRead},
 	} {
-		if *c.in == nil {
-			continue
+		if *c.in != nil {
+			*c.out = sum(**c.in)
 		}
-		p, n := d.parts(**c.in), int64(0)
-		for _, b := range buckets {
-			n += p[b]
-		}
-		*c.out = &n
+	}
+	if t.CacheWrite1h != nil { // and so CacheWrite too, and not less
+		out.CacheWrite1h = sum(*t.CacheWrite1h)
+		*out.CacheWrite = *sum(*t.CacheWrite - *t.CacheWrite1h) + *out.CacheWrite1h
 	}
 	return out
 }

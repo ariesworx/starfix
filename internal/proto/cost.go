@@ -131,23 +131,21 @@ func USD(pico *big.Int) string {
 	return s
 }
 
-// decimalPattern is a decimal number, as USD writes one.
-var decimalPattern = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+// amountPattern is an amount of money that is not negative, as USD
+// writes one.
+var amountPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
 // Dollars renders an exact amount of US dollars for people, rounded to
 // the cent with halves up and thousands grouped: "$1,234.57". An amount
 // above zero that rounds to nothing is "<$0.01", so a small cost never
-// reads as free. Text that is not a decimal is returned as it is.
+// reads as free. A cost is never negative, so text that is not an
+// amount, a negative one included, is returned as it is: a fault shows
+// plainly rather than rounded into something that looks like a cost.
 func Dollars(usd string) string {
-	if !decimalPattern.MatchString(usd) {
+	if !amountPattern.MatchString(usd) {
 		return usd
 	}
 	r, _ := new(big.Rat).SetString(usd) // a decimal, by the pattern
-	sign := ""
-	if r.Sign() < 0 {
-		sign = "-"
-		r.Neg(r)
-	}
 	cents := r.FloatString(2)
 	if cents == "0.00" && r.Sign() > 0 {
 		return "<$0.01"
@@ -160,7 +158,7 @@ func Dollars(usd string) string {
 		}
 		b.WriteRune(c)
 	}
-	return sign + "$" + b.String() + "." + frac
+	return "$" + b.String() + "." + frac
 }
 
 // ratePattern is a rate in US dollars per million tokens: digits, and

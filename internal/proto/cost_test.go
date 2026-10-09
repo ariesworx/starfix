@@ -43,6 +43,10 @@ func TestDollars(t *testing.T) {
 		{"not money", "not money"},
 		{"1/3", "1/3"}, // a fraction is not a decimal
 		{"1e3", "1e3"},
+		// A cost is never negative, so a negative is a fault, shown
+		// exactly rather than rounded to look like a small cost.
+		{"-0.004", "-0.004"},
+		{"-12.5", "-12.5"},
 	}
 	for _, tc := range tests {
 		if got := Dollars(tc.usd); got != tc.want {
