@@ -18,10 +18,26 @@ func TestLimitsDefaultsAndValidate(t *testing.T) {
 		t.Errorf("withDefaults kept Labels = %d, want 7", got)
 	}
 	for _, l := range []Limits{{Labels: -1}, {AcceptanceItems: -1}, {Deps: -1}, {Sessions: -1}, {InboxUnread: -1}, {Notices: -1},
-		{UsageRecords: -1}, {UsagePerDay: -1}, {Paths: -1}} {
+		{UsageRecords: -1}, {UsagePerDay: -1}, {Paths: -1}, {MemoryBody: -1}, {MemoryTags: -1}, {MemoryTagLength: -1},
+		{Memories: -1}, {MemoryKeyLength: -1}} {
 		if err := l.Validate(); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v.Validate() = %v, want ErrInvalid", l, err)
 		}
+	}
+	// A memory limit cannot pass its column.
+	for _, tc := range []struct {
+		l    Limits
+		name string
+	}{
+		{Limits{MemoryBody: 65536}, "memory_body"}, {Limits{MemoryTagLength: 256}, "memory_tag_length"},
+		{Limits{MemoryKeyLength: 256}, "memory_key_length"},
+	} {
+		if err := tc.l.Validate(); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tc.name) {
+			t.Errorf("%+v.Validate() = %v, want ErrInvalid naming %s", tc.l, err, tc.name)
+		}
+	}
+	if err := (Limits{MemoryBody: 65535, MemoryTagLength: 255, MemoryKeyLength: 255}).Validate(); err != nil {
+		t.Errorf("memory limits at their columns' sizes: %v, want nil", err)
 	}
 	if err := (Limits{}).Validate(); err != nil {
 		t.Errorf("Limits{}.Validate() = %v, want nil", err)
