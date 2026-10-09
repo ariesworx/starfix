@@ -78,12 +78,12 @@ func printCost(w io.Writer, c proto.CostResult) {
 		if g.Split {
 			marks = append(marks, "split")
 		}
-		if g.Unpriced {
-			marks = append(marks, "unpriced")
-		}
 		usd := proto.Dollars(g.CostUSD)
-		if g.Unpriced && isZero(g.CostUSD) {
-			usd = "-" // no token had a price: not free
+		switch {
+		case g.Unpriced && isZero(g.CostUSD):
+			usd = "unpriced" // no token had a price: not free
+		case g.Unpriced:
+			marks = append(marks, "unpriced")
 		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s tokens\t%s\n", usd, proto.TokenCount(tokens(g.Tokens)), strings.Join(marks, " "))
 	}

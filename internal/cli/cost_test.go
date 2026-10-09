@@ -58,7 +58,7 @@ func TestPrintCost(t *testing.T) {
 			{Key: "mystery", Tokens: proto.Tokens{Input: n(7)}, CostUSD: "0", Unpriced: true},
 		}, Total: proto.CostGroup{Tokens: proto.Tokens{Input: n(7)}, CostUSD: "0", Unpriced: true}, Unpriced: []string{"mystery"}},
 			"cost by model, 2026-10-01 00:00 UTC to 2026-10-01 01:00 UTC (1h), list price\n" +
-				"  mystery  -  7 tokens  unpriced\n" +
+				"  mystery  unpriced  7 tokens\n" +
 				"total unpriced, 7 tokens\n" +
 				"unpriced: no price for mystery; an admin sets one with `sfx admin prices set`\n"},
 		{"empty", proto.CostResult{By: "account", Since: since, Until: since.Add(7 * 24 * time.Hour), Total: proto.CostGroup{CostUSD: "0"}},
@@ -68,13 +68,15 @@ func TestPrintCost(t *testing.T) {
 				CostUSD: "12.345", Split: true},
 			{Key: proto.CostUnattributed, Tokens: proto.Tokens{Input: n(500)}, CostUSD: "0.0001"},
 			{Key: "sf-b2", Title: "odd", Tokens: proto.Tokens{Input: n(50)}, CostUSD: "0", Unpriced: true},
-		}, Total: proto.CostGroup{Tokens: proto.Tokens{Input: n(1_200_550), Output: n(34_000)}, CostUSD: "12.3451", Unpriced: true, Split: true},
+			{Key: "sf-c3", Tokens: proto.Tokens{Input: n(9)}, CostUSD: "1", Unpriced: true}, // partly priced
+		}, Total: proto.CostGroup{Tokens: proto.Tokens{Input: n(1_200_559), Output: n(34_000)}, CostUSD: "13.3451", Unpriced: true, Split: true},
 			Unpriced: []string{"mystery"}, Truncated: true},
 			"cost by issue, 2026-10-01 00:00 UTC to 2026-10-02 00:00 UTC (1d), list price\n" +
-				"  sf-a1           a long title xxxxxxxxxxxxxxxxxxxxxxxxxxx…  $12.35  1.2M tokens  split\n" +
-				"  (unattributed)                                             <$0.01  500 tokens\n" +
-				"  sf-b2           odd                                        -       50 tokens    unpriced\n" +
-				"total $12.35, 1.2M tokens\n" +
+				"  sf-a1           a long title xxxxxxxxxxxxxxxxxxxxxxxxxxx…  $12.35    1.2M tokens  split\n" +
+				"  (unattributed)                                             <$0.01    500 tokens\n" +
+				"  sf-b2           odd                                        unpriced  50 tokens\n" +
+				"  sf-c3                                                      $1.00     9 tokens     unpriced\n" +
+				"total $13.35, 1.2M tokens\n" +
 				"split: shared by time with other work, so an estimate\n" +
 				"unpriced: no price for mystery; an admin sets one with `sfx admin prices set`\n" +
 				"partial: more records than the server reads; narrow the window\n"},
