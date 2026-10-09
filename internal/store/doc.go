@@ -10,14 +10,18 @@
 // ([Claim]); the agents registry ([Agent]); inbox items ([InboxItem]),
 // pushed to each [Watch] as they commit, with every issue event for a
 // watch that asks; handoff notes ([Handoff]);
-// acceptance checklists ([AcceptanceItem]); and the event log ([Event]).
-// Ready, Blocked, Digest and acceptance items are computed at read time,
-// with recursive CTEs where they follow the graph; nothing derived is
-// stored.
+// acceptance checklists ([AcceptanceItem]); scoped memories ([Memory]),
+// with no text that looks like a credential (internal/secretscan); token
+// usage records ([UsageRecord]) and model prices ([Price]); and the event
+// log ([Event]).
+// Ready, Blocked, Digest, acceptance items, which issue a usage record
+// belongs to and what it cost ([Store.CostReport]) are computed at read
+// time, with recursive CTEs where they follow the graph; nothing derived
+// is stored.
 //
-// The design is docs/design/starfix.md: §3 for the data model, §7 for
-// claims, the registry, inboxes, handoffs, idempotency and authorization,
-// and §8 for how concurrent changes resolve. docs/design/database.md says
+// The design is docs/design/starfix.md: §3 for the data model, §6 for
+// memory, §7 for claims, the registry, inboxes, handoffs, idempotency and authorization,
+// §8 for how concurrent changes resolve, and §12.1 for tokens and cost. docs/design/database.md says
 // why the database is Dolt.
 //
 // # Errors
@@ -26,9 +30,10 @@
 // [ErrConflict] or [ErrInvalid]; test for them with [errors.Is]. An error
 // that wraps none is a failure, such as a lost database connection or a
 // canceled context. Refusals that carry detail are typed and wrap a
-// sentinel: [*HeldError], [*IdemError] and [*StaleEpochError] wrap
-// ErrConflict, [*ForbiddenError] wraps [ErrForbidden], and
-// [*AcceptanceError] wraps ErrInvalid; read their fields with
+// sentinel: [*HeldError], [*IdemError], [*StaleEpochError] and
+// [*MemoryConflictError] wrap ErrConflict, [*ForbiddenError] wraps
+// [ErrForbidden], and [*AcceptanceError], [*SecretError] and
+// [*MemoryLimitError] wrap ErrInvalid; read their fields with
 // [errors.As]. [Open] refuses an unsafe database account with an
 // [*UnsafeAccountError].
 //

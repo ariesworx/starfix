@@ -32,6 +32,7 @@ stage is in progress.
 | `internal/server` | Daemon: socket, peer check, sshd bridge, dispatch of ops to the store, error mapping, settings |
 | `internal/client` | In-process SSH client with a pinned host key, over TCP or a Google Cloud IAP tunnel; `.starfix.yaml` discovery, session ids |
 | `internal/safetext` | Unsafe characters (controls, bidi): the store's validation, bd import cleaning, and the escaping of everything clients print |
+| `internal/secretscan` | Text that looks like a credential (private keys, service and bearer tokens, JWTs, passwords in URLs and commands, secret assignments, long random tokens): the store's secrets lint for memories |
 | `internal/cli` | `sfx` commands; writes only to the `Env` it is given |
 | `internal/board` | `sfx tui`, the live board: the model and its golden-tested frames, `Live` (event push, debounced rereads, reconnects), and the terminal loop over `golang.org/x/term` |
 | `internal/capture` | Token usage read from a harness's local records (Claude Code transcripts) for `sfx usage --hook`, with per-file offsets in a 0600 state file |
@@ -126,7 +127,9 @@ skip without it too.
    statement that is bookkeeping runs through `wtx.touch` instead, which
    exempts only that statement: refreshing the time of an issue's paths
    already recorded (a client resends what git shows every few minutes;
-   only a new path is history, and it records an `issue.paths` event). The
+   only a new path is history, and it records an `issue.paths` event),
+   and deleting a principal's oldest forgotten memories to make room for
+   a new one under `memories_per_scope`. The
    event log is the truth; ready, blocked and digest are derived from it
    and never stored.
 8. **Write closures must be safe to rerun.** A write that loses to a
@@ -151,11 +154,11 @@ skip without it too.
     The CLI prints the message and a `fix:` line; `internal/mcpserver`
     rewords the fix as the agent's next tool call (`errors.go`).
 12. **MCP is for agents and stays small.** No admin tools over MCP: import,
-    export, setup, upgrade and settings are CLI only. Identity is implicit:
-    the principal comes from the SSH key and the session from the
-    environment, never from a tool argument. Results are capped
+    export, setup, upgrade, settings and prices are CLI only. Identity is
+    implicit: the principal comes from the SSH key and the session from
+    the environment, never from a tool argument. Results are capped
     (`budget.go`: 2,000 tokens, prime and digest 1,500) and the whole tool
-    schema set at about 2,400 estimated tokens; the tests enforce both and
+    schema set at about 2,700 estimated tokens; the tests enforce both and
     pin the tool list. Keep schema descriptions terse.
 13. **Output stays terse.** Writes return `{id, rev}`; lists return the
     compact summary. `sfx --json` prints exactly one JSON document, errors

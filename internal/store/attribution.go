@@ -71,6 +71,9 @@ type UsageSummary struct {
 	// Capped is set when more records matched than a read takes, so the
 	// tokens are a lower bound.
 	Capped bool
+	// Cost is the tokens' list-price equivalent, or nil when the server
+	// has no prices at all, so there is no cost to give.
+	Cost *Cost
 }
 
 // ModelUsage is one model's tokens. A count is nil when no record that
@@ -164,7 +167,13 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 	if err != nil {
 		return IssueUsage{}, err
 	}
+	prices, err := loadPrices(ctx, q)
+	if err != nil {
+		return IssueUsage{}, err
+	}
+	book := newPriceBook(prices)
 	var sum usageSum
+	var cost costSum
 	for i, r := range rows {
 		if i%ctxEvery == 0 {
 			if err := ctx.Err(); err != nil {
@@ -176,10 +185,12 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 		if p < 0 {
 			continue
 		}
-		sum.add(r, func(n int64) int64 { return d.parts(n)[p] })
+		part := d.share(r.Tokens, p)
+		sum.add(r.model, part)
+		cost.add(book, r.model, r.to, part)
 		out.Split = out.Split || d.split()
 	}
-	out.Models = sum.models()
+	out.Models, out.Cost = sum.models(), book.costOf(cost)
 	return out, nil
 }
 
@@ -725,6 +736,35 @@ func (d division) positive() int {
 // that sum to n.
 func (d division) parts(n int64) []int64 { return apportion(n, d.weights) }
 
+// share is the part of t in the buckets given: for each count t knows,
+// the sum of those buckets' parts of it. Unknown counts stay unknown.
+// The one-hour cache writes are part of the cache writes, so the
+// five-minute rest and the one-hour part divide separately and each
+// bucket's cache writes are the sum of its two: divided independently,
+// a bucket could get more one-hour writes than writes.
+func (d division) share(t Tokens, buckets ...int) Tokens {
+	sum := func(n int64) *int64 {
+		p, s := d.parts(n), int64(0)
+		for _, b := range buckets {
+			s += p[b]
+		}
+		return &s
+	}
+	var out Tokens
+	for _, c := range []struct{ in, out **int64 }{
+		{&t.Input, &out.Input}, {&t.Output, &out.Output}, {&t.CacheWrite, &out.CacheWrite}, {&t.CacheRead, &out.CacheRead},
+	} {
+		if *c.in != nil {
+			*c.out = sum(**c.in)
+		}
+	}
+	if t.CacheWrite1h != nil { // and so CacheWrite too, and not less
+		out.CacheWrite1h = sum(*t.CacheWrite1h)
+		*out.CacheWrite = *sum(*t.CacheWrite - *t.CacheWrite1h) + *out.CacheWrite1h
+	}
+	return out
+}
+
 // apportion divides n into parts in proportion to weights, which are not
 // negative and not all zero, by the largest-remainder method: each part
 // is its quota rounded down, and what that leaves goes one each to the
@@ -778,38 +818,45 @@ type modelSum struct {
 	known [5]bool
 }
 
-// add adds part(c) for each count c that r reports.
-func (u *usageSum) add(r usageRow, part func(int64) int64) {
+// add adds the counts t knows to model's.
+func (u *usageSum) add(model string, t Tokens) {
 	if *u == nil {
 		*u = usageSum{}
 	}
-	m := (*u)[r.model]
+	m := (*u)[model]
 	if m == nil {
 		m = &modelSum{}
-		(*u)[r.model] = m
+		(*u)[model] = m
 	}
-	for i, c := range []*int64{r.Input, r.Output, r.CacheWrite, r.CacheWrite1h, r.CacheRead} {
+	m.add(t)
+}
+
+// add adds the counts t knows.
+func (m *modelSum) add(t Tokens) {
+	for i, c := range []*int64{t.Input, t.Output, t.CacheWrite, t.CacheWrite1h, t.CacheRead} {
 		if c != nil {
-			m.n[i] += part(*c)
+			m.n[i] += *c
 			m.known[i] = true
 		}
 	}
 }
 
-// whole is the part of a count that is all of it.
-func whole(n int64) int64 { return n }
+// tokens returns the sums, nil where no count was known.
+func (m *modelSum) tokens() Tokens {
+	var t Tokens
+	for i, p := range []**int64{&t.Input, &t.Output, &t.CacheWrite, &t.CacheWrite1h, &t.CacheRead} {
+		if m.known[i] {
+			*p = &m.n[i]
+		}
+	}
+	return t
+}
 
 // models returns the sums by model, sorted.
 func (u usageSum) models() []ModelUsage {
 	var out []ModelUsage
 	for model, m := range u {
-		mu := ModelUsage{Model: model}
-		for i, p := range []**int64{&mu.Input, &mu.Output, &mu.CacheWrite, &mu.CacheWrite1h, &mu.CacheRead} {
-			if m.known[i] {
-				*p = &m.n[i]
-			}
-		}
-		out = append(out, mu)
+		out = append(out, ModelUsage{Model: model, Tokens: m.tokens()})
 	}
 	slices.SortFunc(out, func(a, b ModelUsage) int { return strings.Compare(a.Model, b.Model) })
 	return out
@@ -887,7 +934,13 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 			u.Held += to.Sub(from)
 		}
 	}
+	prices, err := loadPrices(ctx, q.tx)
+	if err != nil {
+		return err
+	}
+	book := newPriceBook(prices)
 	var total, loose usageSum
+	var cost costSum
 	for i, r := range rows {
 		if i%ctxEvery == 0 {
 			if err := ctx.Err(); err != nil {
@@ -896,9 +949,10 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 		}
 		d := divide(r, bySession[r.key])
 		if q.f.Label == "" {
-			total.add(r, whole)
+			total.add(r.model, r.Tokens)
+			cost.add(book, r.model, r.to, r.Tokens)
 			if un := d.unheld(); d.weights[un] > 0 {
-				loose.add(r, func(n int64) int64 { return d.parts(n)[un] })
+				loose.add(r.model, d.share(r.Tokens, un))
 			}
 			u.Split = u.Split || d.split()
 			continue
@@ -912,16 +966,12 @@ func (q *digestQuery) usage(ctx context.Context, d *Digest) error {
 		if len(in) == 0 {
 			continue
 		}
-		total.add(r, func(n int64) int64 {
-			p, sum := d.parts(n), int64(0)
-			for _, i := range in {
-				sum += p[i]
-			}
-			return sum
-		})
+		part := d.share(r.Tokens, in...)
+		total.add(r.model, part)
+		cost.add(book, r.model, r.to, part)
 		u.Split = u.Split || d.positive() > len(in)
 	}
-	u.Models, u.Unattributed = total.models(), loose.models()
+	u.Models, u.Unattributed, u.Cost = total.models(), loose.models(), book.costOf(cost)
 	return nil
 }
 

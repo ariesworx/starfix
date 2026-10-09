@@ -61,6 +61,13 @@ var handlers = map[string]handler{
 	proto.OpAccept:   typed(accept),
 	proto.OpUsage:    typed(usage),
 	proto.OpClaims:   typed(claims),
+	proto.OpRemember: typed(remember),
+	proto.OpRecall:   typed(recall),
+	proto.OpForget:   typed(forget),
+	proto.OpPin:      typed(pin),
+	proto.OpPriceSet: typed(priceSet),
+	proto.OpPrices:   typed(prices),
+	proto.OpCost:     typed(cost),
 }
 
 // typed decodes args strictly into A and calls fn.
@@ -447,6 +454,7 @@ func start(ctx context.Context, s *Server, a store.Actor, in proto.StartArgs) (a
 		w := wireHandoff(*h, a)
 		out.Handoff = &w
 	}
+	out.Memories = s.issueMemories(ctx, a, is.ID)
 	return out, nil
 }
 

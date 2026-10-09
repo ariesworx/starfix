@@ -642,13 +642,14 @@ func TestRefusals(t *testing.T) {
 }
 
 func TestProtocolRangeRefusal(t *testing.T) {
-	w := newWorld(t, daemonOpts{protoMin: 4, protoMax: 5})
+	w := newWorld(t, daemonOpts{protoMin: proto.Proto + 1, protoMax: proto.Proto + 2})
 	alice := w.newUser("alice", "")
 	r := alice.run("v0.2.0", "ready")
 	if r.code != cli.ExitVersion {
 		t.Fatalf("exit %d, want %d\n%s", r.code, cli.ExitVersion, r.stderr)
 	}
-	want := "sfx: starfix speaks protocol 3; the server (v0.2.0) needs 4 to 5\nfix: upgrade this client: `sfx upgrade`\n"
+	want := fmt.Sprintf("sfx: starfix speaks protocol %d; the server (v0.2.0) needs %d to %d\n", proto.Proto, proto.Proto+1, proto.Proto+2) +
+		"fix: upgrade this client: `sfx upgrade`\n"
 	if r.stderr != want {
 		t.Fatalf("stderr %q\nwant   %q", r.stderr, want)
 	}

@@ -23,9 +23,7 @@ time.
    $ starfixd import-bd --dry-run bd.jsonl
    warning: type "spike" stored as task, labeled bd-type:spike (acme-7k2.2)
    fix: none needed; this is informational
-   warning: memory records are not imported yet (line 12)
-   fix: keep them in bd until starfix memory lands (design §13, stage 4)
-   would import 10 issues (10 created), 8 deps (8 created), 3 comments (3 created); 0 errors, 17 warnings
+   would import 10 issues (10 created), 8 deps (8 created), 3 comments (3 created), 1 memory (1 created); 0 errors, 16 warnings
    ```
 
 3. Import it:
@@ -68,6 +66,7 @@ warnings.
 | `blocks`, `conditional-blocks`, `waits-for`, `related`, `discovered-from`, `duplicates`, `supersedes` | The same dependency types |
 | `relates-to` | `related` |
 | Labels and comments | The same, with authors and times |
+| Memory records (bd's `kv.memory.*`) | [Memories](concepts.md#memory) in `project` scope, with the same keys, authored by the importing principal. A key starfix already holds is kept as it is, with a `stale` warning, because bd records no time to say which is newer |
 
 `export-bd` turns the `bd-type:` and `bd-status:` labels back into bd's
 types and statuses.
@@ -79,9 +78,8 @@ the affected IDs:
 
 - other dependency types (`replies-to`, `tracks` and the rest), and
   `external:` dependencies;
-- memory records, until starfix memory lands (stage 4);
 - fields starfix has no column for, such as `external_ref`,
-  `estimated_minutes` and `started_at`;
+  `estimated_minutes` and `started_at`, on an issue or a memory;
 - issues deleted in bd (tombstones), which are skipped;
 - labels starfix cannot store, such as one with a space;
 - control and bidirectional characters, which starfix refuses
@@ -89,7 +87,10 @@ the affected IDs:
   `text` warning naming the field, rather than failing the issue.
 
 A dangling reference, a parent cycle or an invalid record is reported with
-its IDs, and the rest of the file still imports.
+its IDs, and the rest of the file still imports. A memory whose key
+starfix cannot hold, or which looks like it holds a secret, is reported
+and not imported; the report names the kind of secret, never the text,
+and when the key itself looks like a secret it names only the line.
 
 ## Rerunning safely
 
@@ -99,7 +100,7 @@ its IDs, and the rest of the file still imports.
   someone has started anything but in progress with them (closed, open,
   blocked or assigned to someone else) ends their claim and tells their
   session, as `close` does. Their time on the issue stops there.
-- Labels merge. Dependencies and comments are never rewritten.
+- Labels merge. Dependencies, comments and memories are never rewritten.
 - Identical rows are left alone.
 
 ## Going back
@@ -108,7 +109,8 @@ its IDs, and the rest of the file still imports.
 for bd or for a later import. A handoff note exports as a plain comment,
 because bd has no comment kinds. An issue's account is not exported,
 because bd has no field for it. Importing the file again keeps each
-issue's account and reports the issue unchanged.
+issue's account and reports the issue unchanged. Memories are not
+exported: their scopes, tags and issue links have no form in bd.
 
 The full mapping, field by field, is in
 [internal/bdimport](../internal/bdimport/doc.go).

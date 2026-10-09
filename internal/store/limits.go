@@ -46,11 +46,39 @@ type Limits struct {
 	// the declared ones, drop the least recently recorded. It also bounds
 	// the commit paths one request records.
 	Paths int `yaml:"paths_per_issue"`
+	// MemoryBody caps a memory's body, in bytes; at most 65,535.
+	MemoryBody int `yaml:"memory_body"`
+	// MemoryTags caps the distinct tags on one memory.
+	MemoryTags int `yaml:"memory_tags"`
+	// MemoryTagLength caps one tag, in bytes; at most 255.
+	MemoryTagLength int `yaml:"memory_tag_length"`
+	// Memories caps the memories one principal has created in one scope;
+	// replacing one of them is no new memory.
+	Memories int `yaml:"memories_per_scope"`
+	// MemoryKeyLength caps a memory's key, in bytes; at most 255.
+	MemoryKeyLength int `yaml:"memory_key_length"`
+	// Prices caps the rows of the prices table: a model's rates from one
+	// effective time are one row, and replacing them is no new row; at
+	// most 10,000.
+	Prices int `yaml:"prices"`
 }
 
 // DefaultLimits are the limits a zero field takes.
 var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10,
-	UsageRecords: 500, UsagePerDay: 50000, Paths: proto.MaxPaths}
+	UsageRecords: 500, UsagePerDay: 50000, Paths: proto.MaxPaths,
+	MemoryBody: 4096, MemoryTags: 20, MemoryTagLength: 64, Memories: 1000, MemoryKeyLength: 128,
+	Prices: 1000}
+
+// Column sizes that bound the memory limits: a body is TEXT, and a key
+// and a tag VARCHAR(255).
+const (
+	maxMemoryBody = maxText
+	maxMemoryName = 255
+)
+
+// maxPrices bounds the prices limit: every cost report, show and digest
+// reads the whole prices table into memory.
+const maxPrices = 10000
 
 // withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
@@ -59,7 +87,10 @@ func (l Limits) withDefaults() Limits {
 		{&l.Deps, &DefaultLimits.Deps}, {&l.Sessions, &DefaultLimits.Sessions},
 		{&l.InboxUnread, &DefaultLimits.InboxUnread}, {&l.Notices, &DefaultLimits.Notices},
 		{&l.UsageRecords, &DefaultLimits.UsageRecords}, {&l.UsagePerDay, &DefaultLimits.UsagePerDay},
-		{&l.Paths, &DefaultLimits.Paths},
+		{&l.Paths, &DefaultLimits.Paths}, {&l.MemoryBody, &DefaultLimits.MemoryBody},
+		{&l.MemoryTags, &DefaultLimits.MemoryTags}, {&l.MemoryTagLength, &DefaultLimits.MemoryTagLength},
+		{&l.Memories, &DefaultLimits.Memories}, {&l.MemoryKeyLength, &DefaultLimits.MemoryKeyLength},
+		{&l.Prices, &DefaultLimits.Prices},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -68,8 +99,8 @@ func (l Limits) withDefaults() Limits {
 	return l
 }
 
-// Validate refuses a negative limit with ErrInvalid. Zero is valid: it
-// means the default.
+// Validate refuses, with ErrInvalid, a negative limit, and a memory limit
+// larger than its column holds. Zero is valid: it means the default.
 func (l Limits) Validate() error {
 	for _, f := range []struct {
 		name string
@@ -78,9 +109,22 @@ func (l Limits) Validate() error {
 		{"labels_per_issue", l.Labels}, {"acceptance_items", l.AcceptanceItems}, {"deps_per_issue", l.Deps},
 		{"sessions_per_principal", l.Sessions}, {"inbox_unread", l.InboxUnread}, {"notices_per_minute", l.Notices},
 		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay}, {"paths_per_issue", l.Paths},
+		{"memory_body", l.MemoryBody}, {"memory_tags", l.MemoryTags}, {"memory_tag_length", l.MemoryTagLength},
+		{"memories_per_scope", l.Memories}, {"memory_key_length", l.MemoryKeyLength}, {"prices", l.Prices},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%w: limit %s is %d; give a positive number, or leave it out for the default", ErrInvalid, f.name, f.v)
+		}
+	}
+	for _, f := range []struct {
+		name    string
+		v, most int
+	}{
+		{"memory_body", l.MemoryBody, maxMemoryBody}, {"memory_tag_length", l.MemoryTagLength, maxMemoryName},
+		{"memory_key_length", l.MemoryKeyLength, maxMemoryName}, {"prices", l.Prices, maxPrices},
+	} {
+		if f.v > f.most {
+			return fmt.Errorf("%w: limit %s is %d; it can be at most %d", ErrInvalid, f.name, f.v, f.most)
 		}
 	}
 	return nil

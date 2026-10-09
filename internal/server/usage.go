@@ -34,6 +34,7 @@ func (s *Server) wireIssueUsage(u store.IssueUsage) *proto.IssueUsage {
 	if out.Account == "" {
 		out.Account = s.cfg.Account
 	}
+	out.CostUSD, out.Unpriced = wireCost(u.UsageSummary)
 	return out
 }
 
@@ -42,8 +43,19 @@ func wireDigestUsage(u store.DigestUsage) *proto.DigestUsage {
 	if u.Held == 0 && len(u.Models) == 0 {
 		return nil
 	}
-	return &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed),
+	out := &proto.DigestUsage{HeldSeconds: seconds(u.Held), Models: wireModels(u.Models), Unattributed: wireModels(u.Unattributed),
 		Split: u.Split}
+	out.CostUSD, out.Unpriced = wireCost(u.UsageSummary)
+	return out
+}
+
+// wireCost is a summary's cost and whether some of it was unpriced, or
+// nothing when it has no tokens or the server has no prices.
+func wireCost(u store.UsageSummary) (string, bool) {
+	if len(u.Models) == 0 || u.Cost == nil {
+		return "", false
+	}
+	return proto.USD(u.Cost.Picodollars), u.Cost.Unpriced
 }
 
 // wireModels converts the store's sums, in model order. Past

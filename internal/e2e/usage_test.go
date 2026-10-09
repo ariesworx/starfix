@@ -96,6 +96,7 @@ func TestTokenUsage(t *testing.T) {
 	}
 
 	digest := alice.ok("digest")
+	// The server has no prices, so there is no cost line (cost_test.go sets some).
 	if !strings.Contains(digest, "\nheld 0m\ntokens claude-opus-4-1: 2.4k in, 600 out, 5k cache write (1k 1h), 90k cache read\n") {
 		t.Errorf("digest lacks the usage lines:\n%s", digest)
 	}

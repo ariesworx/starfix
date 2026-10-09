@@ -45,7 +45,8 @@ pinned](cli.md#the-host-key-is-pinned)).
 - **Admins may override.** An admin's change to an issue another
   principal holds is recorded as an `admin.override` event naming the
   holder, and a forced close records the open acceptance items in its
-  close event. Only the server's config file or environment lists admins
+  close event. Only admins set model prices ([Prices](server.md#prices)).
+  Only the server's config file or environment lists admins
   ([Admins](server.md#admins)).
 - **Every change is an event**, written in the same transaction as the
   change, with its principal, session and time. Clients cannot edit or
@@ -53,6 +54,17 @@ pinned](cli.md#the-host-key-is-pinned)).
 - **What others see.** `sfx who` shows every principal's machine names. A
   handoff's worktree path, a path on your machine, is shown only to your
   own principal.
+- **A user memory is its author's alone.** The server reads and writes a
+  `user`-scope memory only for its author's principal; to anyone else it
+  does not exist. Its events record its scope and revision but not its
+  key, body, tags or issue, so history, the digest and pushed events
+  carry none of it; the digest's event count still includes its changes.
+  Forgetting one clears its body, tags and issue but keeps its key and
+  revision in the row, so its revisions keep rising if it is remembered
+  again, until the row is deleted to make room under
+  `memories_per_scope`.
+  `team` and `project` memories, like issues, anyone may read and change
+  ([Memory](concepts.md#memory)).
 
 ## The Dolt account
 
@@ -155,8 +167,8 @@ conversation, so it is built to take only counts from them
 ## Limits
 
 Every principal is bounded: write rates, connections, sessions, inbox
-size, labels, dependencies, acceptance items and token usage records each
-have a cap, and text
+size, labels, dependencies, acceptance items, token usage records and
+memories each have a cap, and text
 fields and replies have fixed sizes. [Limits](server.md#limits) lists the
 caps, their settings and what a refusal past each one says.
 
@@ -165,6 +177,17 @@ caps, their settings and what a refusal past each one says.
 - No password goes on a command line, and a config file that holds one
   must be mode 0600 ([Settings](server.md#settings)).
 - `.starfix.yaml` holds no secrets, and is meant to be committed.
+- **Memories refuse secrets.** A memory that looks like it holds a
+  credential is refused in every scope, `user` included, and by
+  `import-bd`: private keys, AWS access key ids, GitHub, GitLab, Slack and
+  Stripe tokens, JSON web tokens, bearer tokens, passwords in a URL
+  (`scheme://user:password@host`) or after `mysql -p`, `password=`,
+  `pwd=` or `secret:` assignments with a real-looking value (a quoted
+  passphrase after `=` included), and long random tokens (32 or more
+  characters mixing cases and digits, at high entropy). The refusal names
+  the kind, never the text. The check (`internal/secretscan`) errs toward
+  letting text through, so it is a guard against mistakes, not a
+  guarantee: it misses a password that looks like a word.
 - The installer never uses sudo and never edits your shell files.
 
 ## Releases

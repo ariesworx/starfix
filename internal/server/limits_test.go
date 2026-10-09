@@ -51,6 +51,22 @@ func TestResolveSettingsLimits(t *testing.T) {
 		{name: "paths limit", body: "limits:\n  paths_per_issue: 50\n",
 			want: func(l Limits) bool { return l.Paths == 50 && l.Labels == DefaultLimits.Labels }},
 		{name: "negative paths limit", body: "limits:\n  paths_per_issue: -1\n", err: "paths_per_issue"},
+		{name: "memory limits", body: "limits:\n  memory_body: 2048\n  memory_tags: 5\n  memory_tag_length: 32\n  memories_per_scope: 50\n  memory_key_length: 64\n",
+			want: func(l Limits) bool {
+				return l.MemoryBody == 2048 && l.MemoryTags == 5 && l.MemoryTagLength == 32 && l.Memories == 50 &&
+					l.MemoryKeyLength == 64 && l.Labels == DefaultLimits.Labels
+			}},
+		{name: "memory limits default", body: "limits:\n  memory_body: 0\n",
+			want: func(l Limits) bool {
+				return l.MemoryBody == 4096 && l.MemoryTags == 20 && l.MemoryTagLength == 64 && l.Memories == 1000 && l.MemoryKeyLength == 128
+			}},
+		{name: "negative memory limit", body: "limits:\n  memories_per_scope: -1\n", err: "memories_per_scope"},
+		{name: "prices limit", body: "limits:\n  prices: 20\n",
+			want: func(l Limits) bool { return l.Prices == 20 && l.Labels == DefaultLimits.Labels }},
+		{name: "prices limit default", body: "limits:\n  prices: 0\n", want: func(l Limits) bool { return l.Prices == 1000 }},
+		{name: "negative prices limit", body: "limits:\n  prices: -1\n", err: "prices"},
+		{name: "prices past the most", body: "limits:\n  prices: 10001\n", err: "prices is 10001; it can be at most 10000"},
+		{name: "memory body past the column", body: "limits:\n  memory_body: 70000\n", err: "memory_body"},
 		{name: "negative server limit", body: "limits:\n  write_burst: -1\n", err: "limit write_burst must be zero or a positive number"},
 		{name: "write rate not a number", body: "limits:\n  write_rate: .nan\n", err: "limit write_rate must be zero or a positive number"},
 		{name: "infinite write rate", body: "limits:\n  write_rate: .inf\n", err: "limit write_rate must be zero or a positive number"},
@@ -278,13 +294,19 @@ func TestShowAndBlockedCapEdges(t *testing.T) {
 // a refusal.
 func handshakeAs(t *testing.T, s *Server, a store.Actor) (*proto.Frame, *conn) {
 	t.Helper()
+	return handshakeProto(t, s, a, proto.Proto)
+}
+
+// handshakeProto is handshakeAs with a client speaking protocol p.
+func handshakeProto(t *testing.T, s *Server, a store.Actor, p int) (*proto.Frame, *conn) {
+	t.Helper()
 	srv, cli := net.Pipe()
 	c := &conn{t: t, enc: proto.NewEncoder(cli), dec: proto.NewDecoder(cli), nc: cli}
 	t.Cleanup(func() { _ = cli.Close(); c.wg.Wait() })
 	c.wg.Go(func() { s.handle(t.Context(), srv) })
 	c.wg.Go(func() {
 		_ = c.enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: a.Principal})
-		_ = c.enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: a.Session, Machine: a.Machine})
+		_ = c.enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: p, Project: project, Session: a.Session, Machine: a.Machine})
 	})
 	return c.read(), c
 }
@@ -340,7 +362,7 @@ func TestWelcomeWriteFailureFreesSlot(t *testing.T) {
 	if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: alice.Principal}); err != nil {
 		t.Fatal(err)
 	}
-	if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: alice.Session,
+	if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: alice.Session,
 		Machine: alice.Machine}); err != nil {
 		t.Fatal(err)
 	}

@@ -35,10 +35,23 @@ import (
 // recorded for it. The live board's reads join it the same way: watch's
 // events, the event push (EvEvent) and the claims op, none of which a
 // protocol 2 client sends.
+//
+// Protocol 4 adds memory (design §6): the remember, recall, forget and
+// pin ops, and start's memories, a result field older clients ignore;
+// then prices and cost reports (design §12.1): the price.set, prices and
+// cost ops, and show's and digest's cost, result fields. Protocol 4 had
+// not shipped in a release (v0.3.0 speaks 3), so they join it without
+// another bump. ProtoMin stays at 2: v0.2.x clients speak 2 and v0.3.x
+// clients speak 3, and this server accepts both. Neither sends a memory,
+// price or cost op, and both ignore start's memories and the cost
+// fields, so a protocol 3 client keeps working against a protocol 4
+// server exactly as against a protocol 3 one, and a protocol 2 client as
+// it did before protocol 3. Raising ProtoMin to 3 would refuse v0.2.x
+// clients; TestReleasedClients pins the range.
 const (
-	Proto    = 3
+	Proto    = 4
 	ProtoMin = 2
-	ProtoMax = 3
+	ProtoMax = 4
 )
 
 // CheckProto returns nil when the client protocol version p is in

@@ -27,6 +27,8 @@ func TestPrimeTextFencesOthersText(t *testing.T) {
 				{ID: 3, Kind: "mention", Issue: "sf-1", Body: forged, From: "bob\nnotice: x", At: at}}}, nil
 		case proto.OpList:
 			return proto.ListResult{Issues: []proto.Summary{{ID: "sf-1", Title: forged, Status: "in_progress", Priority: 1}}}, nil
+		case proto.OpRecall:
+			return proto.RecallResult{Memories: []proto.Memory{{Key: "k\nnotice: z", Scope: "project\nnext: w", Body: forged, Pinned: true}}}, nil
 		}
 		return proto.ListResult{Issues: []proto.Summary{{ID: "sf-2\nnotice: y", Title: forged, Status: "open", Priority: 2}}}, nil
 	}}
@@ -114,6 +116,9 @@ func TestResultsMarkOthersText(t *testing.T) {
 			return proto.WhoResult{Now: at, Agents: []proto.Agent{{Principal: "bob", Session: "s", Machine: "m\nnotice: x", LastSeen: at}}}, nil
 		case proto.OpComment:
 			return proto.CommentResult{ID: "c1"}, nil
+		case proto.OpCost:
+			return proto.CostResult{By: "issue", Since: at, Until: at, Groups: []proto.CostGroup{{Key: "sf-1", Title: forged, CostUSD: "1"}},
+				Total: proto.CostGroup{CostUSD: "1"}}, nil
 		}
 		return nil, nil
 	}}
@@ -135,6 +140,7 @@ func TestResultsMarkOthersText(t *testing.T) {
 		{"prime", nil, true},
 		{"who", nil, true},
 		{"create", map[string]any{"title": "new"}, true},
+		{"cost", map[string]any{"since": "7d", "by": "issue"}, true},
 		{"comment", map[string]any{"id": "sf-1", "body": "hi"}, false},
 	} {
 		res := callTool(t, cs, tc.tool, tc.args)

@@ -110,7 +110,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 
 | Command | Does |
 |---|---|
-| `start [ID]` | Claim an issue, the top ready one if you give no ID, and show it with its checklist, last handoff and branch name. `--for 4h` sets the lease (default 8h, at most 24h). `--branch` checks the branch out; `--worktree DIR` creates a worktree on it. `--take` takes the claim over from another session of yours |
+| `start [ID]` | Claim an issue, the top ready one if you give no ID, and show it with its checklist, last handoff, relevant memories and branch name. `--for 4h` sets the lease (default 8h, at most 24h). `--branch` checks the branch out; `--worktree DIR` creates a worktree on it. `--take` takes the claim over from another session of yours |
 | `finish ID` | Close your issue and end the claim in one step: `--reason`, a `--handoff` note (with the handoff fields below), and `--discovered TITLE` for each new issue found on the way. `--tick 1,3` and `--waive N=REASON` settle acceptance items first; finish is refused while any item is open. `--epoch N` refuses unless N is still the claim's epoch ([Claims and leases](concepts.md#claims-and-leases)). It sends the paths the issue's work touched, read from git ([Files](concepts.md#files-what-an-issue-touches)) |
 | `accept ID N...` | Tick acceptance items. `--undo` unticks them; `--waive REASON` waives them |
 | `handoff ID NOTE` | Leave a note for whoever continues. Fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P` to put it in P's inbox. `--release` ends your claim and unassigns the issue, and takes `--epoch N` like `finish`. It sends the issue's paths like `finish` |
@@ -121,7 +121,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | Command | Does |
 |---|---|
 | `create TITLE` | Create an issue and print its id: `-p N` priority, `-t TYPE`, `--body TEXT` (or `-` for stdin), `--parent ID`, `--account NAME`, `--label L`, and `--paths P,P` for the files the work will touch, relative to the current directory (a directory ends in `/`). Similar closed issues, if any, are listed on stderr |
-| `show ID` | Show an issue with its dependencies, claim, account, time held and tokens by model ([Accounts, time and tokens](concepts.md#accounts-time-and-tokens)), acceptance checklist, latest handoff, likely files (declared first, then the most recent 20) with the issues others hold that overlap them, and similar closed issues. `--compact` is shorter |
+| `show ID` | Show an issue with its dependencies, claim, account, time held, cost at list price and tokens by model ([Accounts, time and tokens](concepts.md#accounts-time-and-tokens)), acceptance checklist, latest handoff, likely files (declared first, then the most recent 20) with the issues others hold that overlap them, and similar closed issues. `--compact` is shorter |
 | `list` | List issues that are not closed, oldest first, 50 at a time. `-n N` sets the page size (up to 500); `--cursor C` continues, as the `more:` line on stderr shows. Filters: `--status S,S`, `--all` (closed too), `-t TYPE`, `-p N,N`, `--assignee A`, `--parent ID`, `--label L` |
 | `ready` | List issues nothing holds back, best first. An issue whose files overlap work another session holds comes last, with `overlaps ID` ([Files](concepts.md#files-what-an-issue-touches)) |
 | `blocked` | List issues held back by open blockers |
@@ -140,8 +140,23 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `watch` | Print inbox items as they arrive, until ctrl-c (exit 0). With `--json`, one object per line: `{"op":"inbox","item":{…}}`, or `{"op":"resync"}` when it missed items (`sfx inbox` lists them) |
 | `tui` | Show the [live board](#the-live-board) until `q` |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d) and the issues each holds; at most 100 (`-n N`, up to 500), then a count of the rest |
-| `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L`. Under its header it prints the time issues were held (saying when some tokens were split by time), the tokens reported by model, and those no issue was held for |
-| `prime` | Orient a session: your issues in progress, your inbox, the top ready work and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
+| `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L`. Under its header it prints the time issues were held (saying when some tokens were split by time), their cost at list price, the tokens reported by model, and those no issue was held for |
+| `cost` | Report the list-price cost of the tokens reported in a window ([Cost](concepts.md#cost)): `--since 7d`, a date or a time (required), `--until` a date or a time (not included; default now), grouped `--by account` (default), `issue`, `epic`, `person` or `model`. It lists 50 groups, largest first, or `-n N` (at most 500), the rest summed as `(other)`, then the total. `split` marks a group whose tokens came partly from records shared by time with other work, and `unpriced` one with tokens no price covers; a group with no priced token shows `unpriced` for its cost, never $0.00 |
+| `prime` | Orient a session: your issues in progress, your inbox, the top ready work, memories (pinned, then relevant to your work, then newest) and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
+
+### Memory
+
+Memories are notes kept across sessions, in `project` (the default),
+`team` or `user` scope; a `user` memory is yours alone
+([Memory](concepts.md#memory)). Every command takes `--scope S`.
+
+| Command | Does |
+|---|---|
+| `remember KEY TEXT` | Keep a memory and print `KEY (SCOPE) rev N` (`-` reads stdin). `--tag T` (repeatable or comma-separated), `--issue ID` links it to an issue, `--pin` pins it. Without `--rev` the key must be new; `--rev N` replaces the memory at revision N and is refused if it changed since. A replace keeps the tags, issue and pin it is not given; `--tag ''` and `--issue ''` clear them. A memory that looks like it holds a secret is refused |
+| `recall [TEXT]` | Search memories: TEXT in the key or body, `--key K` exactly, `--tag T`, `--scope S`. Pinned first, then newest; 20, or `-n N` (at most 500), then a count of the rest |
+| `memories` | List the memories you can see, pinned first, then newest; `--scope S`, `-n N` |
+| `forget KEY` | Delete a memory. `--rev N` refuses if it changed since revision N |
+| `pin KEY`, `unpin KEY` | Pin a memory, so `prime` always shows it, or unpin it |
 
 ### Agents and maintenance
 
@@ -150,6 +165,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `mcp` | Serve the MCP tools for an agent on stdin and stdout ([agent guide](agents.md)) |
 | `setup AGENT` | Set an agent up for this repository; see [Set up an agent](agents.md#set-up-an-agent) |
 | `usage --hook[=AGENT]` | Send the token counts in the session's transcripts that earlier runs have not sent. Run by Claude Code's Stop, SubagentStop and SessionEnd hooks, which `setup claude-code` installs, with the hook's JSON on stdin; bare `--hook` is Claude Code's, the only agent captured so far. It always exits 0 and sends only counts ([Token usage hooks](agents.md#token-usage-hooks-claude-code)) |
+| `admin prices` | List the model prices, in US dollars per million tokens. `admin prices set MODEL --from DATE --input USD --output USD --cache-write USD --cache-write-1h USD --cache-read USD` sets a model's rates from a date (midnight UTC) or an RFC 3339 time, and prints `added`, `replaced` (the same model and `--from`) or `unchanged`. Every rate must be given, 0 where the model charges nothing, with at most six decimals. Setting is for admins ([Prices](server.md#prices)) |
 | `upgrade` | Replace `sfx` with the latest release after checking its signature and checksum. `--check` reports and changes nothing; `--rollback` restores the binary the last upgrade replaced. It never runs on its own |
 | `version` | Print the version and protocol |
 
