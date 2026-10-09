@@ -15,7 +15,7 @@ var testRates = proto.Rates{Input: 2_000_000, Output: 10_000_000, CacheWrite: 2_
 
 func TestDispatchPrices(t *testing.T) {
 	s := newServer(t)
-	set := proto.PriceSetArgs{Model: "opus", From: "2026-01-01", Rates: testRates}
+	set := proto.PriceSetArgs{Model: "example-large", From: "2026-01-01", Rates: testRates}
 	for _, want := range []string{"added", "unchanged"} {
 		if got := mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, set); got.Change != want {
 			t.Errorf("price.set by an admin = %q, want %q", got.Change, want)
@@ -26,9 +26,9 @@ func TestDispatchPrices(t *testing.T) {
 	mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, later)
 
 	got := mustCall[proto.PricesResult](t, s, alice, proto.OpPrices, proto.PricesArgs{})
-	if len(got.Prices) != 2 || got.Prices[0].From != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) || got.Prices[0].Rates != testRates ||
+	if len(got.Prices) != 2 || got.Prices[0].Model != "example-large" || got.Prices[0].From != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) || got.Prices[0].Rates != testRates ||
 		got.Prices[1].From != time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC) || got.Prices[1].Input != 1_000_000 || got.Prices[1].SetBy != "dana" {
-		t.Errorf("prices = %+v, want opus from 2026-01-01 and from 2026-06-01T09:30Z, set by dana", got.Prices)
+		t.Errorf("prices = %+v, want example-large from 2026-01-01 and from 2026-06-01T09:30Z, set by dana", got.Prices)
 	}
 
 	tests := []struct {
@@ -39,12 +39,12 @@ func TestDispatchPrices(t *testing.T) {
 		msg   string
 		fix   string
 	}{
-		{"not an admin", alice, `{"model":"opus","from":"2026-01-01"}`, proto.CodeForbidden,
+		{"not an admin", alice, `{"model":"example-large","from":"2026-01-01"}`, proto.CodeForbidden,
 			"prices set is for starfix admins", "ask a starfix admin"},
-		{"bad from", dana, `{"model":"opus","from":"soon"}`, proto.CodeInvalid, `from "soon"`, "sfx admin prices set -h"},
-		{"bad model", dana, `{"model":"o pus","from":"2026-01-01"}`, proto.CodeInvalid, "model", "sfx admin prices set -h"},
-		{"negative rate", dana, `{"model":"opus","from":"2026-01-01","output":-1}`, proto.CodeInvalid, "output rate", "sfx admin prices set -h"},
-		{"unknown field", dana, `{"model":"opus","from":"2026-01-01","currency":"EUR"}`, proto.CodeInvalid, "unknown field", proto.FixUpgrade},
+		{"bad from", dana, `{"model":"example-large","from":"soon"}`, proto.CodeInvalid, `from "soon"`, "sfx admin prices set -h"},
+		{"bad model", dana, `{"model":"example large","from":"2026-01-01"}`, proto.CodeInvalid, "model", "sfx admin prices set -h"},
+		{"negative rate", dana, `{"model":"example-large","from":"2026-01-01","output":-1}`, proto.CodeInvalid, "output rate", "sfx admin prices set -h"},
+		{"unknown field", dana, `{"model":"example-large","from":"2026-01-01","currency":"EUR"}`, proto.CodeInvalid, "unknown field", proto.FixUpgrade},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,8 +59,8 @@ func TestDispatchPrices(t *testing.T) {
 // Rule 18: past limits: prices a new price is refused, naming the limit.
 func TestDispatchPricesLimit(t *testing.T) {
 	s := newServerWith(t, Limits{Limits: store.Limits{Prices: 1}})
-	mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "opus", From: "2026-01-01", Rates: testRates})
-	_, perr := call[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "haiku", From: "2026-01-01", Rates: testRates})
+	mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "example-large", From: "2026-01-01", Rates: testRates})
+	_, perr := call[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "example-small", From: "2026-01-01", Rates: testRates})
 	if perr == nil || perr.Code != proto.CodeInvalid || !strings.Contains(perr.Message, "at most 1 prices") ||
 		!strings.Contains(perr.Fix, "prices under limits:") {
 		t.Fatalf("a second price with prices 1: %+v, want invalid naming the limit", perr)
@@ -82,12 +82,13 @@ func TestPricesAndCostAreReads(t *testing.T) {
 // decimal of US dollars.
 func TestDispatchCost(t *testing.T) {
 	s := newServer(t)
-	mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "opus", From: "2026-01-01", Rates: testRates})
+	mustCall[proto.PriceSetResult](t, s, dana, proto.OpPriceSet, proto.PriceSetArgs{Model: "example-large", From: "2026-01-01", Rates: testRates})
 	is := mustCall[proto.CreateResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work", Account: "acme"})
 	mustCall[proto.StartResult](t, s, alice, proto.OpStart, proto.StartArgs{ID: is.ID})
 	now := time.Now().UTC()
 	since := now.Add(-time.Minute).Format(time.RFC3339Nano)
 	rec := usageRec("r1", now, 1_234_567) // 1,234,567 in at 2 USD a million
+	rec.Model = "example-large"
 	odd := usageRec("r2", now, 10)
 	odd.Model = "mystery"
 	mustCall[proto.UsageResult](t, s, alice, proto.OpUsage, proto.UsageArgs{Records: []proto.UsageRecord{rec, odd}})

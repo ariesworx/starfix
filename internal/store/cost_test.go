@@ -32,8 +32,8 @@ func TestIssueUsageCost(t *testing.T) {
 	ctx := t.Context()
 	t0 := clk.now() // 12:00
 	is := mustCreate(t, s, NewIssue{Title: "work"})
-	mustSetPrice(t, s, "opus", day("2026-01-01"), rates(3_000_000, 15_000_000, 3_750_000, 6_000_000, 300_000))
-	mustSetPrice(t, s, "opus", t0.Add(5*time.Minute), rates(1_000_000, 2_000_000, 1_250_000, 2_000_000, 100_000))
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(3_000_000, 15_000_000, 3_750_000, 6_000_000, 300_000))
+	mustSetPrice(t, s, "example-large", t0.Add(5*time.Minute), rates(1_000_000, 2_000_000, 1_250_000, 2_000_000, 100_000))
 	mustSetPrice(t, s, "late", t0.Add(30*time.Minute), rates(1, 1, 1, 1, 1))
 
 	clk.add(time.Minute)
@@ -46,12 +46,12 @@ func TestIssueUsageCost(t *testing.T) {
 	}
 	mustAddUsage(t, s, alice,
 		// Old price: 100×3e6 + 10×15e6 + (40-10)×3.75e6 + 10×6e6 + 1000×3e5.
-		cacheRec("r1", "opus", t0.Add(2*time.Minute), 100, 10, 40, n64(10), 1000),
+		cacheRec("r1", "example-large", t0.Add(2*time.Minute), 100, 10, 40, n64(10), 1000),
 		// The new price takes effect at its time exactly: 1×1e6.
-		rec("r2", "opus", t0.Add(5*time.Minute), 1, 0),
+		rec("r2", "example-large", t0.Add(5*time.Minute), 1, 0),
 		// New price; an unknown one-hour part is a five-minute write:
 		// 50×1e6 + 5×2e6 + 20×1.25e6.
-		cacheRec("r3", "opus", t0.Add(6*time.Minute), 50, 5, 20, nil, 0),
+		cacheRec("r3", "example-large", t0.Add(6*time.Minute), 50, 5, 20, nil, 0),
 		rec("r4", "unknown-model", t0.Add(7*time.Minute), 7, 0),
 		rec("r5", "late", t0.Add(8*time.Minute), 5, 0), // priced only from later
 	)
@@ -66,7 +66,7 @@ func TestIssueUsageCost(t *testing.T) {
 	if _, _, err := s.StartIssue(ctx, bob, other.ID, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
-	mustAddUsage(t, s, bob, rec("b1", "opus", clk.now(), 2, 1))
+	mustAddUsage(t, s, bob, rec("b1", "example-large", clk.now(), 2, 1))
 	clk.add(time.Minute)
 	u = mustUsage(t, s, other.ID)
 	if got, want := picos(u.Cost), "4000000"; got != want || u.Cost.Unpriced {
@@ -79,7 +79,7 @@ func TestIssueUsageCost(t *testing.T) {
 func TestIssueUsageCostOfSplitRecord(t *testing.T) {
 	s, clk := clockStore(t)
 	ctx := t.Context()
-	mustSetPrice(t, s, "opus", day("2026-01-01"), rates(3_000_001, 15_000_007, 3_750_011, 6_000_013, 300_017))
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(3_000_001, 15_000_007, 3_750_011, 6_000_013, 300_017))
 	a, b := mustCreate(t, s, NewIssue{Title: "a"}), mustCreate(t, s, NewIssue{Title: "b"})
 	for _, id := range []IssueID{a.ID, b.ID} {
 		if _, _, err := s.StartIssue(ctx, alice, id, time.Hour, false); err != nil {
@@ -87,7 +87,7 @@ func TestIssueUsageCostOfSplitRecord(t *testing.T) {
 		}
 	}
 	clk.add(time.Minute)
-	r := cacheRec("shared", "opus", clk.now(), 1001, 333, 77, n64(31), 9999)
+	r := cacheRec("shared", "example-large", clk.now(), 1001, 333, 77, n64(31), 9999)
 	mustAddUsage(t, s, alice, r)
 	clk.add(time.Minute)
 
@@ -119,7 +119,7 @@ func TestDigestUsageCost(t *testing.T) {
 	s, clk := clockStore(t)
 	ctx := t.Context()
 	t0 := clk.now()
-	mustSetPrice(t, s, "claude-opus-4-1", day("2026-01-01"), rates(2_000_000, 0, 0, 0, 0))
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(2_000_000, 0, 0, 0, 0))
 	x := mustCreate(t, s, NewIssue{Title: "labeled", Labels: []string{"web"}})
 	if _, _, err := s.StartIssue(ctx, alice, x.ID, time.Hour, false); err != nil {
 		t.Fatal(err)
@@ -130,8 +130,8 @@ func TestDigestUsageCost(t *testing.T) {
 	}
 	clk.add(10 * time.Minute)
 	mustAddUsage(t, s, alice,
-		req("x1", t0.Add(5*time.Minute), 100, 0),
-		req("loose", t0.Add(15*time.Minute), 7, 0),
+		rec("x1", "example-large", t0.Add(5*time.Minute), 100, 0),
+		rec("loose", "example-large", t0.Add(15*time.Minute), 7, 0),
 		rec("odd", "unknown-model", t0.Add(16*time.Minute), 1, 0))
 	tests := []struct {
 		name     string
@@ -184,14 +184,14 @@ func groupsText(gs []CostGroup) string {
 // costFixture records, at 12:00 on the test clock, an epic E (account
 // acme) with a task T1, a task T2 (account beta) and a task T3 (no
 // account). alice holds T1 12:00-12:10 and T2 12:05-12:10, bob holds T3
-// 12:00-12:10. opus costs 1 USD per million in and 2 out; mystery has no
+// 12:00-12:10. example-large costs 1 USD per million in and 2 out; mystery has no
 // price. It returns the issues' ids by name.
 func costFixture(t *testing.T) (*Store, map[string]IssueID) {
 	t.Helper()
 	s, clk := clockStore(t)
 	ctx := t.Context()
 	t0 := clk.now()
-	mustSetPrice(t, s, "opus", day("2026-01-01"), rates(1_000_000, 2_000_000, 0, 0, 0))
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(1_000_000, 2_000_000, 0, 0, 0))
 	e := mustCreate(t, s, NewIssue{Title: "the epic", Type: TypeEpic, Account: "acme"})
 	t1 := mustCreate(t, s, NewIssue{Title: "one", ParentID: e.ID})
 	t2 := mustCreate(t, s, NewIssue{Title: "two", Account: "beta"})
@@ -218,15 +218,15 @@ func costFixture(t *testing.T) (*Store, map[string]IssueID) {
 	finish(bob, t3.ID)
 	clk.add(50 * time.Minute) // 13:00
 	mustAddUsage(t, s, alice,
-		rec("a0", "opus", t0.Add(-30*time.Minute), 999, 0), // before the window
-		rec("a1", "opus", t0.Add(2*time.Minute), 100, 10),  // T1
-		rec("a2", "opus", t0.Add(7*time.Minute), 12, 0),    // T1 and T2, 6 each
-		rec("a3", "opus", t0.Add(20*time.Minute), 1000, 0), // nothing held
-		rec("a4", "opus", t0.Add(time.Hour), 5, 0),         // at the window's end: out
+		rec("a0", "example-large", t0.Add(-30*time.Minute), 999, 0), // before the window
+		rec("a1", "example-large", t0.Add(2*time.Minute), 100, 10),  // T1
+		rec("a2", "example-large", t0.Add(7*time.Minute), 12, 0),    // T1 and T2, 6 each
+		rec("a3", "example-large", t0.Add(20*time.Minute), 1000, 0), // nothing held
+		rec("a4", "example-large", t0.Add(time.Hour), 5, 0),         // at the window's end: out
 	)
 	mustAddUsage(t, s, bob,
-		rec("b1", "mystery", t0.Add(3*time.Minute), 50, 0), // T3, unpriced
-		rec("b2", "opus", t0.Add(4*time.Minute), 7, 0),     // T3
+		rec("b1", "mystery", t0.Add(3*time.Minute), 50, 0),      // T3, unpriced
+		rec("b2", "example-large", t0.Add(4*time.Minute), 7, 0), // T3
 	)
 	return s, map[string]IssueID{"E": e.ID, "T1": t1.ID, "T2": t2.ID, "T3": t3.ID}
 }
@@ -247,7 +247,7 @@ func TestCostReport(t *testing.T) {
 		{CostByEpic, 0, "(unattributed) 1000/0 $1000000000; E the epic 106/10 $126000000 split; " +
 			"(no epic) 63/0 $13000000 split unpriced"},
 		{CostByPerson, 0, "alice 1112/10 $1132000000; bob 57/0 $7000000 unpriced"},
-		{CostByModel, 0, "opus 1119/10 $1139000000; mystery 50/0 $0 unpriced"},
+		{CostByModel, 0, "example-large 1119/10 $1139000000; mystery 50/0 $0 unpriced"},
 		// Past the limit, the rest is summed into one group, last.
 		{CostByIssue, 2, "(unattributed) 1000/0 $1000000000; T1 one 106/10 $126000000 split; " +
 			"(other) 63/0 $13000000 split unpriced"},
