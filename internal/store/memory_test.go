@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -448,6 +449,71 @@ func TestMemoryEvents(t *testing.T) {
 	}
 }
 
+// A keyed write of a user memory stores no more in the event log than
+// its events do: no column of any event holds its key, body or tags,
+// and a repeat still returns the first result's id and rev.
+func TestUserMemoryIdemResult(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	seq := lastSeq(t, s)
+	in := NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private body", Tags: []string{"secretive"}, IdempotencyKey: "u-1"}
+	m := mustRemember(t, s, alice, in)
+	edit := NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private edit", Rev: m.Rev, IdempotencyKey: "u-2"}
+	m2 := mustRemember(t, s, alice, edit)
+	gone, err := s.Forget(ctx, alice, ScopeUser, "private-key", 0, "u-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		do   func() (Memory, error)
+		want Memory
+	}{
+		{"create", func() (Memory, error) { return s.Remember(ctx, alice, in) }, m},
+		{"replace", func() (Memory, error) { return s.Remember(ctx, alice, edit) }, m2},
+		{"forget", func() (Memory, error) { return s.Forget(ctx, alice, ScopeUser, "private-key", 0, "u-3") }, gone},
+	} {
+		got, err := tc.do()
+		if err != nil || got.ID != tc.want.ID || got.Rev != tc.want.Rev || got.Scope != ScopeUser || got.Key != "private-key" {
+			t.Errorf("repeated %s = %+v, %v; want id %s, rev %d, scope and key", tc.name, got, err, tc.want.ID, tc.want.Rev)
+		}
+	}
+	rows, err := s.r.QueryContext(ctx, `SELECT * FROM events WHERE seq > ?`, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for rows.Next() {
+		n++
+		vals := make([]sql.RawBytes, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		for i, v := range vals {
+			for _, leak := range []string{"private-key", "private body", "private edit", "secretive"} {
+				if strings.Contains(string(v), leak) {
+					t.Errorf("event column %s holds %q: %s", cols[i], leak, v)
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("%d events after a keyed create, replace and forget, want 3", n)
+	}
+}
+
 func firstNonNull(a, b json.RawMessage) json.RawMessage {
 	if len(a) > 0 {
 		return a
@@ -480,8 +546,8 @@ func TestRememberIdempotent(t *testing.T) {
 	first := mustRemember(t, s, alice, in)
 	seq := lastSeq(t, s)
 	again, err := s.Remember(ctx, alice, in)
-	if err != nil || !memoryEqual(again, first) || lastSeq(t, s) != seq {
-		t.Fatalf("a repeated remember = %+v, %v, %d new events; want the first result and nothing written", again, err, lastSeq(t, s)-seq)
+	if want := (Memory{ID: first.ID, Scope: ScopeProject, Key: "k", Rev: first.Rev}); err != nil || !memoryEqual(again, want) || lastSeq(t, s) != seq {
+		t.Fatalf("a repeated remember = %+v, %v, %d new events; want %+v and nothing written", again, err, lastSeq(t, s)-seq, want)
 	}
 	var ie *IdemError
 	if _, err := s.Remember(ctx, alice, NewMemory{Key: "k2", Body: "b", IdempotencyKey: "mcp-1"}); !errors.As(err, &ie) {

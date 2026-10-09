@@ -420,7 +420,8 @@ func newMemoryID() string { return newCommentID() }
 // a [*MemoryLimitError], a Rev 0 on a key that exists or a stale Rev with
 // a [*MemoryConflictError], a Rev on a key that is not there, or a link to
 // an issue that is not, with ErrNotFound. With an IdempotencyKey, a
-// repeat returns the first result and writes nothing; a replace that
+// repeat returns the first result's id and rev, with in's scope and key,
+// and writes nothing; a replace that
 // changed nothing records no key, and a repeat of it runs again.
 func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory, error) {
 	if err := in.normalize(s.opts.Limits); err != nil {
@@ -428,7 +429,7 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 	}
 	var out Memory
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := replay(ctx, w, in.IdempotencyKey, "remember", in, &out); done || err != nil {
+		if done, err := replayMemory(ctx, w, in.IdempotencyKey, "remember", in, in.Scope, in.Key, &out); done || err != nil {
 			return err
 		}
 		cur, found, err := loadMemory(ctx, w.tx, in.Scope, w.actor.Principal, in.Key)
@@ -464,7 +465,7 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 		if err != nil {
 			return err
 		}
-		return w.settle(out)
+		return w.settle(memoryResult{out.ID, out.Rev})
 	})
 	if err != nil {
 		return Memory{}, err
@@ -611,7 +612,7 @@ type forgetArgs struct {
 // A key that is not there is ErrNotFound. The row stays as a tombstone,
 // its body, issue and tags cleared, so the key's revisions keep rising
 // when it is remembered again. With an idempotency key idem, a repeat
-// returns the first result.
+// returns the first result's id and rev, with scope and key.
 func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string, rev Rev, idem string) (Memory, error) {
 	if err := checkScope(scope); err != nil {
 		return Memory{}, err
@@ -628,7 +629,7 @@ func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string
 	}
 	var out Memory
 	err := s.write(ctx, actor, func(w *wtx) error {
-		if done, err := replay(ctx, w, idem, "forget", forgetArgs{scope, key, rev}, &out); done || err != nil {
+		if done, err := replayMemory(ctx, w, idem, "forget", forgetArgs{scope, key, rev}, scope, key, &out); done || err != nil {
 			return err
 		}
 		cur, found, err := loadMemory(ctx, w.tx, scope, w.actor.Principal, key)
@@ -652,12 +653,33 @@ func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string
 		if err := w.event(ctx, OpMemoryForget, MemoryTarget(cur.ID), memoryState(cur), nil); err != nil {
 			return err
 		}
-		return w.settle(out)
+		return w.settle(memoryResult{out.ID, out.Rev})
 	})
 	if err != nil {
 		return Memory{}, err
 	}
 	return out, nil
+}
+
+// memoryResult is what a keyed remember or forget records for a repeat:
+// the id and rev only. The whole memory would put a user memory's key,
+// body and tags in the event log, which its events leave out
+// (memoryState), and keep them there after it is forgotten.
+type memoryResult struct {
+	ID  string `json:"id"`
+	Rev Rev    `json:"rev"`
+}
+
+// replayMemory is replay for remember and forget. A repeat sets *out to
+// the first result's id and rev, with the scope and key of the request,
+// and leaves every other field zero.
+func replayMemory(ctx context.Context, w *wtx, key, op string, args any, scope Scope, memKey string, out *Memory) (bool, error) {
+	var r memoryResult
+	done, err := replay(ctx, w, key, op, args, &r)
+	if done {
+		*out = Memory{ID: r.ID, Scope: scope, Key: memKey, Rev: r.Rev}
+	}
+	return done, err
 }
 
 // PinMemory pins or unpins the actor's memory with key in scope (empty is
