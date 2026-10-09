@@ -251,7 +251,7 @@ func findRandom(s string) (int, bool) {
 		if len(tok) < minRandom || !mixed(tok) || entropy(tok) < minEntropy {
 			continue
 		}
-		if sshKeyType.MatchString(s[max(0, loc[0]-64):loc[0]]) || publicKey(tok) {
+		if sshKeyType.MatchString(s[max(0, loc[0]-64):loc[0]]) || publicKey(tok) || digest(s, loc[0], tok) {
 			continue
 		}
 		return loc[0], true
@@ -263,6 +263,22 @@ func findRandom(s string) (int, bool) {
 // Stripe publishable key, which looks random but is no secret.
 func publicKey(tok string) bool {
 	return strings.HasPrefix(tok, "pk_live_") || strings.HasPrefix(tok, "pk_test_")
+}
+
+// digest reports whether tok, at offset at in s, is a published hash: a
+// subresource integrity value (sha384-…) or a go.sum hash (h1:…).
+func digest(s string, at int, tok string) bool {
+	for _, p := range []string{"sha256-", "sha384-", "sha512-"} {
+		if strings.HasPrefix(tok, p) {
+			return true
+		}
+	}
+	return strings.HasSuffix(s[:at], "h1:") && (at == 3 || !isWordByte(s[at-4]))
+}
+
+// isWordByte reports whether c is an ASCII letter or digit.
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // mixed reports whether tok holds an uppercase letter, a lowercase letter

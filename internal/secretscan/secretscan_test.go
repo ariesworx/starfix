@@ -74,6 +74,8 @@ func TestFindSecrets(t *testing.T) {
 		{"long base62 token", "the value is " + fake(18, 40, base62), KindHighEntropy},
 		{"long base64 secret", "aws_secret " + fake(19, 40, base64), KindHighEntropy},
 		{"token in a sentence", "set X to " + fake(20, 48, base62) + " and restart", KindHighEntropy},
+		{"token after a word ending in h1", "path1:" + fake(30, 40, base62), KindHighEntropy},
+		{"token named like a hash", "mysha256-" + fake(31, 40, base62), KindHighEntropy},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,6 +146,11 @@ func TestFindNothing(t *testing.T) {
 		{"compass word", "compass=N0rth1234"},
 		{"mysql prompt", "mysql -u root -p app, then type the password"},
 		{"mysql password variable", "mysql -p$MYSQL_PWD app"},
+		{"sri sha384", `<script integrity="sha384-` + fake(25, 64, base64) + `">`},
+		{"sri sha512", "integrity sha512-" + fake(26, 86, base64) + "=="},
+		{"sri sha256", "sha256-" + fake(27, 43, base64) + "="},
+		{"go.sum line", "golang.org/x/term v0.30.0 h1:" + fake(28, 43, base64) + "="},
+		{"go.sum mod line", "golang.org/x/term v0.30.0/go.mod h1:" + fake(29, 43, base64) + "="},
 		{"empty", ""},
 	}
 	for _, tc := range tests {
