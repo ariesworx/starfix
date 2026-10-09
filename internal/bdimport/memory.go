@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/safetext"
+	"github.com/ariesworx/starfix/internal/secretscan"
 	"github.com/ariesworx/starfix/internal/store"
 )
 
@@ -22,6 +23,9 @@ type bdMemory struct {
 // bdMemoryPrefix starts the keys of bd's memories in its kv store. Its
 // export writes the key without it; a key that keeps it is read the same.
 const bdMemoryPrefix = "kv.memory."
+
+// fixSecret is the fix for a memory refused for a secret.
+const fixSecret = "remove the secret from the memory in bd, naming where it is kept instead, and import again"
 
 // memoryFields are the fields of a memory record Import reads.
 var memoryFields = map[string]bool{"_type": true, "key": true, "value": true}
@@ -39,6 +43,13 @@ func parseMemory(b []byte, raw map[string]json.RawMessage, n int, rep *Report) (
 	if err := json.Unmarshal(b, &bm); err != nil {
 		rep.Memories.Failed++
 		rep.fail("invalid", n, fixReexport, "line %d: memory record: %v", n, err)
+		return memLine{}, false
+	}
+	if f, ok := secretscan.Find(bm.Key); ok {
+		// The key is the secret, so nothing here or later may name it:
+		// the report gives the line alone.
+		rep.Memories.Failed++
+		rep.fail("secret", n, fixSecret, "line %d: a memory's key looks like it holds a secret (%s); not imported", n, f.Kind)
 		return memLine{}, false
 	}
 	key := safetext.CleanLine(strings.TrimPrefix(bm.Key, bdMemoryPrefix))
@@ -77,13 +88,13 @@ func (im *importer) memories(ctx context.Context, mems []memLine) error {
 		}
 		if se, ok := errors.AsType[*store.SecretError](err); ok {
 			im.rep.Memories.Failed++
-			fix := "remove the secret from the memory in bd, naming where it is kept instead, and import again"
 			if se.Field != "body" {
-				// The key is the secret: the report names the line alone.
-				im.rep.fail("secret", m.n, fix, "a memory's %s looks like it holds a secret (%s); not imported", se.Field, se.Kind)
+				// parseMemory screened the key; a field the store adds
+				// later is named, never its value.
+				im.rep.fail("secret", m.n, fixSecret, "line %d: a memory's %s looks like it holds a secret (%s); not imported", m.n, se.Field, se.Kind)
 				continue
 			}
-			im.rep.fail("secret", m.n, fix, "memory %s looks like it holds a secret (%s); not imported", key, se.Kind).IDs = []string{key}
+			im.rep.fail("secret", m.n, fixSecret, "memory %s looks like it holds a secret (%s); not imported", key, se.Kind).IDs = []string{key}
 			continue
 		}
 		if err != nil {

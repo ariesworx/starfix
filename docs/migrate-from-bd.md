@@ -89,7 +89,8 @@ the affected IDs:
 A dangling reference, a parent cycle or an invalid record is reported with
 its IDs, and the rest of the file still imports. A memory whose key
 starfix cannot hold, or which looks like it holds a secret, is reported
-and not imported; the report names the kind of secret, never the text.
+and not imported; the report names the kind of secret, never the text,
+and when the key itself looks like a secret it names only the line.
 
 ## Rerunning safely
 

@@ -92,6 +92,35 @@ func TestImportMemories(t *testing.T) {
 	}
 }
 
+// A key that looks like a secret is refused by its line alone, before
+// any other check could name it: not in a message, an id or a warning.
+func TestImportMemorySecretKey(t *testing.T) {
+	key := "gh" + "p_" + strings.Repeat("FakeToken0", 4) // an obviously fake GitHub token
+	lines := []string{
+		memoryLine(key, "x"),
+		`{"_type":"memory","key":` + quote("kv.memory."+key) + `}`,
+		`{"_type":"memory","key":` + quote(key) + `,"value":"x","created_at":"2026-01-01T00:00:00Z"}`,
+		memoryLine("ok", "y"),
+	}
+	rep := importBytes(t, newStore(t), []byte(strings.Join(lines, "\n")), false)
+	if rep.Memories != (Counts{Created: 1, Failed: 3}) {
+		t.Errorf("memories = %+v, want 1 created and 3 failed", rep.Memories)
+	}
+	want := []string{
+		"secret: line 1: a memory's key looks like it holds a secret (GitHub token); not imported []",
+		"secret: line 2: a memory's key looks like it holds a secret (GitHub token); not imported []",
+		"secret: line 3: a memory's key looks like it holds a secret (GitHub token); not imported []",
+	}
+	if got := append(problemKeys(rep, LevelError), problemKeys(rep, LevelWarning)...); !slices.Equal(got, want) {
+		t.Errorf("problems =\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	for _, p := range rep.Problems {
+		if strings.Contains(p.Message+p.Fix+strings.Join(p.IDs, " "), key[4:]) {
+			t.Errorf("problem echoes the key: %+v", p)
+		}
+	}
+}
+
 // A memory already in the store is kept, not overwritten, when the file
 // holds another value for its key: bd records no time to say which is
 // newer. A dry run counts the same and writes nothing.
