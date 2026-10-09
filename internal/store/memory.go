@@ -580,6 +580,7 @@ func (w *wtx) insertTags(ctx context.Context, id string, tags []string) error {
 
 // replaceMemory writes in over cur, which is at in's Rev, and records an
 // update; when nothing would change it returns cur and writes nothing.
+// updated_at moves only when the body, tags or issue change.
 func (w *wtx) replaceMemory(ctx context.Context, cur Memory, in NewMemory) (Memory, error) {
 	m := cur
 	m.Body = in.Body
@@ -593,10 +594,15 @@ func (w *wtx) replaceMemory(ctx context.Context, cur Memory, in NewMemory) (Memo
 		m.Pinned = *in.Pinned
 	}
 	tagsChanged := !slices.Equal(cur.Tags, m.Tags)
-	if m.Body == cur.Body && m.Issue == cur.Issue && m.Pinned == cur.Pinned && !tagsChanged {
+	contentChanged := m.Body != cur.Body || m.Issue != cur.Issue || tagsChanged
+	if !contentChanged && m.Pinned == cur.Pinned {
 		return cur, nil
 	}
-	m.UpdatedBy, m.UpdatedAt, m.Rev = w.actor.Principal, w.now, cur.Rev+1
+	m.UpdatedBy, m.Rev = w.actor.Principal, cur.Rev+1
+	if contentChanged {
+		// A pin alone leaves updated_at, as PinMemory does.
+		m.UpdatedAt = w.now
+	}
 	if err := w.updateMemory(ctx, cur, `UPDATE memories SET body = ?, issue_id = ?, pinned = ?, updated_by = ?, updated_at = ?,
   rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`, m.Body, nullStr(m.Issue), m.Pinned, m.UpdatedBy, m.UpdatedAt); err != nil {
 		return Memory{}, err

@@ -386,6 +386,27 @@ func TestForgetKeepsRevsMonotonic(t *testing.T) {
 	}
 }
 
+// A replace that changes only the pin leaves updated_at as PinMemory
+// does, so pinning through remember does not make a memory newest.
+func TestRememberPinOnlyKeepsUpdatedAt(t *testing.T) {
+	s, clk := clockStore(t)
+	m := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "one"})
+	clk.add(time.Hour)
+	p := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "one", Pinned: ptr(true), Rev: m.Rev})
+	if !p.Pinned || p.Rev != m.Rev+1 || p.UpdatedBy != "bob" || !p.UpdatedAt.Equal(m.UpdatedAt) {
+		t.Errorf("pin through remember = %+v, want pinned at rev %d by bob, updated at %v", p, m.Rev+1, m.UpdatedAt)
+	}
+	ms, _, err := s.Recall(t.Context(), alice, MemoryQuery{Key: "k"})
+	if err != nil || len(ms) != 1 || !memoryEqual(ms[0], p) {
+		t.Errorf("Recall = %+v, %v; want %+v", ms, err, p)
+	}
+	clk.add(time.Hour)
+	e := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Rev: p.Rev})
+	if !e.UpdatedAt.Equal(clk.now()) {
+		t.Errorf("an edit's updated_at = %v, want %v", e.UpdatedAt, clk.now())
+	}
+}
+
 func TestPinMemory(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
