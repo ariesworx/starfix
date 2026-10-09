@@ -35,6 +35,8 @@ func TestImportMemories(t *testing.T) {
 			Counts{Created: 1}, nil, map[string]string{"deploy-window": "Deploys go out on weekday mornings."}},
 		{"kv prefix", []string{memoryLine("kv.memory.build", "Run task check first.")},
 			Counts{Created: 1}, nil, map[string]string{"build": "Run task check first."}},
+		{"snake_case key", []string{memoryLine("kv.memory.release_day", "Tuesdays.")},
+			Counts{Created: 1}, nil, map[string]string{"release_day": "Tuesdays."}},
 		{"duplicate key, the last line wins", []string{memoryLine("k", "first"), memoryLine("kv.memory.k", "second")},
 			Counts{Created: 1}, []string{"duplicate: the same memory key appears on more than one line; the last one is used [k]"},
 			map[string]string{"k": "second"}},

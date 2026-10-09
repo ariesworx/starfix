@@ -653,6 +653,7 @@ func TestRememberValidates(t *testing.T) {
 		{"missing issue", NewMemory{Key: "k", Body: "x", Issue: ptr(IssueID("tst-zzzzzzzz"))}, ErrNotFound},
 		{"bad idempotency key", NewMemory{Key: "k", Body: "x", IdempotencyKey: "a b"}, ErrInvalid},
 		{"negative rev", NewMemory{Key: "k", Body: "x", Rev: -1}, ErrInvalid},
+		{"snake_case key", NewMemory{Key: "deploy_window", Body: "x"}, nil},
 		{"valid", NewMemory{Key: "Team.Style:go/tests@v2+x_y-z", Body: "x\n\ttabbed", Tags: ptr([]string{"go", "área"}), Issue: ptr(is.ID)}, nil},
 	}
 	for _, tc := range tests {
