@@ -235,7 +235,9 @@ memory has a revision, `rev`, that every change raises. `remember`
 without `--rev` creates the key and is refused if it exists, naming the
 stored revision. With `--rev N` it replaces revision N and is refused
 if someone changed the memory since, so two edits of the same key never
-overwrite each other silently. New keys never conflict. `forget --rev
+overwrite each other silently. A replace sets the body, and leaves the
+tags, the issue and the pin as they are unless it gives them; an empty
+`--tag ''` or `--issue ''` clears them. New keys never conflict. `forget --rev
 N` is refused the same way. Forgetting removes the memory but not its
 revision count: remembering its key again continues from the next
 revision, so a revision read before the forget never matches again.

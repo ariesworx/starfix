@@ -100,9 +100,12 @@ type NewMemory struct {
 	Scope Scope
 	Key   string
 	Body  string
-	Tags  []string
-	// Issue links the memory to an issue, which must exist.
-	Issue IssueID
+	// Tags sets the tags; nil leaves a stored memory's tags alone and
+	// gives a new one none, and an empty slice clears them.
+	Tags *[]string
+	// Issue links the memory to an issue, which must exist; nil leaves a
+	// stored memory's link alone and a new one unlinked, and "" unlinks.
+	Issue *IssueID
 	// Pinned sets the pin; nil leaves a stored memory's pin alone and
 	// leaves a new one unpinned.
 	Pinned *bool
@@ -234,20 +237,23 @@ func (in *NewMemory) normalize(lim Limits) error {
 	if err := checkText("body", in.Body, lim.MemoryBody, true); err != nil {
 		return err
 	}
-	tags := slices.Clone(in.Tags)
-	for _, tag := range tags {
-		if len(tag) > lim.MemoryTagLength || !memoryTagPattern.MatchString(tag) || !safetext.ValidLine(tag) {
-			return fmt.Errorf("%w: memory tag must be 1-%d bytes without spaces, commas, or control or bidirectional characters",
-				ErrInvalid, lim.MemoryTagLength)
+	if in.Tags != nil {
+		tags := slices.Clone(*in.Tags)
+		for _, tag := range tags {
+			if len(tag) > lim.MemoryTagLength || !memoryTagPattern.MatchString(tag) || !safetext.ValidLine(tag) {
+				return fmt.Errorf("%w: memory tag must be 1-%d bytes without spaces, commas, or control or bidirectional characters",
+					ErrInvalid, lim.MemoryTagLength)
+			}
 		}
+		slices.Sort(tags)
+		tags = slices.Compact(tags)
+		if len(tags) > lim.MemoryTags {
+			return fmt.Errorf("%w: a memory has at most %d tags, not %d", ErrInvalid, lim.MemoryTags, len(tags))
+		}
+		in.Tags = &tags
 	}
-	slices.Sort(tags)
-	in.Tags = slices.Compact(tags)
-	if len(in.Tags) > lim.MemoryTags {
-		return fmt.Errorf("%w: a memory has at most %d tags, not %d", ErrInvalid, lim.MemoryTags, len(in.Tags))
-	}
-	if in.Issue != "" {
-		if err := in.Issue.Validate(); err != nil {
+	if id := in.issue(); id != "" {
+		if err := id.Validate(); err != nil {
 			return err
 		}
 	}
@@ -260,11 +266,27 @@ func (in *NewMemory) normalize(lim Limits) error {
 	return in.secrets()
 }
 
+// tags is in's tags, or none when it leaves them alone.
+func (in *NewMemory) tags() []string {
+	if in.Tags == nil {
+		return nil
+	}
+	return *in.Tags
+}
+
+// issue is in's issue link, or none when it leaves it alone.
+func (in *NewMemory) issue() IssueID {
+	if in.Issue == nil {
+		return ""
+	}
+	return *in.Issue
+}
+
 // secrets refuses a memory whose key, body or tags look like they hold a
 // credential (design §6), with a [*SecretError].
 func (in *NewMemory) secrets() error {
 	fields := []struct{ name, v string }{{"key", in.Key}, {"body", in.Body}}
-	for _, tag := range in.Tags {
+	for _, tag := range in.tags() {
 		fields = append(fields, struct{ name, v string }{"tag", tag})
 	}
 	for _, f := range fields {
@@ -436,8 +458,8 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 		if err != nil {
 			return err
 		}
-		if in.Issue != "" {
-			if err := mustExist(ctx, w.tx, in.Issue); err != nil {
+		if id := in.issue(); id != "" {
+			if err := mustExist(ctx, w.tx, id); err != nil {
 				return err
 			}
 		}
@@ -497,7 +519,7 @@ func (w *wtx) insertMemory(ctx context.Context, in NewMemory, op Op, capped bool
 			return Memory{}, err
 		}
 	}
-	m := Memory{ID: newMemoryID(), Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.Tags, Issue: in.Issue,
+	m := Memory{ID: newMemoryID(), Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.tags(), Issue: in.issue(),
 		Pinned: in.Pinned != nil && *in.Pinned, Author: p, UpdatedBy: p, CreatedAt: w.now, UpdatedAt: w.now, Rev: 1}
 	if _, err := w.exec(ctx, `INSERT INTO memories
   (id, scope, owner, mem_key, body, issue_id, pinned, author, updated_by, created_at, updated_at, rev, write_id)
@@ -527,7 +549,7 @@ func (w *wtx) reviveMemory(ctx context.Context, cur Memory, in NewMemory, op Op,
 			return Memory{}, err
 		}
 	}
-	m := Memory{ID: cur.ID, Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.Tags, Issue: in.Issue,
+	m := Memory{ID: cur.ID, Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.tags(), Issue: in.issue(),
 		Pinned: in.Pinned != nil && *in.Pinned, Author: p, UpdatedBy: p, CreatedAt: w.now, UpdatedAt: w.now, Rev: cur.Rev + 1}
 	if err := w.updateMemory(ctx, cur, `UPDATE memories SET deleted = FALSE, body = ?, issue_id = ?, pinned = ?, author = ?,
   updated_by = ?, created_at = ?, updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`,
@@ -560,7 +582,13 @@ func (w *wtx) insertTags(ctx context.Context, id string, tags []string) error {
 // update; when nothing would change it returns cur and writes nothing.
 func (w *wtx) replaceMemory(ctx context.Context, cur Memory, in NewMemory) (Memory, error) {
 	m := cur
-	m.Body, m.Tags, m.Issue = in.Body, in.Tags, in.Issue
+	m.Body = in.Body
+	if in.Tags != nil {
+		m.Tags = *in.Tags
+	}
+	if in.Issue != nil {
+		m.Issue = *in.Issue
+	}
 	if in.Pinned != nil {
 		m.Pinned = *in.Pinned
 	}
@@ -956,7 +984,7 @@ func planMemory(cur Memory, found bool, in NewMemory) ImportOutcome {
 	switch {
 	case !found || cur.forgotten:
 		return ImportCreated
-	case cur.Body == in.Body && slices.Equal(cur.Tags, in.Tags) && cur.Issue == in.Issue:
+	case cur.Body == in.Body && slices.Equal(cur.Tags, in.tags()) && cur.Issue == in.issue():
 		return ImportUnchanged
 	}
 	return ImportStale
@@ -999,8 +1027,8 @@ func (s *Store) ImportMemory(ctx context.Context, actor Actor, in NewMemory) (Im
 		if out = planMemory(cur, found, in); out != ImportCreated {
 			return nil
 		}
-		if in.Issue != "" {
-			if err := mustExist(ctx, w.tx, in.Issue); err != nil {
+		if id := in.issue(); id != "" {
+			if err := mustExist(ctx, w.tx, id); err != nil {
 				return err
 			}
 		}

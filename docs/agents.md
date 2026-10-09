@@ -212,7 +212,9 @@ line.
   unless told otherwise; its description tells the agent to use `user`
   for the person's own preferences, asking if unsure, and `team` only
   when someone chose it ([Memory](concepts.md#memory)). It takes `rev`
-  to replace a memory, so a concurrent edit is refused rather than lost.
+  to replace a memory, so a concurrent edit is refused rather than lost;
+  a replace keeps the tags and issue it omits, and `[]` or `""` clears
+  them.
   `recall` searches by text, key, tag and scope; `forget` deletes. `prime`
   shows the pinned and relevant memories and `start` those relevant to
   its issue. Pinning is left to people (`sfx pin`). A memory that looks

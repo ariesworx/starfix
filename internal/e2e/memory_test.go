@@ -44,6 +44,9 @@ func TestMemoryCLI(t *testing.T) {
 	if wr.Rev != 2 {
 		t.Fatalf("replace: %+v", wr)
 	}
+	if got := bob.ok("recall", "--key", "deploy-window"); !strings.Contains(got, "  tags: ops, release; issue: "+id+"\n  Any weekday.\n") {
+		t.Fatalf("a replace without --tag or --issue dropped them:\n%s", got)
+	}
 	if r := alice.run("v0.2.0", "forget", "deploy-window", "--rev", "1"); r.code != cli.ExitFailure ||
 		!strings.Contains(r.stderr, "changed since rev 1 (now rev 2 by bob)") {
 		t.Fatalf("stale forget: exit %d\n%s", r.code, r.stderr)
@@ -65,6 +68,14 @@ func TestMemoryCLI(t *testing.T) {
 	if r := bob.run("v0.2.0", "pin", "deploy-window"); r.code != cli.ExitFailure ||
 		!strings.Contains(r.stderr, "fix: find the key with `sfx memories --scope project`") {
 		t.Fatalf("pin a forgotten memory: exit %d\n%s", r.code, r.stderr)
+	}
+
+	// Empty --tag and --issue clear what a replace would otherwise keep.
+	alice.ok("remember", "scratch", "x", "--tag", "ops", "--issue", id)
+	alice.ok("remember", "scratch", "y", "--tag", "", "--issue", "", "--rev", "1")
+	if got := alice.ok("recall", "--key", "scratch"); strings.Contains(got, "tags:") || strings.Contains(got, "issue:") ||
+		!strings.Contains(got, "  y\n") {
+		t.Fatalf("a replace with empty --tag and --issue kept them:\n%s", got)
 	}
 }
 

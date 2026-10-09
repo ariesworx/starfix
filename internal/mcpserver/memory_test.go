@@ -37,9 +37,32 @@ func TestRemember(t *testing.T) {
 	}
 	a, ok := f.calls[0].args.(proto.RememberArgs)
 	if !ok || f.calls[0].op != proto.OpRemember || a.Key != "deploy" || a.Body != "weekday mornings" || a.Scope != "user" ||
-		!slices.Equal(a.Tags, []string{"ops"}) || a.Issue != "sf-a1b2" || a.Rev != 1 || a.Pinned != nil ||
-		!strings.HasPrefix(a.Idem, "mcp-") {
+		a.Tags == nil || !slices.Equal(*a.Tags, []string{"ops"}) || a.Issue == nil || *a.Issue != "sf-a1b2" || a.Rev != 1 ||
+		a.Pinned != nil || !strings.HasPrefix(a.Idem, "mcp-") {
 		t.Errorf("remember sent %s %+v", f.calls[0].op, f.calls[0].args)
+	}
+	// Omitted tags and issue stay unset, so a replace keeps them; empty
+	// ones are sent, so a replace clears them.
+	for _, tc := range []struct {
+		name        string
+		args        map[string]any
+		tags, issue bool
+	}{
+		{"omitted", map[string]any{"key": "k", "body": "b", "rev": 2}, false, false},
+		{"empty", map[string]any{"key": "k", "body": "b", "rev": 2, "tags": []any{}, "issue": ""}, true, true},
+	} {
+		f.mu.Lock()
+		f.calls = nil
+		f.mu.Unlock()
+		if res := callTool(t, cs, "remember", tc.args); res.IsError {
+			t.Fatalf("remember %s: %s", tc.name, text(t, res))
+		}
+		a := f.calls[0].args.(proto.RememberArgs)
+		if (a.Tags != nil) != tc.tags || (a.Tags != nil && len(*a.Tags) != 0) ||
+			(a.Issue != nil) != tc.issue || (a.Issue != nil && *a.Issue != "") {
+			t.Errorf("remember with %s tags and issue sent tags %v, issue %v; want set %t, %t and empty",
+				tc.name, a.Tags, a.Issue, tc.tags, tc.issue)
+		}
 	}
 	for _, bad := range []map[string]any{
 		{"key": "k", "body": "b", "scope": "world"},

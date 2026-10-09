@@ -23,7 +23,7 @@ func TestDispatchMemory(t *testing.T) {
 	is := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work", Labels: []string{"api"}})
 	pin := true
 	w := mustCall[proto.WriteResult](t, s, alice, proto.OpRemember, proto.RememberArgs{Key: "deploy", Body: "weekday mornings",
-		Tags: []string{"ops"}, Issue: is.ID, Pinned: &pin})
+		Tags: ptr([]string{"ops"}), Issue: ptr(is.ID), Pinned: &pin})
 	if w.ID == "" || w.Rev != 1 {
 		t.Fatalf("remember = %+v, want an id at rev 1", w)
 	}
@@ -104,7 +104,7 @@ func TestDispatchMemoryRefusals(t *testing.T) {
 			"alice may hold at most 1 memories in project scope", proto.FixForgetSome, "memories_per_scope"},
 		{"bad scope", proto.OpRecall, proto.RecallArgs{Scope: "world"}, proto.CodeInvalid, "scope", "", "sfx recall -h"},
 		{"prime with a filter", proto.OpRecall, proto.RecallArgs{Prime: true, Tag: "x"}, proto.CodeInvalid, "prime", "", ""},
-		{"linked issue missing", proto.OpRemember, proto.RememberArgs{Key: "k3", Body: "x", Issue: "sf-zzzzzzzz"}, proto.CodeNotFound,
+		{"linked issue missing", proto.OpRemember, proto.RememberArgs{Key: "k3", Body: "x", Issue: ptr("sf-zzzzzzzz")}, proto.CodeNotFound,
 			"issue sf-zzzzzzzz not found", "", "sfx list"},
 	}
 	for _, tc := range tests {
@@ -128,10 +128,10 @@ func TestDispatchMemoriesInStartAndPrime(t *testing.T) {
 	is := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work", Labels: []string{"api"}})
 	other := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "other"})
 	for _, a := range []proto.RememberArgs{
-		{Key: "linked", Body: "about the work", Issue: is.ID},
-		{Key: "tagged", Body: "api notes", Tags: []string{"api"}},
-		{Key: "unrelated", Body: "about the other", Issue: other.ID},
-		{Scope: "user", Key: "bobs", Body: "bob's api notes", Tags: []string{"api"}},
+		{Key: "linked", Body: "about the work", Issue: ptr(is.ID)},
+		{Key: "tagged", Body: "api notes", Tags: ptr([]string{"api"})},
+		{Key: "unrelated", Body: "about the other", Issue: ptr(other.ID)},
+		{Scope: "user", Key: "bobs", Body: "bob's api notes", Tags: ptr([]string{"api"})},
 	} {
 		mustCall[proto.WriteResult](t, s, bob, proto.OpRemember, a)
 	}
@@ -167,7 +167,7 @@ func TestRecallIsARead(t *testing.T) {
 func TestProtocol3ClientStillServed(t *testing.T) {
 	s := newServer(t)
 	is := mustCall[proto.WriteResult](t, s, alice, proto.OpCreate, proto.CreateArgs{Title: "work"})
-	mustCall[proto.WriteResult](t, s, bob, proto.OpRemember, proto.RememberArgs{Key: "k", Body: "about it", Issue: is.ID})
+	mustCall[proto.WriteResult](t, s, bob, proto.OpRemember, proto.RememberArgs{Key: "k", Body: "about it", Issue: ptr(is.ID)})
 	w, c := handshakeProto(t, s, alice, 3)
 	if w.T != proto.FrameWelcome || w.Err != nil {
 		t.Fatalf("a protocol 3 hello = %+v, want a welcome", w)

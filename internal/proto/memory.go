@@ -16,17 +16,19 @@ const (
 // RememberArgs writes the memory Key in Scope. Rev 0 creates the key and
 // is refused with conflict when it exists; otherwise Rev is the stored
 // revision, which the write replaces, and a stale one is refused with
-// conflict. Pinned nil leaves the pin as it is (a new memory unpinned).
-// Idem makes a retry return the first result.
+// conflict. Tags, Issue and Pinned nil leave the stored value as it is
+// (a new memory has none, and is unpinned); an empty Tags clears the
+// tags and an empty Issue unlinks. Idem makes a retry return the first
+// result.
 type RememberArgs struct {
-	Scope  string   `json:"scope,omitempty"`
-	Key    string   `json:"key"`
-	Body   string   `json:"body"`
-	Tags   []string `json:"tags,omitempty"`
-	Issue  string   `json:"issue,omitempty"`
-	Pinned *bool    `json:"pinned,omitempty"`
-	Rev    int64    `json:"rev,omitempty"`
-	Idem   string   `json:"idem,omitempty"`
+	Scope  string    `json:"scope,omitempty"`
+	Key    string    `json:"key"`
+	Body   string    `json:"body"`
+	Tags   *[]string `json:"tags,omitempty"`
+	Issue  *string   `json:"issue,omitempty"`
+	Pinned *bool     `json:"pinned,omitempty"`
+	Rev    int64     `json:"rev,omitempty"`
+	Idem   string    `json:"idem,omitempty"`
 }
 
 // RecallArgs selects memories the caller can see; empty fields match

@@ -48,8 +48,8 @@ func cmdRemember(ctx context.Context, r *runner, args []string) error {
 	fs := r.newFlags("remember")
 	scope := scopeFlag(fs)
 	var tags listFlag
-	fs.Var(&tags, "tag", "tag it; repeat or separate with commas")
-	issue := fs.String("issue", "", "link it to an issue")
+	fs.Var(&tags, "tag", "tag it; repeat or separate with commas (empty clears)")
+	issue := fs.String("issue", "", "link it to an issue (empty unlinks)")
 	rev := fs.Int64("rev", 0, "replace the memory at this revision (default: create a new key)")
 	pin := fs.Bool("pin", false, "pin it, so prime always shows it")
 	pos, err := parse(fs, args, usage)
@@ -66,8 +66,15 @@ func cmdRemember(ctx context.Context, r *runner, args []string) error {
 	if err != nil {
 		return err
 	}
-	in := proto.RememberArgs{Scope: *scope, Key: pos[0], Body: body, Tags: tags, Issue: *issue, Rev: *rev,
-		Idem: proto.NewIdem("cli")}
+	in := proto.RememberArgs{Scope: *scope, Key: pos[0], Body: body, Rev: *rev, Idem: proto.NewIdem("cli")}
+	// A flag left out leaves a replaced memory's value as it is.
+	if set(fs, "tag") {
+		t := append([]string{}, tags...) // not nil: --tag '' sends [], which clears
+		in.Tags = &t
+	}
+	if set(fs, "issue") {
+		in.Issue = issue
+	}
 	if set(fs, "pin") {
 		in.Pinned = pin
 	}

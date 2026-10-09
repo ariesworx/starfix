@@ -46,7 +46,7 @@ func TestRememberCreatesARecord(t *testing.T) {
 	s, clk := clockStore(t)
 	is := mustCreate(t, s, NewIssue{Title: "work"})
 	m := mustRemember(t, s, alice, NewMemory{Key: "deploy-window", Body: "Deploys go out on weekday mornings.",
-		Tags: []string{"ops", "deploy", "ops"}, Issue: is.ID})
+		Tags: ptr([]string{"ops", "deploy", "ops"}), Issue: ptr(is.ID)})
 	want := Memory{ID: m.ID, Scope: ScopeProject, Key: "deploy-window", Body: "Deploys go out on weekday mornings.",
 		Tags: []string{"deploy", "ops"}, Issue: is.ID, Author: "alice", UpdatedBy: "alice",
 		CreatedAt: clk.now(), UpdatedAt: clk.now(), Rev: 1}
@@ -154,6 +154,30 @@ func TestRememberCompareAndSwap(t *testing.T) {
 	}
 }
 
+// A replace leaves what it omits as it is, as it does the pin: tags and
+// the issue link change only when it sets them.
+func TestRememberReplaceKeepsOmitted(t *testing.T) {
+	s := newStore(t)
+	is := mustCreate(t, s, NewIssue{Title: "work"})
+	m := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "one", Tags: ptr([]string{"ops"}), Issue: ptr(is.ID), Pinned: ptr(true)})
+	got := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Rev: m.Rev})
+	if got.Body != "two" || !slices.Equal(got.Tags, []string{"ops"}) || got.Issue != is.ID || !got.Pinned {
+		t.Errorf("replace of the body alone = %+v, want body two with tags [ops], issue %s and the pin kept", got, is.ID)
+	}
+	got = mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Tags: ptr([]string{"db"}), Rev: got.Rev})
+	if !slices.Equal(got.Tags, []string{"db"}) || got.Issue != is.ID || got.Rev != m.Rev+2 {
+		t.Errorf("replace of the tags = %+v, want tags [db], issue %s, rev %d", got, is.ID, m.Rev+2)
+	}
+	got = mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Tags: ptr([]string{}), Issue: ptr(IssueID("")), Rev: got.Rev})
+	if len(got.Tags) != 0 || got.Issue != "" || !got.Pinned {
+		t.Errorf("replace with no tags and no issue = %+v, want both cleared and the pin kept", got)
+	}
+	stored, _, err := s.Recall(t.Context(), alice, MemoryQuery{Key: "k"})
+	if err != nil || len(stored) != 1 || !memoryEqual(stored[0], got) {
+		t.Errorf("Recall = %+v, %v; want %+v", stored, err, got)
+	}
+}
+
 // Concurrent edits of one key from the same rev, in one store or two
 // overlapping transactions, have exactly one winner.
 func TestRememberConcurrentEditsConflict(t *testing.T) {
@@ -213,7 +237,7 @@ func TestRememberNewKeysMerge(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Go(func() { _, errs[0] = s1.Remember(t.Context(), alice, NewMemory{Key: fmt.Sprintf("a%d", i), Body: "x"}) })
 		wg.Go(func() {
-			_, errs[1] = s2.Remember(t.Context(), bob, NewMemory{Key: fmt.Sprintf("b%d", i), Body: "y", Tags: []string{"t"}})
+			_, errs[1] = s2.Remember(t.Context(), bob, NewMemory{Key: fmt.Sprintf("b%d", i), Body: "y", Tags: ptr([]string{"t"})})
 		})
 		wg.Wait()
 		for j, err := range errs {
@@ -235,7 +259,7 @@ func TestRecallSearchAndOrder(t *testing.T) {
 	ctx := t.Context()
 	rem := func(a Actor, scope Scope, key, body string, tags ...string) Memory {
 		clk.add(time.Minute)
-		return mustRemember(t, s, a, NewMemory{Scope: scope, Key: key, Body: body, Tags: tags})
+		return mustRemember(t, s, a, NewMemory{Scope: scope, Key: key, Body: body, Tags: ptr(tags)})
 	}
 	rem(alice, ScopeProject, "a-oldest", "Builds need Go 1.27", "build")
 	rem(bob, ScopeTeam, "b-pinned-later", "Reviews within a day", "process")
@@ -280,7 +304,7 @@ func TestRecallSearchAndOrder(t *testing.T) {
 func TestForgetMemory(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
-	m := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "one", Tags: []string{"t"}})
+	m := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "one", Tags: ptr([]string{"t"})})
 	m = mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Rev: m.Rev})
 	var mc *MemoryConflictError
 	if _, err := s.Forget(ctx, alice, ScopeProject, "k", 1, ""); !errors.As(err, &mc) || mc.Current != 2 {
@@ -395,7 +419,7 @@ func TestMemoryEvents(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 	seq := lastSeq(t, s)
-	shared := mustRemember(t, s, alice, NewMemory{Key: "shared-key", Body: "shared body", Tags: []string{"t"}})
+	shared := mustRemember(t, s, alice, NewMemory{Key: "shared-key", Body: "shared body", Tags: ptr([]string{"t"})})
 	shared = mustRemember(t, s, bob, NewMemory{Key: "shared-key", Body: "shared edit", Rev: shared.Rev})
 	if _, err := s.PinMemory(ctx, alice, ScopeProject, "shared-key", true); err != nil {
 		t.Fatal(err)
@@ -406,7 +430,7 @@ func TestMemoryEvents(t *testing.T) {
 	if _, err := s.Forget(ctx, alice, ScopeProject, "shared-key", 0, ""); err != nil {
 		t.Fatal(err)
 	}
-	private := mustRemember(t, s, alice, NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private body", Tags: []string{"secretive"}})
+	private := mustRemember(t, s, alice, NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private body", Tags: ptr([]string{"secretive"})})
 	private = mustRemember(t, s, alice, NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private edit", Rev: private.Rev})
 	if _, err := s.PinMemory(ctx, alice, ScopeUser, "private-key", true); err != nil {
 		t.Fatal(err)
@@ -456,7 +480,7 @@ func TestUserMemoryIdemResult(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 	seq := lastSeq(t, s)
-	in := NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private body", Tags: []string{"secretive"}, IdempotencyKey: "u-1"}
+	in := NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private body", Tags: ptr([]string{"secretive"}), IdempotencyKey: "u-1"}
 	m := mustRemember(t, s, alice, in)
 	edit := NewMemory{Scope: ScopeUser, Key: "private-key", Body: "private edit", Rev: m.Rev, IdempotencyKey: "u-2"}
 	m2 := mustRemember(t, s, alice, edit)
@@ -584,7 +608,7 @@ func TestRememberRefusesSecrets(t *testing.T) {
 		}{
 			{"body", NewMemory{Key: "aws", Body: "the deploy key is " + key}, secretscan.KindAWSAccessKey},
 			{"key", NewMemory{Key: key, Body: "x"}, secretscan.KindAWSAccessKey},
-			{"tag", NewMemory{Key: "aws", Body: "x", Tags: []string{key}}, secretscan.KindAWSAccessKey},
+			{"tag", NewMemory{Key: "aws", Body: "x", Tags: ptr([]string{key})}, secretscan.KindAWSAccessKey},
 			{"body", NewMemory{Key: "db", Body: "password=" + "hunter22"}, secretscan.KindAssignment},
 		} {
 			t.Run(string(scope)+" "+tc.field+" "+string(tc.kind), func(t *testing.T) {
@@ -621,15 +645,15 @@ func TestRememberValidates(t *testing.T) {
 		{"key with a newline", NewMemory{Key: "a\nb", Body: "x"}, ErrInvalid},
 		{"no body", NewMemory{Key: "k"}, ErrInvalid},
 		{"body with a control character", NewMemory{Key: "k", Body: "a\x1b[2Jb"}, ErrInvalid},
-		{"tag with a space", NewMemory{Key: "k", Body: "x", Tags: []string{"a b"}}, ErrInvalid},
-		{"tag with a comma", NewMemory{Key: "k", Body: "x", Tags: []string{"a,b"}}, ErrInvalid},
-		{"empty tag", NewMemory{Key: "k", Body: "x", Tags: []string{""}}, ErrInvalid},
+		{"tag with a space", NewMemory{Key: "k", Body: "x", Tags: ptr([]string{"a b"})}, ErrInvalid},
+		{"tag with a comma", NewMemory{Key: "k", Body: "x", Tags: ptr([]string{"a,b"})}, ErrInvalid},
+		{"empty tag", NewMemory{Key: "k", Body: "x", Tags: ptr([]string{""})}, ErrInvalid},
 		{"bad scope", NewMemory{Scope: "world", Key: "k", Body: "x"}, ErrInvalid},
-		{"bad issue id", NewMemory{Key: "k", Body: "x", Issue: "NOT AN ID"}, ErrInvalid},
-		{"missing issue", NewMemory{Key: "k", Body: "x", Issue: "tst-zzzzzzzz"}, ErrNotFound},
+		{"bad issue id", NewMemory{Key: "k", Body: "x", Issue: ptr(IssueID("NOT AN ID"))}, ErrInvalid},
+		{"missing issue", NewMemory{Key: "k", Body: "x", Issue: ptr(IssueID("tst-zzzzzzzz"))}, ErrNotFound},
 		{"bad idempotency key", NewMemory{Key: "k", Body: "x", IdempotencyKey: "a b"}, ErrInvalid},
 		{"negative rev", NewMemory{Key: "k", Body: "x", Rev: -1}, ErrInvalid},
-		{"valid", NewMemory{Key: "Team.Style:go/tests@v2+x_y-z", Body: "x\n\ttabbed", Tags: []string{"go", "área"}, Issue: is.ID}, nil},
+		{"valid", NewMemory{Key: "Team.Style:go/tests@v2+x_y-z", Body: "x\n\ttabbed", Tags: ptr([]string{"go", "área"}), Issue: ptr(is.ID)}, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -656,9 +680,9 @@ func TestMemoryLimits(t *testing.T) {
 	}{
 		{"body over", alice, NewMemory{Scope: ScopeTeam, Key: "k", Body: strings.Repeat("b", 11)}, "body must be 1-10 bytes"},
 		{"body at the cap", alice, NewMemory{Scope: ScopeTeam, Key: "k1", Body: strings.Repeat("b", 10)}, ""},
-		{"too many tags", alice, NewMemory{Scope: ScopeTeam, Key: "k2", Body: "x", Tags: []string{"a", "b", "c"}}, "at most 2 tags"},
-		{"repeated tags count once", bob, NewMemory{Key: "k3", Body: "x", Tags: []string{"a", "a", "b"}}, ""},
-		{"tag too long", bob, NewMemory{Key: "k4", Body: "x", Tags: []string{"abcde"}}, "tag must be 1-4 bytes"},
+		{"too many tags", alice, NewMemory{Scope: ScopeTeam, Key: "k2", Body: "x", Tags: ptr([]string{"a", "b", "c"})}, "at most 2 tags"},
+		{"repeated tags count once", bob, NewMemory{Key: "k3", Body: "x", Tags: ptr([]string{"a", "a", "b"})}, ""},
+		{"tag too long", bob, NewMemory{Key: "k4", Body: "x", Tags: ptr([]string{"abcde"})}, "tag must be 1-4 bytes"},
 		{"key too long", bob, NewMemory{Scope: ScopeUser, Key: "abcdef", Body: "x"}, "key must be 1-5"},
 		{"third in a scope", alice, NewMemory{Key: "k5", Body: "x"}, "at most 2 memories in project scope"},
 		{"another scope has room", alice, NewMemory{Scope: ScopeUser, Key: "k6", Body: "x"}, ""},
@@ -703,13 +727,13 @@ func rankWorld(t *testing.T) (s *Store, w, x Issue) {
 		in NewMemory
 	}{
 		{alice, NewMemory{Key: "zeta-old-rest", Body: "oldest, unrelated"}},
-		{alice, NewMemory{Key: "gamma-pinned-rel", Body: "pinned, tagged api", Tags: []string{"api"}, Pinned: ptr(true)}},
-		{bob, NewMemory{Key: "alpha-tag", Body: "tagged db", Tags: []string{"db", "misc"}}},
+		{alice, NewMemory{Key: "gamma-pinned-rel", Body: "pinned, tagged api", Tags: ptr([]string{"api"}), Pinned: ptr(true)}},
+		{bob, NewMemory{Key: "alpha-tag", Body: "tagged db", Tags: ptr([]string{"db", "misc"})}},
 		{bob, NewMemory{Scope: ScopeTeam, Key: "mid-pinned", Body: "pinned, unrelated", Pinned: ptr(true)}},
-		{bob, NewMemory{Key: "beta-link", Body: "linked to w", Issue: w.ID}},
-		{bob, NewMemory{Key: "omega-other", Body: "linked to x", Issue: x.ID, Tags: []string{"ui"}}},
-		{alice, NewMemory{Scope: ScopeUser, Key: "delta-mine", Body: "mine, tagged api", Tags: []string{"api"}}},
-		{bob, NewMemory{Scope: ScopeUser, Key: "bobs-own", Body: "bob's, tagged api", Tags: []string{"api"}}},
+		{bob, NewMemory{Key: "beta-link", Body: "linked to w", Issue: ptr(w.ID)}},
+		{bob, NewMemory{Key: "omega-other", Body: "linked to x", Issue: ptr(x.ID), Tags: ptr([]string{"ui"})}},
+		{alice, NewMemory{Scope: ScopeUser, Key: "delta-mine", Body: "mine, tagged api", Tags: ptr([]string{"api"})}},
+		{bob, NewMemory{Scope: ScopeUser, Key: "bobs-own", Body: "bob's, tagged api", Tags: ptr([]string{"api"})}},
 		{alice, NewMemory{Key: "kappa-new-rest", Body: "newest, unrelated"}},
 	} {
 		clk.add(time.Minute)

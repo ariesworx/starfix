@@ -151,7 +151,7 @@ Memories are notes kept across sessions, in `project` (the default),
 
 | Command | Does |
 |---|---|
-| `remember KEY TEXT` | Keep a memory and print `KEY (SCOPE) rev N` (`-` reads stdin). `--tag T` (repeatable or comma-separated), `--issue ID` links it to an issue, `--pin` pins it. Without `--rev` the key must be new; `--rev N` replaces the memory at revision N and is refused if it changed since. A memory that looks like it holds a secret is refused |
+| `remember KEY TEXT` | Keep a memory and print `KEY (SCOPE) rev N` (`-` reads stdin). `--tag T` (repeatable or comma-separated), `--issue ID` links it to an issue, `--pin` pins it. Without `--rev` the key must be new; `--rev N` replaces the memory at revision N and is refused if it changed since. A replace keeps the tags, issue and pin it is not given; `--tag ''` and `--issue ''` clear them. A memory that looks like it holds a secret is refused |
 | `recall [TEXT]` | Search memories: TEXT in the key or body, `--key K` exactly, `--tag T`, `--scope S`. Pinned first, then newest; 20, or `-n N` (at most 500), then a count of the rest |
 | `memories` | List the memories you can see, pinned first, then newest; `--scope S`, `-n N` |
 | `forget KEY` | Delete a memory. `--rev N` refuses if it changed since revision N |

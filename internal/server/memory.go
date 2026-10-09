@@ -15,12 +15,17 @@ import (
 const startMemories = 5
 
 func remember(ctx context.Context, s *Server, a store.Actor, in proto.RememberArgs) (any, *proto.Error) {
-	m, err := s.cfg.Store.Remember(ctx, a, store.NewMemory{
-		Scope: store.Scope(in.Scope), Key: in.Key, Body: in.Body, Tags: in.Tags, Issue: store.IssueID(in.Issue),
-		Pinned: in.Pinned, Rev: store.Rev(in.Rev), IdempotencyKey: in.Idem,
-	})
+	nm := store.NewMemory{Scope: store.Scope(in.Scope), Key: in.Key, Body: in.Body, Tags: in.Tags,
+		Pinned: in.Pinned, Rev: store.Rev(in.Rev), IdempotencyKey: in.Idem}
+	var issue string
+	if in.Issue != nil {
+		issue = *in.Issue
+		id := store.IssueID(issue)
+		nm.Issue = &id
+	}
+	m, err := s.cfg.Store.Remember(ctx, a, nm)
 	if err != nil {
-		return nil, s.memoryErr(ctx, proto.OpRemember, in.Issue, err)
+		return nil, s.memoryErr(ctx, proto.OpRemember, issue, err)
 	}
 	return proto.WriteResult{ID: m.ID, Rev: int64(m.Rev)}, nil
 }

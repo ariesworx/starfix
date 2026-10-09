@@ -20,7 +20,7 @@ type RememberIn struct {
 	Body  string   `json:"body"`
 	Scope string   `json:"scope,omitempty"`
 	Tags  []string `json:"tags,omitempty"`
-	Issue string   `json:"issue,omitempty"`
+	Issue *string  `json:"issue,omitempty" jsonschema:"empty unlinks"`
 	Rev   int64    `json:"rev,omitempty"`
 
 	idem string
@@ -105,8 +105,13 @@ func (s *Server) registerMemory() {
 	add(s, tool{name: "remember", desc: rememberDesc, ann: write, retry: true, enums: enums{"scope": scopes}},
 		func(ctx context.Context, c Conn, in RememberIn) (proto.WriteResult, error) {
 			var out proto.WriteResult
-			return out, c.Call(ctx, proto.OpRemember, proto.RememberArgs{Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.Tags,
-				Issue: in.Issue, Rev: in.Rev, Idem: in.idem}, &out)
+			a := proto.RememberArgs{Scope: in.Scope, Key: in.Key, Body: in.Body, Issue: in.Issue, Rev: in.Rev, Idem: in.idem}
+			// JSON decodes an absent tags as nil and [] as empty, so a
+			// replace that omits tags keeps them and [] clears them.
+			if in.Tags != nil {
+				a.Tags = &in.Tags
+			}
+			return out, c.Call(ctx, proto.OpRemember, a, &out)
 		})
 	add(s, tool{name: "recall", desc: "Search memories.", ann: readOnly, retry: true,
 		enums: enums{"scope": scopes}},
