@@ -111,7 +111,9 @@ func TestIssueUsageAcrossHandoffAndTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.add(5 * time.Minute) // nobody holds it
-	if _, _, err := s.StartIssue(ctx, bob, is.ID, 0, false); err != nil {
+	// bob's lease outlasts his 20m, as if he renewed: a lapsed lease
+	// would end his hold early (TestIssueUsageReleaseThenTake).
+	if _, _, err := s.StartIssue(ctx, bob, is.ID, time.Hour, false); err != nil {
 		t.Fatal(err)
 	}
 	clk.add(20 * time.Minute)
@@ -144,6 +146,99 @@ func TestIssueUsageAcrossHandoffAndTakeover(t *testing.T) {
 	checkUsage(t, "handed off", mustUsage(t, s, is.ID), 30*time.Minute, false, "opus 30/3/?/?/?")
 	// Still held by alice: time runs to now.
 	checkUsage(t, "taken over", mustUsage(t, s, two.ID), 10*time.Minute, false, "opus 7/7/?/?/?")
+}
+
+// A releasing handoff ends the hold where claim.release says: at the
+// release, or when the lease ran out if that came first, before the
+// handoff; another session's take then starts a hold of its own. Without
+// the release event the lapsed hold would run on to the handoff.
+func TestIssueUsageReleaseThenTake(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now()
+	live := mustCreate(t, s, NewIssue{Title: "released live"})
+	lapsed := mustCreate(t, s, NewIssue{Title: "released after its lease ran out"})
+	for _, id := range []IssueID{live.ID, lapsed.ID} {
+		if _, _, err := s.StartIssue(ctx, alice, id, MinLease, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.add(30 * time.Second)
+	if _, err := s.HandoffIssue(ctx, alice, live.ID, 1, HandoffNote{Note: "yours"}, true, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	clk.add(4*time.Minute + 30*time.Second) // alice's lease on lapsed ran out at t0+1m; nothing reaped it
+	if _, err := s.HandoffIssue(ctx, alice, lapsed.ID, 1, HandoffNote{Note: "yours, late"}, true, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	t1 := clk.now()
+	for _, id := range []IssueID{live.ID, lapsed.ID} {
+		if _, _, err := s.StartIssue(ctx, bob, id, 0, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.add(10 * time.Minute)
+	mustAddUsage(t, s, alice,
+		rec("in-lease", "opus", t0.Add(20*time.Second), 10, 2),       // both held: split
+		rec("past-lease", "opus", t0.Add(3*time.Minute), 1000, 1000), // nothing held
+	)
+	mustAddUsage(t, s, bob, rec("bob", "opus", t1.Add(time.Minute), 20, 2)) // both held: split
+
+	checkUsage(t, "released live", mustUsage(t, s, live.ID), 30*time.Second+10*time.Minute, true, "opus 15/2/?/?/?")
+	checkUsage(t, "released after its lease", mustUsage(t, s, lapsed.ID), MinLease+10*time.Minute, true, "opus 15/2/?/?/?")
+}
+
+// A hold whose lease lapsed, and which a later write ends before the
+// reaper runs, ends when the lease ran out, not at the write.
+func TestIssueUsageEndAfterLapse(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(t *testing.T, s *Store, id IssueID)
+	}{
+		{name: "the holder's close", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, err := s.CloseIssue(t.Context(), alice, id, 0, "done"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "the holder's finish", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, _, err := s.FinishIssue(t.Context(), alice, id, 1, Finish{Reason: "done"}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "another principal's close", end: func(t *testing.T, s *Store, id IssueID) {
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "another principal's update out of progress, then the holder's release", end: func(t *testing.T, s *Store, id IssueID) {
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Status: ptr(StatusBlocked)}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "parked"}, true, "", nil); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clk := clockStore(t)
+			t0 := clk.now()
+			is := mustCreate(t, s, NewIssue{Title: "work"})
+			if _, _, err := s.StartIssue(t.Context(), alice, is.ID, MinLease, false); err != nil {
+				t.Fatal(err)
+			}
+			clk.add(5 * time.Minute) // the lease ran out at t0+1m; nothing reaped it
+			tc.end(t, s, is.ID)
+			mustAddUsage(t, s, alice,
+				rec("in-lease", "opus", t0.Add(30*time.Second), 10, 1),
+				rec("past-lease", "opus", t0.Add(3*time.Minute), 1000, 1000))
+			checkUsage(t, tc.name, mustUsage(t, s, is.ID), MinLease, false, "opus 10/1/?/?/?")
+		})
+	}
 }
 
 func TestIssueUsageExpiry(t *testing.T) {
@@ -322,7 +417,9 @@ func TestDigestUsage(t *testing.T) {
 		clk.add(at(to).Sub(clk.now()))
 		var err error
 		if start {
-			_, _, err = s.StartIssue(ctx, a, id, time.Hour, false)
+			// A lease longer than any hold here, as if renewed: a lapsed
+			// lease would end a hold before its finish.
+			_, _, err = s.StartIssue(ctx, a, id, 3*time.Hour, false)
 		} else {
 			_, _, err = s.FinishIssue(ctx, a, id, 0, Finish{})
 		}

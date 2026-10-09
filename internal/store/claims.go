@@ -49,10 +49,16 @@ type Claim struct {
 }
 
 // Event operations for claims. Renewals are not recorded: an agent renews
-// every minute, and the log would be mostly renewals.
+// every minute, and the log would be mostly renewals. Every other change
+// of holder is: claim.take names the claim it replaced, if any;
+// claim.expire is the reaper ending a lapsed claim; claim.release is any
+// other end, by a releasing handoff, a close or finish, or an import, and
+// precedes the change that caused it. claim.expire and claim.release
+// name the claim they end in their before state.
 const (
-	OpClaimTake   Op = "claim.take"
-	OpClaimExpire Op = "claim.expire"
+	OpClaimTake    Op = "claim.take"
+	OpClaimExpire  Op = "claim.expire"
+	OpClaimRelease Op = "claim.release"
 )
 
 // ReaperActor is who the reaper's changes are recorded as.
@@ -131,13 +137,28 @@ func writeClaim(ctx context.Context, w *wtx, c claimRow) error {
 }
 
 // releaseClaim drops the holder of an active or expired claim, keeping the
-// epoch. It writes nothing when there is no holder.
+// epoch. It writes nothing when there is no holder. The caller records
+// the end: the reaper as claim.expire, everyone else through endClaim.
 func releaseClaim(ctx context.Context, w *wtx, c claimRow) error {
 	if !c.exists || c.Holder.Principal == "" {
 		return nil
 	}
 	c.Holder = Actor{}
 	return writeClaim(ctx, w, c)
+}
+
+// endClaim releases c's holder, live or lapsed, and records claim.release
+// naming the claim it ends, so that no claim ends without an event of its
+// own. It records nothing when c has no holder.
+func endClaim(ctx context.Context, w *wtx, c claimRow) error {
+	if !c.exists || c.Holder.Principal == "" {
+		return nil
+	}
+	if err := releaseClaim(ctx, w, c); err != nil {
+		return err
+	}
+	return w.event(ctx, OpClaimRelease, string(c.Issue),
+		map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil)
 }
 
 // checkLease refuses a lease outside [MinLease, most]; most is

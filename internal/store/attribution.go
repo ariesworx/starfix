@@ -25,14 +25,17 @@ import (
 //     ends the hold at the take;
 //   - claim.expire, whose before state holds the lease's expiry, when
 //     the hold really ended;
-//   - issue.close (close and finish end the claim);
-//   - issue.update or issue.import that moves the issue out of
-//     in_progress. A releasing handoff does that: a claimed issue is
-//     always in_progress, because start sets it and update cannot change
-//     it while the claim is live;
-//   - issue.import whose after state has claim_released: an import that
-//     reassigned the issue, or moved it out of in_progress, ended the
-//     claim, at its lease's expiry if that came first.
+//   - claim.release (a releasing handoff, a close or finish, or an
+//     import that took the issue from its holder), whose before state
+//     also holds the lease's expiry, so a hold released after its lease
+//     ran out ends at the expiry;
+//   - for logs written before claim.release existed: issue.close (close
+//     and finish end the claim); issue.update or issue.import that moves
+//     the issue out of in_progress, as a releasing handoff of an issue in
+//     progress did; and issue.import whose after state has
+//     claim_released, at its lease's expiry if that came first. In a log
+//     with claim.release these follow it and find the hold already
+//     ended.
 //
 // A hold still open ends now, or when its lease ran out if the reaper has
 // not yet noticed. A request record goes to the issues its session held
@@ -181,7 +184,7 @@ func (s *Store) IssueUsage(ctx context.Context, id IssueID) (IssueUsage, error) 
 }
 
 // claimEventOps are the events that open or may end a claim.
-var claimEventOps = []Op{OpClaimTake, OpClaimExpire, OpIssueClose, OpIssueUpdate, OpIssueImport}
+var claimEventOps = []Op{OpClaimTake, OpClaimExpire, OpClaimRelease, OpIssueClose, OpIssueUpdate, OpIssueImport}
 
 // loadHolds reconstructs the holds on issues from their claim events, as
 // of now, sorted by issue and then start.
@@ -254,7 +257,7 @@ func loadHoldsOf(ctx context.Context, q querier, issues []IssueID, now time.Time
 			_ = json.Unmarshal(e.Before, &b) // none before token capture: the take ends the hold
 			end(id, lapsedAt(e.At, b.ExpiresAt))
 			open[id] = &hold{issue: id, key: sessionKey{e.Actor.Principal, e.Actor.Session}, start: e.At}
-		case OpClaimExpire:
+		case OpClaimExpire, OpClaimRelease:
 			var b struct {
 				ExpiresAt time.Time `json:"expires_at"`
 			}

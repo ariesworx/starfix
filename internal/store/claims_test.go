@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -241,5 +242,156 @@ func TestUnclaimedInProgressHoldsNothing(t *testing.T) {
 	}
 	if got, c, err := s.StartIssue(ctx, bob, is.ID, 0, false); err != nil || c.Epoch != 1 || got.Assignee != "bob" {
 		t.Fatalf("bob starts it: %+v %+v, %v", got, c, err)
+	}
+}
+
+// Every way a claim ends is in the event log as an event of its own,
+// naming the claim it ends, ahead of the change that ended it: the event
+// log is the truth (AGENTS.md rule 7), and a release that only a later
+// state implies cannot be told from no release.
+func TestClaimEndsAreRecorded(t *testing.T) {
+	tests := []struct {
+		name string
+		// end ends alice's claim on id, taken at epoch 1, as by.
+		end func(t *testing.T, s *Store, clk *clock, id IssueID) Actor
+		// ends is false for a change that ends no claim.
+		ends bool
+		// unclaimed skips alice's start, for an issue never claimed.
+		unclaimed bool
+	}{
+		{name: "a close by an admin", ends: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, err := s.CloseIssue(t.Context(), dana, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+			return dana
+		}},
+		{name: "a finish", ends: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, _, err := s.FinishIssue(t.Context(), alice, id, 1, Finish{Reason: "done"}); err != nil {
+				t.Fatal(err)
+			}
+			return alice
+		}},
+		{name: "a releasing handoff", ends: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "over to you"}, true, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			return alice
+		}},
+		{name: "an update moving the issue out of progress after the lease lapsed", ends: true, end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			// Before the reaper ran, bob moved the issue out of progress,
+			// which a lapsed claim does not stop; the update ends the
+			// claim, and alice's later release finds nothing to end.
+			clk.add(DefaultLease + time.Minute)
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Status: ptr(StatusBlocked), Assignee: ptr("")}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "parked"}, true, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "an update reassigning the issue after the lease lapsed", ends: true, end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Assignee: ptr("bob")}); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "an update of other fields after the lease lapsed", end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			is, err := s.GetIssue(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.UpdateIssue(t.Context(), bob, id, is.Rev, IssuePatch{Title: ptr("renamed")}); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "a close after the reaper's claim.expire", end: func(t *testing.T, s *Store, clk *clock, id IssueID) Actor {
+			clk.add(DefaultLease + time.Minute)
+			if _, err := s.ReapClaims(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "a close of an issue never claimed", unclaimed: true, end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, err := s.CloseIssue(t.Context(), bob, id, 0, "dup"); err != nil {
+				t.Fatal(err)
+			}
+			return bob
+		}},
+		{name: "a handoff that keeps the claim", end: func(t *testing.T, s *Store, _ *clock, id IssueID) Actor {
+			if _, err := s.HandoffIssue(t.Context(), alice, id, 1, HandoffNote{Note: "progress"}, false, "", nil); err != nil {
+				t.Fatal(err)
+			}
+			return alice
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clk := clockStore(t)
+			ctx := t.Context()
+			is := mustCreate(t, s, NewIssue{Title: "work"})
+			var c Claim
+			if !tc.unclaimed {
+				var err error
+				if _, c, err = s.StartIssue(ctx, alice, is.ID, 0, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			by := tc.end(t, s, clk, is.ID)
+			evs, err := s.History(ctx, is.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var releases []Event
+			for _, e := range evs {
+				if e.Op == OpClaimRelease {
+					releases = append(releases, e)
+				}
+			}
+			if !tc.ends {
+				if len(releases) > 0 {
+					t.Errorf("History(%s) has %d claim.release events, want none", is.ID, len(releases))
+				}
+				return
+			}
+			if len(releases) != 1 {
+				t.Fatalf("History(%s) has %d claim.release events, want 1: %+v", is.ID, len(releases), evs)
+			}
+			r := releases[0]
+			var before struct {
+				Holder    Actor     `json:"holder"`
+				Epoch     int64     `json:"epoch"`
+				ExpiresAt time.Time `json:"expires_at"`
+			}
+			if err := json.Unmarshal(r.Before, &before); err != nil {
+				t.Fatalf("claim.release before state %s: %v", r.Before, err)
+			}
+			if r.Actor != by || before.Holder != alice || before.Epoch != 1 || !before.ExpiresAt.Equal(c.ExpiresAt) || len(r.After) != 0 {
+				t.Errorf("claim.release = by %+v, before %s, after %s; want by %+v, naming alice's claim at epoch 1 to %s",
+					r.Actor, r.Before, r.After, by, c.ExpiresAt)
+			}
+			// The change that ended the claim follows it, in the same
+			// transaction.
+			for _, e := range evs {
+				if e.Seq > r.Seq && e.At.Equal(r.At) && e.Actor == r.Actor {
+					return
+				}
+			}
+			t.Errorf("no event of the same write follows claim.release (seq %d): %+v", r.Seq, evs)
+		})
 	}
 }

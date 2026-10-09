@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -88,6 +89,13 @@ type world struct {
 	// delivered: the connection drops after the server has answered
 	// (dropReplyTo).
 	dropOp string
+
+	// opts are the daemon's options, kept so restartDaemon starts its
+	// successor alike; daemonMu guards stopDaemon, which stops the
+	// daemon running now.
+	opts       daemonOpts
+	daemonMu   sync.Mutex
+	stopDaemon func()
 }
 
 // daemonOpts configures a world's daemon; the zero value takes the
@@ -106,6 +114,14 @@ type daemonOpts struct {
 	admins []string
 	// limits are the daemon's limits, the store's included.
 	limits server.Limits
+	// reap, if set, is how often the reaper runs, on the store's clock
+	// even when now sets it. Unset, it runs every 30s, or never with now.
+	reap time.Duration
+	// commit, if set, is how often the store makes a Dolt commit; unset,
+	// it never does.
+	commit time.Duration
+	// logger, if set, receives the daemon's and the store's log.
+	logger *slog.Logger
 }
 
 // newWorld starts a daemon on a new database, unless o.noDaemon, and the
@@ -126,11 +142,14 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
-	w := &world{t: t, socket: filepath.Join(base, "run", "starfixd.sock"), keys: map[string]string{}, conns: map[net.Conn]struct{}{}}
+	w := &world{t: t, socket: filepath.Join(base, "run", "starfixd.sock"), keys: map[string]string{},
+		conns: map[net.Conn]struct{}{}, opts: o}
 
-	var reap time.Duration
-	if o.now != nil {
-		w.fixedClock, reap = true, -1
+	if o.now != nil && o.reap == 0 {
+		w.fixedClock, w.opts.reap = true, -1
+	}
+	if o.commit == 0 {
+		w.opts.commit = -1
 	}
 	if !o.noDaemon {
 		dsn, err := dolt.NewDatabase(ctx)
@@ -138,32 +157,66 @@ func newWorld(t *testing.T, o daemonOpts) *world {
 			t.Fatal(err)
 		}
 		w.dsn = dsn
-		st, err := store.Open(ctx, dsn, store.Options{Prefix: "sf", CommitInterval: -1, Now: o.now, Admins: o.admins,
-			Limits: o.limits.Limits})
-		if err != nil {
+		if err := w.startDaemon(); err != nil {
 			t.Fatal(err)
 		}
-		srv, err := server.New(server.Config{Store: st, Project: project, Version: "v0.2.0",
-			ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest, ReapInterval: reap, Limits: o.limits})
-		if err != nil {
-			t.Fatal(err)
-		}
-		l, err := server.Listen(w.socket)
-		if err != nil {
-			t.Fatal(err)
-		}
-		done := make(chan error, 1)
-		go func() { done <- srv.Serve(ctx, l) }()
 		t.Cleanup(func() {
-			cancel()
-			if err := <-done; err != nil {
-				t.Errorf("serve: %v", err)
-			}
-			_ = st.Close()
+			w.daemonMu.Lock()
+			defer w.daemonMu.Unlock()
+			w.stopDaemon()
 		})
 	}
 	w.startSSH(ctx)
 	return w
+}
+
+// startDaemon opens the store on the world's database and serves it on
+// the world's socket until stopDaemon is called. The caller holds
+// daemonMu, or is newWorld before anything else can run.
+func (w *world) startDaemon() error {
+	o := w.opts
+	ctx, cancel := context.WithCancel(context.Background())
+	st, err := store.Open(ctx, w.dsn, store.Options{Prefix: "sf", CommitInterval: o.commit, Now: o.now, Admins: o.admins,
+		Limits: o.limits.Limits, Logger: o.logger})
+	if err != nil {
+		cancel()
+		return err
+	}
+	srv, err := server.New(server.Config{Store: st, Project: project, Version: "v0.2.0",
+		ProtoMin: o.protoMin, ProtoMax: o.protoMax, Latest: o.latest, ReapInterval: o.reap, Limits: o.limits,
+		Logger: o.logger})
+	if err != nil {
+		cancel()
+		return errors.Join(err, st.Close())
+	}
+	l, err := server.Listen(w.socket)
+	if err != nil {
+		cancel()
+		return errors.Join(err, st.Close())
+	}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, l) }()
+	w.stopDaemon = func() {
+		cancel()
+		if err := <-done; err != nil {
+			w.t.Errorf("serve: %v", err)
+		}
+		if err := st.Close(); err != nil {
+			w.t.Errorf("close store: %v", err)
+		}
+	}
+	return nil
+}
+
+// restartDaemon stops the daemon, closing every connection to it, and
+// starts another on the same database and socket, as an operator's
+// restart would.
+func (w *world) restartDaemon() error {
+	w.daemonMu.Lock()
+	defer w.daemonMu.Unlock()
+	w.stopDaemon()
+	w.stopDaemon = func() {} // until a new daemon starts, nothing runs to stop
+	return w.startDaemon()
 }
 
 // startSSH runs the in-process sshd. Like OpenSSH with
@@ -614,6 +667,31 @@ func TestOlderClientWarns(t *testing.T) {
 	}
 	if r := alice.run("v0.2.0", "ready"); r.stderr != "" {
 		t.Fatalf("same version warned: %q", r.stderr)
+	}
+}
+
+// A restart whose new daemon fails to start leaves nothing to stop: the
+// world's cleanup must not wait on the daemon the restart already
+// stopped.
+func TestRestartDaemonFails(t *testing.T) {
+	w := newWorld(t, daemonOpts{})
+	// The listener refuses a socket directory others can read.
+	if err := os.Chmod(filepath.Dir(w.socket), 0o755); err != nil { //nolint:gosec // the mode the listener must refuse
+		t.Fatal(err)
+	}
+	if err := w.restartDaemon(); err == nil || !strings.Contains(err.Error(), "chmod 700") {
+		t.Fatalf("restartDaemon with an open socket directory = %v, want its refusal", err)
+	}
+	stop, stopped := w.stopDaemon, make(chan struct{})
+	go func() {
+		defer close(stopped)
+		stop()
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		w.stopDaemon = func() {} // let the cleanup finish; the goroutine above stays blocked
+		t.Fatal("stopDaemon after a failed restart did not return: it waits again on the daemon the restart stopped")
 	}
 }
 

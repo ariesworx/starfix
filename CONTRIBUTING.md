@@ -30,6 +30,29 @@ what, and how CI makes a missing Dolt fail instead. To try a real server
 by hand, follow the [Local](docs/deploy/local.md) example in a Linux VM or
 container you can throw away.
 
+### The soak test
+
+`TestSoak` in `internal/e2e` is stage 3's gate: four principals with
+five sessions each work one backlog at once through the in-process SSH
+server, a real daemon and Dolt, while the test drops answers and
+connections, restarts the daemon, and lets sessions vanish or stall past
+their leases. It checks claims, fencing, the event log, idempotent
+retries, the inbox and event pushes, token usage, rule 18's caps, and
+that the daemon leaks nothing. A short run of about 12 seconds is part of
+`go test`. Run a long one before changing claims, the reaper, the event
+log, pushes or the write path:
+
+```sh
+STARFIX_REQUIRE_DOLT=1 STARFIX_SOAK=10m go test -race -timeout 45m -run 'TestSoak$' -v ./internal/e2e/
+```
+
+The run prints its seed first and with any failure, followed by the
+events of each issue involved. `STARFIX_SOAK_SEED=<seed>` repeats a
+run's choices; the interleaving of sessions still differs. With `-v` the
+report lists each op's count, outcome and p50 and p99 latency, the
+refusals by code, and what the chaos did. Latency is reported, not
+asserted: only a request with no answer in 60 seconds fails the run.
+
 ## Before you open a pull request
 
 Run the whole gate in [Commands](AGENTS.md#commands), as CI does. Then

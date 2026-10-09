@@ -196,7 +196,7 @@ func importEndsClaim(ctx context.Context, w *wtx, is Issue) (map[string]any, err
 	if err := w.ended(ctx, c, why); err != nil {
 		return nil, err
 	}
-	if err := releaseClaim(ctx, w, c); err != nil {
+	if err := endClaim(ctx, w, c); err != nil {
 		return nil, err
 	}
 	return map[string]any{"holder": c.Holder, "epoch": c.Epoch, "expires_at": c.ExpiresAt}, nil
@@ -239,8 +239,8 @@ func (s *Store) PlanImportIssue(ctx context.Context, in Issue) (ImportResult, er
 // clients: it skips the hold check, so it writes an issue whoever holds
 // it. An import that leaves an issue anything but in progress with its
 // claim's holder (closed, open, blocked or assigned to someone else) ends
-// the claim, and when the claim was live, its session gets a claim.lost
-// inbox item, as with [Store.CloseIssue]. The import event's after state
+// the claim, and its session gets a claim.lost inbox item, as with
+// [Store.CloseIssue]. The import event's after state
 // then records the ended claim as claim_released.
 func (s *Store) ImportIssue(ctx context.Context, actor Actor, in Issue) (ImportResult, error) {
 	in, err := normalizeImport(in)

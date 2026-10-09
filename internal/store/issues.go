@@ -370,7 +370,9 @@ func insertIssue(ctx context.Context, w *wtx, id IssueID, in NewIssue, meta any)
 // Holds come only from claims, so status in_progress is refused with
 // [ErrStatusInProgress] (StartIssue sets it), and a change of status or
 // assignee while the issue is claimed with ErrInvalid (finish, close or a
-// releasing handoff ends the claim first). An issue another principal
+// releasing handoff ends the claim first). Such a change to an issue
+// whose claim has lapsed, before the reaper ran, ends that claim, as
+// claim.release, and tells its holder. An issue another principal
 // holds is refused with a [*ForbiddenError] unless the actor is an admin,
 // a parent that does not exist with ErrNotFound, and a parent that would
 // make a cycle with ErrCycle. New acceptance text cannot tick items ("[x]"
@@ -425,9 +427,19 @@ func (s *Store) UpdateIssue(ctx context.Context, actor Actor, id IssueID, expect
 		if err := w.guard(ctx, c, "update"); err != nil {
 			return err
 		}
-		if c.active(w.now) && (patch.Status != nil && *patch.Status != before.Status ||
-			patch.Assignee != nil && *patch.Assignee != before.Assignee) {
-			return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
+		if patch.Status != nil && *patch.Status != before.Status ||
+			patch.Assignee != nil && *patch.Assignee != before.Assignee {
+			if c.active(w.now) {
+				return &StateError{ID: id, Reason: StateClaimed, Holder: c.Holder}
+			}
+			// A lapsed claim the reaper has not reached ends here, ahead
+			// of the change, so the log says the hold ended at its lease.
+			if err := w.ended(ctx, c, "updated"); err != nil {
+				return err
+			}
+			if err := endClaim(ctx, w, c); err != nil {
+				return err
+			}
 		}
 		if patch.ParentID != nil && *patch.ParentID != "" {
 			if err := mustExist(ctx, w.tx, *patch.ParentID); err != nil {
@@ -614,13 +626,13 @@ func (p IssuePatch) columns() ([]string, []any, error) {
 	return sets, args, nil
 }
 
-// CloseIssue closes an issue, ends any claim on it and returns it; when a
-// live claim was another session's, that session gets a claim.lost inbox
-// item. expected 0 skips the revision check: close wins over concurrent
-// edits (design §8). An issue with acceptance items neither ticked nor
-// waived is refused with an [*AcceptanceError], one another principal
-// holds with a [*ForbiddenError] unless the actor is an admin, and one
-// already closed with ErrInvalid.
+// CloseIssue closes an issue, ends any claim on it and returns it; when
+// the claim, live or lapsed, was another session's, that session gets a
+// claim.lost inbox item. expected 0 skips the revision check: close wins
+// over concurrent edits (design §8). An issue with acceptance items
+// neither ticked nor waived is refused with an [*AcceptanceError], one
+// another principal holds with a [*ForbiddenError] unless the actor is an
+// admin, and one already closed with ErrInvalid.
 func (s *Store) CloseIssue(ctx context.Context, actor Actor, id IssueID, expected Rev, reason string) (Issue, error) {
 	return s.closeIssue(ctx, actor, id, expected, reason, false)
 }
@@ -720,7 +732,7 @@ func closeTx(ctx context.Context, w *wtx, before Issue, reason string, force boo
 	if err := w.ended(ctx, c, "closed"); err != nil {
 		return Issue{}, err
 	}
-	if err := releaseClaim(ctx, w, c); err != nil {
+	if err := endClaim(ctx, w, c); err != nil {
 		return Issue{}, err
 	}
 	return setStatus(ctx, w, before, OpIssueClose, []any{string(StatusClosed), w.now, nullStr(reason)}, extra)

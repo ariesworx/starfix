@@ -220,7 +220,7 @@ func TestMCPAgentSession(t *testing.T) {
 			t.Fatalf("event by %s", e.By)
 		}
 	}
-	if got := strings.Join(ops, " "); got != "issue.create claim.take issue.update comment.add comment.add issue.close issue.reopen" {
+	if got := strings.Join(ops, " "); got != "issue.create claim.take issue.update comment.add comment.add claim.release issue.close issue.reopen" {
 		t.Fatalf("history: %s", got)
 	}
 	// The session id reached the server on every connection.

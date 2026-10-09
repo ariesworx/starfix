@@ -167,7 +167,7 @@ transaction as its cause:
 
 | Item | When |
 |---|---|
-| `claim.lost` | Your lease ran out and the server ended the claim, another session took it over, or someone else closed or released the issue |
+| `claim.lost` | Your lease ran out and the server ended the claim, another session took it over, someone else closed or released the issue, or, after your lease ran out, someone changed its status or assignee |
 | `handoff` | A handoff names you with `--to` |
 | `mention` | A comment, handoff or finish note says `@you`. Only principals the server has seen can be mentioned, and never yourself |
 | `assigned` | Someone else assigned you an issue |

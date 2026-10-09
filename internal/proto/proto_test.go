@@ -312,6 +312,9 @@ func TestEventChanged(t *testing.T) {
 		{Event{Op: "comment.add"}, ""},
 		{Event{Op: "issue.paths", After: json.RawMessage(`{"source":"commit","added":["a","b"]}`)}, "commit +2"},
 		{Event{Op: "issue.paths", After: json.RawMessage(`{"source":"declared","added":["a"],"removed":["b","c"],"removed_count":30}`)}, "declared +1 -30"},
+		{Event{Op: "claim.take", After: json.RawMessage(`{"epoch":2,"expires_at":"2026-10-07T12:15:00Z"}`)}, "epoch 2"},
+		{Event{Op: "claim.expire", Before: json.RawMessage(`{"holder":{"principal":"alice","session":"s1"},"epoch":1}`)}, "epoch 1, alice/s1"},
+		{Event{Op: "claim.release", Before: json.RawMessage(`{"holder":{"principal":"alice","session":"s1"},"epoch":3}`)}, "epoch 3, alice/s1"},
 	}
 	for _, tc := range tests {
 		if got := tc.e.Changed(); got != tc.want {

@@ -143,7 +143,7 @@ func TestStartHandoffFinish(t *testing.T) {
 	}
 	// sfx away sent the files alice's branch had changed (the world's
 	// untracked key and config): files to issues, design §12 item 3.
-	want := "issue.create/alice claim.take/alice issue.update/alice issue.paths/alice comment.add/alice issue.update/alice claim.take/bob issue.update/bob acceptance.tick/bob comment.add/bob issue.close/bob"
+	want := "issue.create/alice claim.take/alice issue.update/alice issue.paths/alice claim.release/alice comment.add/alice issue.update/alice claim.take/bob issue.update/bob acceptance.tick/bob comment.add/bob claim.release/bob issue.close/bob"
 	if got := strings.Join(ops, " "); got != want {
 		t.Fatalf("history:\n got %s\nwant %s", got, want)
 	}

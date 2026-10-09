@@ -309,7 +309,7 @@ func (s *Store) HandoffIssue(ctx context.Context, actor Actor, id IssueID, epoch
 			if err := w.ended(ctx, c, "released"); err != nil {
 				return err
 			}
-			if err := releaseClaim(ctx, w, c); err != nil {
+			if err := endClaim(ctx, w, c); err != nil {
 				return err
 			}
 		}
