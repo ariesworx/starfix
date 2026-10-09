@@ -54,8 +54,11 @@ func explain(err error) toolErr {
 func nextStep(pe *proto.Error) string {
 	switch pe.Code {
 	case proto.CodeNotFound:
-		if strings.HasPrefix(pe.Fix, proto.FixSeeBlocked) {
+		switch {
+		case strings.HasPrefix(pe.Fix, proto.FixSeeBlocked):
 			return "nothing is ready: call blocked to see why, or create an issue"
+		case strings.HasPrefix(pe.Fix, proto.FixFindMemory):
+			return "call recall to find the key and its scope; remember without rev creates it"
 		}
 		return "find the id with list or ready"
 	case proto.CodeConflict:
@@ -68,6 +71,8 @@ func nextStep(pe *proto.Error) string {
 			return "someone else holds this issue: pick other work with start, or tell the user if it must move"
 		case strings.HasPrefix(pe.Fix, proto.FixReread):
 			return "call show for the current rev, then retry with that rev if your change still applies"
+		case strings.HasPrefix(pe.Fix, proto.FixRecall):
+			return "call recall with the key and scope for its body and rev, merge your change into it, then remember again with that rev"
 		}
 		return "retry"
 	case proto.CodeExists:
@@ -86,6 +91,10 @@ func nextStep(pe *proto.Error) string {
 			return "nothing to do"
 		case strings.HasPrefix(pe.Fix, proto.FixUpgrade):
 			return "tell the user" + personFix(pe)
+		case strings.HasPrefix(pe.Fix, proto.FixSecret):
+			return "never store a secret: remember the rest, naming where the secret is kept (a vault path or an environment variable) instead"
+		case strings.HasPrefix(pe.Fix, proto.FixForgetSome):
+			return "call forget on memories that no longer hold, or tell the user" + personFix(pe)
 		}
 		return "correct the arguments and retry"
 	case proto.CodeAcceptance:

@@ -36,12 +36,12 @@ type IDIn struct {
 // ShowIn reads one issue.
 type ShowIn struct {
 	ID   string `json:"id"`
-	Full bool   `json:"full,omitempty" jsonschema:"all text, uncut"`
+	Full bool   `json:"full,omitempty"`
 }
 
 // LimitIn bounds a list.
 type LimitIn struct {
-	Limit int `json:"limit,omitempty" jsonschema:"default 10"`
+	Limit int `json:"limit,omitempty"`
 }
 
 // ListIn filters issues.
@@ -52,7 +52,7 @@ type ListIn struct {
 	Assignee string   `json:"assignee,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	Labels   []string `json:"labels,omitempty" jsonschema:"must have all"`
-	Limit    int      `json:"limit,omitempty" jsonschema:"default 10"`
+	Limit    int      `json:"limit,omitempty"`
 	Cursor   string   `json:"cursor,omitempty" jsonschema:"a page's next"`
 }
 
@@ -60,8 +60,8 @@ type ListIn struct {
 type CreateIn struct {
 	Title      string   `json:"title"`
 	Body       string   `json:"body,omitempty"`
-	Type       string   `json:"type,omitempty" jsonschema:"default task"`
-	Priority   *int     `json:"priority,omitempty" jsonschema:"0 highest; default 2"`
+	Type       string   `json:"type,omitempty"`
+	Priority   *int     `json:"priority,omitempty" jsonschema:"0 highest"`
 	Parent     string   `json:"parent,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
 	Assignee   string   `json:"assignee,omitempty"`
@@ -103,13 +103,13 @@ func (in *FinishIn) prepare() error {
 // UpdateIn changes the fields given.
 type UpdateIn struct {
 	ID         string  `json:"id"`
-	Rev        int64   `json:"rev,omitempty" jsonschema:"refused if stale; default current"`
+	Rev        int64   `json:"rev,omitempty"`
 	Title      *string `json:"title,omitempty"`
 	Body       *string `json:"body,omitempty"`
 	Design     *string `json:"design,omitempty"`
 	Acceptance *string `json:"acceptance,omitempty"`
 	Notes      *string `json:"notes,omitempty"`
-	Status     *string `json:"status,omitempty" jsonschema:"to close, use close"`
+	Status     *string `json:"status,omitempty"`
 	Priority   *int    `json:"priority,omitempty"`
 	Type       *string `json:"type,omitempty"`
 	Assignee   *string `json:"assignee,omitempty" jsonschema:"empty clears"`
@@ -120,22 +120,22 @@ type UpdateIn struct {
 // CloseIn closes an issue.
 type CloseIn struct {
 	ID     string `json:"id"`
-	Reason string `json:"reason,omitempty" jsonschema:"what was done"`
-	Rev    int64  `json:"rev,omitempty" jsonschema:"refused if stale"`
+	Reason string `json:"reason,omitempty"`
+	Rev    int64  `json:"rev,omitempty"`
 }
 
 // ReopenIn reopens an issue.
 type ReopenIn struct {
 	ID  string `json:"id"`
-	Rev int64  `json:"rev,omitempty" jsonschema:"refused if stale"`
+	Rev int64  `json:"rev,omitempty"`
 }
 
 // DepIn adds or removes an edge.
 type DepIn struct {
 	Action    string `json:"action"`
-	ID        string `json:"id" jsonschema:"the dependent issue"`
+	ID        string `json:"id"`
 	DependsOn string `json:"depends_on"`
-	Type      string `json:"type,omitempty" jsonschema:"default blocks"`
+	Type      string `json:"type,omitempty"`
 }
 
 // LabelIn adds or removes labels.
@@ -156,7 +156,7 @@ type CommentIn struct {
 // PageIn names an issue and bounds a list of its records.
 type PageIn struct {
 	ID    string `json:"id"`
-	Limit int    `json:"limit,omitempty" jsonschema:"default 10"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 // StartIn takes an issue.
@@ -168,7 +168,7 @@ type StartIn struct {
 // FinishIn closes an issue with what the next person needs.
 type FinishIn struct {
 	ID         string            `json:"id"`
-	Reason     string            `json:"reason,omitempty" jsonschema:"what was done"`
+	Reason     string            `json:"reason,omitempty"`
 	Handoff    string            `json:"handoff,omitempty"`
 	Discovered []DiscoveredIn    `json:"discovered,omitempty"`
 	Ticked     []int             `json:"ticked,omitempty"`
@@ -219,7 +219,7 @@ type DigestIn struct {
 
 // WhoIn widens who's window.
 type WhoIn struct {
-	Since string `json:"since,omitempty" jsonschema:"default 5m"`
+	Since string `json:"since,omitempty"`
 }
 
 // Outputs.
@@ -238,6 +238,9 @@ type Started struct {
 	// them. They replace Acceptance when the server lists them.
 	Items   []string `json:"items,omitempty"`
 	Handoff *Handoff `json:"handoff,omitempty"`
+	// Memories are those relevant to the issue: linked to it, or tagged
+	// with one of its labels.
+	Memories []Memory `json:"memories,omitempty"`
 	// Branch is the suggested git branch; start does not create it.
 	Branch string `json:"branch"`
 	// Truncated: long text was cut; show with full: true has it all.
@@ -453,7 +456,7 @@ func (s *Server) register() {
 	add(s, tool{name: "inbox", desc: "Lost claims, handoffs, mentions, assignments; ack marks read.", ann: idem, retry: true,
 		showsInbox: true},
 		func(ctx context.Context, c Conn, in InboxIn) (Inbox, error) { return inbox(ctx, c, in) })
-	add(s, tool{name: "start", desc: "Take an issue (default: top ready): it, its handoff, a branch.", ann: write},
+	add(s, tool{name: "start", desc: "Take an issue (default: top ready).", ann: write},
 		func(ctx context.Context, c Conn, in StartIn) (Started, error) {
 			out, epoch, err := start(ctx, c, in)
 			if err == nil && epoch > 0 {
@@ -541,7 +544,7 @@ func (s *Server) register() {
 			}
 			return out, err
 		})
-	add(s, tool{name: "blocked", desc: "Issues held back, with their blockers.", ann: readOnly, retry: true},
+	add(s, tool{name: "blocked", desc: "Issues held back, and by what.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in LimitIn) (Blocked, error) {
 			var r proto.BlockedResult
 			err := c.Call(ctx, proto.OpBlocked, proto.LimitArgs{Limit: orDefault(in.Limit, DefaultLimit)}, &r)
@@ -612,6 +615,7 @@ func (s *Server) register() {
 		func(ctx context.Context, c Conn, in PageIn) (Comments, error) { return comments(ctx, c, in) })
 	add(s, tool{name: "history", desc: "An issue's newest changes.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in PageIn) (History, error) { return history(ctx, c, in) })
+	s.registerMemory()
 }
 
 // list is the list tool. A page that would pass MaxResultTokens is asked
@@ -659,6 +663,11 @@ func start(ctx context.Context, c Conn, in StartIn) (Started, int64, error) {
 		out.Handoff = &Handoff{By: h.Author, At: stamp(h.CreatedAt), Note: h.Body, State: h.State, Next: h.Next,
 			Branch: h.Branch, Worktree: h.Worktree, To: h.To}
 		fields = append(fields, &out.Handoff.Note)
+	}
+	// Memories are context; the issue is the work, so they go first.
+	out.Memories, _ = compactMemories(r.Memories, startMemoryText)
+	for size(out) > MaxResultTokens && len(out.Memories) > 0 {
+		out.Memories = out.Memories[:len(out.Memories)-1]
 	}
 	out.Truncated = fitTexts(func() bool { return size(out) <= MaxResultTokens }, fields...)
 	var epoch int64
