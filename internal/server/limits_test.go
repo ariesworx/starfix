@@ -65,6 +65,7 @@ func TestResolveSettingsLimits(t *testing.T) {
 			want: func(l Limits) bool { return l.Prices == 20 && l.Labels == DefaultLimits.Labels }},
 		{name: "prices limit default", body: "limits:\n  prices: 0\n", want: func(l Limits) bool { return l.Prices == 1000 }},
 		{name: "negative prices limit", body: "limits:\n  prices: -1\n", err: "prices"},
+		{name: "prices past the most", body: "limits:\n  prices: 10001\n", err: "prices is 10001; it can be at most 10000"},
 		{name: "memory body past the column", body: "limits:\n  memory_body: 70000\n", err: "memory_body"},
 		{name: "negative server limit", body: "limits:\n  write_burst: -1\n", err: "limit write_burst must be zero or a positive number"},
 		{name: "write rate not a number", body: "limits:\n  write_rate: .nan\n", err: "limit write_rate must be zero or a positive number"},

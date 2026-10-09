@@ -58,7 +58,8 @@ type Limits struct {
 	// MemoryKeyLength caps a memory's key, in bytes; at most 255.
 	MemoryKeyLength int `yaml:"memory_key_length"`
 	// Prices caps the rows of the prices table: a model's rates from one
-	// effective time are one row, and replacing them is no new row.
+	// effective time are one row, and replacing them is no new row; at
+	// most 10,000.
 	Prices int `yaml:"prices"`
 }
 
@@ -74,6 +75,10 @@ const (
 	maxMemoryBody = maxText
 	maxMemoryName = 255
 )
+
+// maxPrices bounds the prices limit: every cost report, show and digest
+// reads the whole prices table into memory.
+const maxPrices = 10000
 
 // withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
@@ -116,7 +121,7 @@ func (l Limits) Validate() error {
 		v, most int
 	}{
 		{"memory_body", l.MemoryBody, maxMemoryBody}, {"memory_tag_length", l.MemoryTagLength, maxMemoryName},
-		{"memory_key_length", l.MemoryKeyLength, maxMemoryName},
+		{"memory_key_length", l.MemoryKeyLength, maxMemoryName}, {"prices", l.Prices, maxPrices},
 	} {
 		if f.v > f.most {
 			return fmt.Errorf("%w: limit %s is %d; it can be at most %d", ErrInvalid, f.name, f.v, f.most)
