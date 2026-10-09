@@ -118,3 +118,33 @@ func TestCostToolUnpricedMore(t *testing.T) {
 		t.Errorf("cost unpriced = %q, want %q", c.Unpriced, want)
 	}
 }
+
+// With plans and hours, a group's line carries its amortized cost and
+// its logged hours, and folding sums both exactly.
+func TestCostToolAmortizedAndLogged(t *testing.T) {
+	f := &fakeConn{reply: func(string, any) (any, error) {
+		return proto.CostResult{By: "issue", Groups: []proto.CostGroup{
+			{Key: "sf-1", Title: "work", Tokens: proto.Tokens{Input: n64(1000)}, CostUSD: "8.35", AmortizedUSD: "20.5", LoggedSeconds: 5400},
+			{Key: proto.CostUnattributed, Tokens: proto.Tokens{Input: n64(10)}, CostUSD: "0.1", AmortizedUSD: "9.5"},
+		}, Total: proto.CostGroup{Tokens: proto.Tokens{Input: n64(1010)}, CostUSD: "8.45", AmortizedUSD: "30", LoggedSeconds: 5400}}, nil
+	}}
+	cs, _ := connect(t, f)
+	var c Cost
+	if err := json.Unmarshal([]byte(text(t, callTool(t, cs, "cost", map[string]any{"since": "7d", "by": "issue"}))), &c); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sf-1 work: $8.35, amortized $20.50, 1k tokens, 1.5h logged", "(unattributed): $0.10, amortized $9.50, 10 tokens"}
+	if !slices.Equal(c.Groups, want) || c.Total != "$8.45, amortized $30.00, 1k tokens, 1.5h logged" {
+		t.Errorf("cost groups %q, total %q; want %q and the total", c.Groups, c.Total, want)
+	}
+	g, err := fold([]proto.CostGroup{
+		{Key: "a", CostUSD: "1", AmortizedUSD: "0.000001", LoggedSeconds: 60},
+		{Key: "b", CostUSD: "2", AmortizedUSD: "3", LoggedSeconds: 120},
+	})
+	if err != nil || g.AmortizedUSD != "3.000001" || g.LoggedSeconds != 180 {
+		t.Errorf("fold = %+v, %v; want 3.000001 USD amortized and 180 s logged", g, err)
+	}
+	if g, err := fold([]proto.CostGroup{{Key: "a", CostUSD: "1"}}); err != nil || g.AmortizedUSD != "" {
+		t.Errorf("fold with no plans = %+v, %v; want no amortized cost", g, err)
+	}
+}

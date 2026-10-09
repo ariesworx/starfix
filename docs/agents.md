@@ -193,8 +193,9 @@ The MCP server offers 24 tools: `prime`, `start`, `finish`, `handoff`,
 `ready`, `blocked`, `list`, `show`, `create`, `update`, `close`, `reopen`,
 `dep`, `label`, `comment`, `comments`, `history`, `digest`, `who`,
 `inbox`, `remember`, `recall`, `forget` and `cost`. There are no admin
-tools: import, export, setup, upgrade, prices and server settings stay on
-the command line.
+tools: import, export, setup, upgrade, prices, plans and server settings
+stay on the command line. Hours are logged by people, with `sfx log`; no
+tool logs them.
 
 - **Results are compact.** Writes return `{id, rev}`, and lists return the
   id, title, status and priority. A result is capped at about 2,000 tokens;
@@ -221,17 +222,22 @@ the command line.
   like it holds a secret is refused, and the fix tells the agent to name
   where the secret is kept instead.
 - **`show` and `digest` carry time, cost and tokens.** `show` gives the
-  issue's `account` and a one-line `usage`: time held, cost at list price
+  issue's `account` and a one-line `usage`: time held, the hours people
+  logged (`logged 1.5h`), cost at list price
   (`cost $8.35`, `, some unpriced` when a model has no price, or `cost
   unpriced`; no cost at all when the server has no prices), tokens for
   the five largest models, and whether any were split by time with
-  other work. `digest` gives the window's `usage` line,
-  with the tokens no issue was held for and whether any were split by time.
+  other work. `digest` gives the window's `usage` line, with the hours
+  logged, the tokens no issue was held for and whether any were split by
+  time.
   No tool sets an account; people do that with `sfx update --account`.
 - **`cost` reports spend.** It takes `by` (`account`, the default,
   `issue`, `epic`, `person` or `model`), `since` and `until`, and returns
   a line per group (`ID title: $8.35, 4.3M tokens, split`), the total and
-  the models with no price ([Cost](concepts.md#cost)). It lists 20
+  the models with no price ([Cost](concepts.md#cost)). Once the server
+  has a plan, each line also gives the amortized cost (`$8.35, amortized
+  $20.00, 4.3M tokens`), and a group with hours its hours (`1.5h
+  logged`). It lists 20
   groups, fewer if they would pass the result cap, and sums the rest as
   `(other)`, so the groups still add up to the total.
 - **Files come from git, not from the agent.** `sfx mcp` reads the paths

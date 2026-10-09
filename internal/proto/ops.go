@@ -247,15 +247,20 @@ const (
 // are a lower bound. CostUSD is the tokens' list-price equivalent, an
 // exact decimal of US dollars, left out when there are no tokens;
 // Unpriced says some tokens had no price at their time (protocol 4).
+// LoggedSeconds is the time people logged on the issue by hand, and
+// Logged the same by principal, most first, at most MaxUsageModels with
+// the rest summed as OtherModels (protocol 4).
 type IssueUsage struct {
-	Account     string        `json:"account"`
-	AccountFrom string        `json:"account_from,omitempty"`
-	HeldSeconds int64         `json:"held_seconds"`
-	Split       bool          `json:"split,omitempty"`
-	Models      []ModelTokens `json:"models,omitempty"`
-	Capped      bool          `json:"capped,omitempty"`
-	CostUSD     string        `json:"cost_usd,omitempty"`
-	Unpriced    bool          `json:"unpriced,omitempty"`
+	Account       string        `json:"account"`
+	AccountFrom   string        `json:"account_from,omitempty"`
+	HeldSeconds   int64         `json:"held_seconds"`
+	Split         bool          `json:"split,omitempty"`
+	Models        []ModelTokens `json:"models,omitempty"`
+	Capped        bool          `json:"capped,omitempty"`
+	CostUSD       string        `json:"cost_usd,omitempty"`
+	Unpriced      bool          `json:"unpriced,omitempty"`
+	LoggedSeconds int64         `json:"logged_seconds,omitempty"`
+	Logged        []PersonHours `json:"logged,omitempty"`
 }
 
 // UsageRecord is what a harness reported for one request, or for a turn
@@ -662,6 +667,9 @@ type DigestUsage struct {
 	// IssueUsage's (protocol 4).
 	CostUSD  string `json:"cost_usd,omitempty"`
 	Unpriced bool   `json:"unpriced,omitempty"`
+	// LoggedSeconds is the time people logged by hand on the days the
+	// window overlaps, filtered as the rest (protocol 4).
+	LoggedSeconds int64 `json:"logged_seconds,omitempty"`
 }
 
 // Span formats a duration compactly for people and agents: 45m, 5h, 3d4h.

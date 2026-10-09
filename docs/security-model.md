@@ -45,7 +45,10 @@ pinned](cli.md#the-host-key-is-pinned)).
 - **Admins may override.** An admin's change to an issue another
   principal holds is recorded as an `admin.override` event naming the
   holder, and a forced close records the open acceptance items in its
-  close event. Only admins set model prices ([Prices](server.md#prices)).
+  close event. Only admins set model prices ([Prices](server.md#prices))
+  and subscription plans ([Plans](server.md#plans)). A person logs hours
+  only as themselves and undoes only their own; an admin may undo
+  anyone's, on the record.
   Only the server's config file or environment lists admins
   ([Admins](server.md#admins)).
 - **Every change is an event**, written in the same transaction as the
@@ -53,7 +56,11 @@ pinned](cli.md#the-host-key-is-pinned)).
   delete events.
 - **What others see.** `sfx who` shows every principal's machine names. A
   handoff's worktree path, a path on your machine, is shown only to your
-  own principal.
+  own principal. Hours are not private: every principal can list anyone's
+  entries, with their notes, and see them in `show`, `digest` and `sfx
+  cost`. Undoing an entry removes it from those, but its `hours.log` and
+  `hours.delete` events keep the note in the issue's history. Notes, like
+  comments, are not checked for secrets, so keep credentials out of them.
 - **A user memory is its author's alone.** The server reads and writes a
   `user`-scope memory only for its author's principal; to anyone else it
   does not exist. Its events record its scope and revision but not its

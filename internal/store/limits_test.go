@@ -19,7 +19,7 @@ func TestLimitsDefaultsAndValidate(t *testing.T) {
 	}
 	for _, l := range []Limits{{Labels: -1}, {AcceptanceItems: -1}, {Deps: -1}, {Sessions: -1}, {InboxUnread: -1}, {Notices: -1},
 		{UsageRecords: -1}, {UsagePerDay: -1}, {Paths: -1}, {MemoryBody: -1}, {MemoryTags: -1}, {MemoryTagLength: -1},
-		{Memories: -1}, {MemoryKeyLength: -1}, {Prices: -1}} {
+		{Memories: -1}, {MemoryKeyLength: -1}, {Prices: -1}, {HoursPerDay: -1}, {HoursNote: -1}, {Plans: -1}, {PlanPrincipals: -1}} {
 		if err := l.Validate(); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v.Validate() = %v, want ErrInvalid", l, err)
 		}
@@ -31,14 +31,36 @@ func TestLimitsDefaultsAndValidate(t *testing.T) {
 	}{
 		{Limits{MemoryBody: 65536}, "memory_body"}, {Limits{MemoryTagLength: 256}, "memory_tag_length"},
 		{Limits{MemoryKeyLength: 256}, "memory_key_length"},
-		{Limits{Prices: 10001}, "prices"},
+		{Limits{Prices: 10001}, "prices"}, {Limits{HoursNote: 65536}, "hours_note"},
+		{Limits{Plans: 10001}, "plans"}, {Limits{PlanPrincipals: 1001}, "plan_principals"},
 	} {
 		if err := tc.l.Validate(); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tc.name) {
 			t.Errorf("%+v.Validate() = %v, want ErrInvalid naming %s", tc.l, err, tc.name)
 		}
 	}
-	if err := (Limits{MemoryBody: 65535, MemoryTagLength: 255, MemoryKeyLength: 255, Prices: 10000}).Validate(); err != nil {
+	if err := (Limits{MemoryBody: 65535, MemoryTagLength: 255, MemoryKeyLength: 255, Prices: 10000, HoursNote: 65535, Plans: 10000, PlanPrincipals: 10}).Validate(); err != nil {
 		t.Errorf("limits at their most: %v, want nil", err)
+	}
+	// A cost report reads every plan's principals: plans times
+	// plan_principals, a zero taking its default, is at most 100,000.
+	for _, tc := range []struct {
+		l  Limits
+		ok bool
+	}{
+		{Limits{}, true}, // 1000 × 100
+		{Limits{Plans: 100, PlanPrincipals: 1000}, true},
+		{Limits{Plans: 10000, PlanPrincipals: 10}, true},
+		{Limits{Plans: 1001}, false},
+		{Limits{PlanPrincipals: 101}, false},
+		{Limits{Plans: 10000, PlanPrincipals: 1000}, false},
+	} {
+		err := tc.l.Validate()
+		if tc.ok && err != nil {
+			t.Errorf("%+v.Validate() = %v, want nil", tc.l, err)
+		}
+		if !tc.ok && (!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "plans times plan_principals")) {
+			t.Errorf("%+v.Validate() = %v, want ErrInvalid naming plans times plan_principals", tc.l, err)
+		}
 	}
 	if err := (Limits{}).Validate(); err != nil {
 		t.Errorf("Limits{}.Validate() = %v, want nil", err)

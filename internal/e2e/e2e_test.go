@@ -401,6 +401,9 @@ type user struct {
 	w    *world
 	repo string
 	env  map[string]string
+	// now, if set, is the CLI's clock, in the user's time zone; unset,
+	// the CLI's default.
+	now func() time.Time
 }
 
 // newUser makes a user with a new key, which the server maps to principal
@@ -474,6 +477,7 @@ func (u *user) runTo(ctx context.Context, stdout, stderr io.Writer, version stri
 		Getenv:   func(k string) string { return u.env[k] }, // no SSH_AUTH_SOCK: the key file is used
 		Hostname: func() (string, error) { return "laptop-test", nil },
 		Version:  version,
+		Now:      u.now,
 	})
 }
 

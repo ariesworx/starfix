@@ -197,8 +197,8 @@ blocked, was handed off, created or discovered. An issue in progress with
 no activity for 48 hours counts as stalled. The digest is structured data
 for a standup or a status report. starfix runs no model; the agent writes
 any narrative. It also totals the time issues were held in the window,
-the tokens reported in it and their cost at list price
-([below](#accounts-time-and-tokens)).
+the hours people logged, the tokens reported in it and their cost at
+list price ([below](#accounts-time-and-tokens)).
 
 ## Memory
 
@@ -279,7 +279,8 @@ names are lowercase letters, digits and inner hyphens.
 
 **Time** is the time an issue was held under claims: from `start` until
 `finish`, close, a releasing handoff, a takeover, or the lease running
-out. Every harness gets it, even one that reports no tokens.
+out. Every harness gets it, even one that reports no tokens. People's own
+time is logged by hand, apart from it ([below](#human-hours)).
 
 **Tokens** come from the harness, never from the model's own account of
 them: the client sends what the harness recorded for each request (model,
@@ -319,3 +320,45 @@ epic up the parent chain), person (who reported the tokens) or model.
 Tokens no issue was held for are `(unattributed)`, issues under no epic
 are `(no epic)`, and a group is marked `split` when part of it came from
 a record shared with another group. Invoicing stays outside starfix.
+
+**Amortized cost** is what flat-rate plans really cost, spread over the
+work. An admin records each plan's fee a seat a month, its seats and the
+principals whose usage it pays for ([Plans](server.md#plans)). For each
+calendar month (UTC) a report touches, a plan's monthly total, fee times
+seats, is split across the report's groups in proportion to the tokens,
+of all kinds, its principals reported that month; the share of tokens no
+issue was held for goes to `(unattributed)`, so a whole month adds up to
+the total. A window that covers part of a month gets the part of the fee
+that its tokens are of the month's: from the 15th, with two thirds of a
+month's tokens after it, two thirds of the fee. A month whose principals
+reported no tokens still cost its fee: it goes to `(unattributed)`,
+prorated by the share of the month the window covers. A fee accrues by
+time: the current month has cost only the part of its fee that has
+passed (on the 8th of a 31-day month, a week's worth), split the same
+way, and a window that reaches past now charges nothing for the months
+to come. A principal on no plan adds nothing. Reports show amortized cost beside the list-price
+equivalent, never instead of it, and only `sfx cost` and the `cost` tool
+show it, since `show` and `digest` would have to read whole months.
+
+### Human hours
+
+People log their own time with `sfx log 1.5h ID`: an entry is one
+person's time on one issue for one day, from a minute to 24 hours, with
+an optional note. The day is the logger's calendar day: `sfx log` sends
+today's date in your time zone unless `--on` gives another, and the
+server takes any date from a year back to a day past its own today
+(UTC). It counts against the issue's account, resolved
+when read like tokens, and carries no money. A person's entries on one
+day add up to at most 24 hours. Each entry and each undo is an event on
+the issue, so `history` shows it; a person may undo only their own entry,
+and an admin anyone's.
+
+`show` gives an issue's hours by person, `digest` and `sfx cost` the
+hours of the days their window overlaps: a day counts whole when the
+window touches it, so the default `digest --since 24h` at a morning
+standup counts yesterday's hours, and windows from midnight to midnight
+count each day once. Days are dates, compared with the window in UTC; a
+window that reaches now also counts entries for tomorrow (UTC), already
+today east of it. In `sfx cost` the hours go with their issue's
+account, epic or issue, or with who logged them; by model they are the
+group `(human)`.

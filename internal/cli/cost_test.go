@@ -138,6 +138,13 @@ func TestCostUsage(t *testing.T) {
 		{"cost bad by", []string{"-C", empty, "cost", "--since", "7d", "--by", "team"}, "--by must be account, issue, epic, person or model"},
 		{"admin needs prices", []string{"-C", empty, "admin"}, "admin needs prices"},
 		{"admin unknown", []string{"-C", empty, "admin", "keys"}, `unknown admin command "keys"`},
+		{"admin flags alone", []string{"-C", empty, "admin", "--from", "2026-01-01"}, "admin needs prices or plans"},
+		// Flags before the subcommand are the subcommand's: --from reaches
+		// prices set, which names only the rates as missing.
+		{"flags before prices", []string{"-C", empty, "admin", "--from", "2026-01-01", "--input", "1", "prices", "set", "m"},
+			"prices set needs --output, --cache-write, --cache-write-1h, --cache-read;"},
+		{"flags before plans", []string{"-C", empty, "admin", "--from", "2026-09", "--fee", "25", "plans", "set", "team"},
+			"plans set needs --seats;"},
 		{"prices unknown action", []string{"-C", empty, "admin", "prices", "rm", "m"}, `unknown prices action "rm"`},
 		{"prices list takes no rates", []string{"-C", empty, "admin", "prices", "--input", "1"}, "only prices set takes rates"},
 		{"set needs a model", append([]string{"-C", empty, "admin", "prices", "set", "--from", "2026-01-01"}, rates...), "prices set needs one model"},
@@ -157,5 +164,17 @@ func TestCostUsage(t *testing.T) {
 				t.Fatalf("exit %d (want %d), stdout %q, stderr %q; want it to name %q and the usage", code, ExitUsage, out, errb, tc.stderr)
 			}
 		})
+	}
+}
+
+// admin --json before the subcommand prints the subcommand's one JSON
+// document, here its refusal to run outside a repository.
+func TestAdminJSONBeforeSubcommand(t *testing.T) {
+	empty := t.TempDir()
+	for _, sub := range []string{"prices", "plans"} {
+		code, out, errb := runCLI(t, "-C", empty, "admin", "--json", sub)
+		if code != ExitFailure || errb != "" || !strings.Contains(out, `".starfix.yaml not found here or in any parent directory"`) {
+			t.Errorf("admin --json %s outside a repository: exit %d, stdout %q, stderr %q; want exit %d and a JSON error", sub, code, out, errb, ExitFailure)
+		}
 	}
 }
