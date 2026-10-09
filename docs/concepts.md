@@ -240,7 +240,10 @@ tags, the issue and the pin as they are unless it gives them; an empty
 `--tag ''` or `--issue ''` clears them. New keys never conflict. `forget --rev
 N` is refused the same way. Forgetting removes the memory but not its
 revision count: remembering its key again continues from the next
-revision, so a revision read before the forget never matches again.
+revision, so a revision read before the forget does not match again.
+A principal's oldest forgotten memories are deleted for good to make
+room when new keys reach `memories_per_scope`; a key whose record is
+gone starts again at revision 1.
 
 **Recall** finds memories by text (in the key or body, in any case), by
 exact key, by tag and by scope: pinned first, then the newest. There is

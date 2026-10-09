@@ -127,7 +127,9 @@ skip without it too.
    statement that is bookkeeping runs through `wtx.touch` instead, which
    exempts only that statement: refreshing the time of an issue's paths
    already recorded (a client resends what git shows every few minutes;
-   only a new path is history, and it records an `issue.paths` event). The
+   only a new path is history, and it records an `issue.paths` event),
+   and deleting a principal's oldest forgotten memories to make room for
+   a new one under `memories_per_scope`. The
    event log is the truth; ready, blocked and digest are derived from it
    and never stored.
 8. **Write closures must be safe to rerun.** A write that loses to a

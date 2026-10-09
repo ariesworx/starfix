@@ -60,7 +60,8 @@ pinned](cli.md#the-host-key-is-pinned)).
   carry none of it; the digest's event count still includes its changes.
   Forgetting one clears its body, tags and issue but keeps its key and
   revision in the row, so its revisions keep rising if it is remembered
-  again.
+  again, until the row is deleted to make room under
+  `memories_per_scope`.
   `team` and `project` memories, like issues, anyone may read and change
   ([Memory](concepts.md#memory)).
 

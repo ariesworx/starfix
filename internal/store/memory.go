@@ -497,8 +497,17 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 	return out, nil
 }
 
-// checkCap refuses, with a [*MemoryLimitError], a new memory of w's
-// actor in scope past Limits.Memories. Tombstones do not count.
+// checkCap makes room for one more memory of w's actor in scope under
+// Limits.Memories, which counts the actor's live memories and
+// tombstones alike (rule 18), skipping the row except, which a revive
+// turns live without adding a row. When live memories alone fill the
+// cap it refuses with a [*MemoryLimitError]; otherwise it deletes as
+// many of the actor's oldest tombstones in scope (by updated_at, then
+// id) as the new memory needs. Pruning is bookkeeping, so it records no
+// event; the write that called it records its own. A pruned tombstone
+// takes its rev with it, so a key forgotten long ago and remembered
+// again restarts at rev 1, and a rev read before that forget can match
+// again: the monotonic revs hold only while the tombstone does.
 //
 // It counts, then the caller inserts, and Dolt sees no conflict between
 // overlapping transactions that insert different keys. One Store's
@@ -506,15 +515,40 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 // writing one database at once (two starfixd processes) can each pass
 // the count and together exceed the cap: by at most one memory per
 // store.
-func (w *wtx) checkCap(ctx context.Context, scope Scope) error {
+func (w *wtx) checkCap(ctx context.Context, scope Scope, except string) error {
 	p := w.actor.Principal
-	var n int
-	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM memories WHERE author = ? AND scope = ? AND NOT deleted`,
-		p, string(scope)).Scan(&n); err != nil {
+	var live, dead int
+	if err := w.tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(CASE WHEN deleted THEN 0 ELSE 1 END), 0),
+  COALESCE(SUM(CASE WHEN deleted THEN 1 ELSE 0 END), 0)
+  FROM memories WHERE author = ? AND scope = ? AND id <> ?`, p, string(scope), except).Scan(&live, &dead); err != nil {
 		return fmt.Errorf("count memories: %w", err)
 	}
-	if n >= w.lim.Memories {
+	if live >= w.lim.Memories {
 		return &MemoryLimitError{Principal: p, Scope: scope, Max: w.lim.Memories}
+	}
+	excess := live + dead - w.lim.Memories + 1
+	if excess <= 0 {
+		return nil
+	}
+	rows, err := w.tx.QueryContext(ctx, `SELECT id FROM memories WHERE author = ? AND scope = ? AND deleted AND id <> ?
+  ORDER BY updated_at, id LIMIT ?`, p, string(scope), except, excess)
+	if err != nil {
+		return fmt.Errorf("find forgotten memories: %w", err)
+	}
+	var ids []any
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("find forgotten memories: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("find forgotten memories: %w", err)
+	}
+	if err := w.touch(ctx, `DELETE FROM memories WHERE deleted AND id IN (`+placeholders(len(ids))+`)`, ids...); err != nil { //nolint:gosec // placeholders only; values are arguments
+		return fmt.Errorf("prune forgotten memories: %w", err)
 	}
 	return nil
 }
@@ -524,7 +558,7 @@ func (w *wtx) checkCap(ctx context.Context, scope Scope) error {
 func (w *wtx) insertMemory(ctx context.Context, in NewMemory, op Op, capped bool) (Memory, error) {
 	p := w.actor.Principal
 	if capped {
-		if err := w.checkCap(ctx, in.Scope); err != nil {
+		if err := w.checkCap(ctx, in.Scope, ""); err != nil {
 			return Memory{}, err
 		}
 	}
@@ -554,7 +588,7 @@ func (w *wtx) insertMemory(ctx context.Context, in NewMemory, op Op, capped bool
 func (w *wtx) reviveMemory(ctx context.Context, cur Memory, in NewMemory, op Op, capped bool) (Memory, error) {
 	p := w.actor.Principal
 	if capped {
-		if err := w.checkCap(ctx, in.Scope); err != nil {
+		if err := w.checkCap(ctx, in.Scope, cur.ID); err != nil {
 			return Memory{}, err
 		}
 	}

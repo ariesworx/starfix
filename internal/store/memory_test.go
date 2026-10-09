@@ -359,7 +359,7 @@ func TestForgetKeepsRevsMonotonic(t *testing.T) {
 			t.Errorf("pin or forget of a forgotten key = %v, want ErrNotFound", err)
 		}
 	}
-	// The per-scope cap of 1 counts no forgotten memory.
+	// Reviving a tombstone adds no row, so a full cap of 1 allows it.
 	again := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "fresh"})
 	if again.Rev != 4 || again.Author != "bob" || again.Pinned || again.Body != "fresh" {
 		t.Fatalf("Remember after forget = %+v; want a new memory by bob, unpinned, at rev 4", again)
@@ -411,6 +411,78 @@ func TestRememberPinOnlyKeepsUpdatedAt(t *testing.T) {
 	e := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "two", Rev: p.Rev})
 	if !e.UpdatedAt.Equal(clk.now()) {
 		t.Errorf("an edit's updated_at = %v, want %v", e.UpdatedAt, clk.now())
+	}
+}
+
+// Rule 18: tombstones count toward memories_per_scope, so forgetting
+// and creating keys cannot grow the table without bound. A new key that
+// would pass the cap first deletes the author's oldest tombstones in the
+// scope, so only live memories are ever refused.
+func TestMemoryCapPrunesTombstones(t *testing.T) {
+	s := openStore(t, newDSN(t), Options{Limits: Limits{Memories: 3}})
+	ctx := t.Context()
+	rows := func(key string) int {
+		t.Helper()
+		var n int
+		if err := s.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM memories WHERE mem_key = ?`, key).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		mustRemember(t, s, alice, NewMemory{Key: k, Body: "x"})
+	}
+	for _, k := range []string{"a", "b"} {
+		if _, err := s.Forget(ctx, alice, ScopeProject, k, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One live and two tombstones fill the cap; the oldest tombstone,
+	// a, makes room for d, and b's stays.
+	mustRemember(t, s, alice, NewMemory{Key: "d", Body: "x"})
+	if rows("a") != 0 || rows("b") != 1 {
+		t.Errorf("after a new key at the cap: %d rows for a, %d for b; want the oldest tombstone, a, deleted", rows("a"), rows("b"))
+	}
+	// Reviving a tombstone adds no row, so it prunes nothing.
+	b := mustRemember(t, s, alice, NewMemory{Key: "b", Body: "back"})
+	if b.Rev != 3 {
+		t.Errorf("revived b at rev %d, want 3", b.Rev)
+	}
+	if _, err := s.Forget(ctx, alice, ScopeProject, "b", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Bob's tombstone of alice's memory is still hers to prune, and
+	// another principal's rows are never touched.
+	mustRemember(t, s, bob, NewMemory{Key: "bobs", Body: "x"})
+	mustRemember(t, s, alice, NewMemory{Key: "e", Body: "x"})
+	if rows("b") != 0 || rows("bobs") != 1 {
+		t.Errorf("after e: %d rows for b, %d for bobs; want b's tombstone deleted and bob's memory kept", rows("b"), rows("bobs"))
+	}
+	// Three live memories fill the cap with no tombstone to prune.
+	var ml *MemoryLimitError
+	if _, err := s.Remember(ctx, alice, NewMemory{Key: "f", Body: "x"}); !errors.As(err, &ml) || ml.Max != 3 {
+		t.Errorf("a fourth live memory = %v, want a MemoryLimitError", err)
+	}
+	// Pruning is bookkeeping: the write records only its create.
+	if _, err := s.Forget(ctx, alice, ScopeProject, "c", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	seq := lastSeq(t, s)
+	mustRemember(t, s, alice, NewMemory{Key: "g", Body: "x"})
+	evs, err := s.Events(ctx, seq, 10)
+	if err != nil || len(evs) != 1 || evs[0].Op != OpMemoryCreate || rows("c") != 0 {
+		t.Errorf("events of a create that pruned = %+v, %v (c rows %d); want one memory.create and c gone", evs, err, rows("c"))
+	}
+	// User scope prunes the owner's own tombstones the same way.
+	for _, k := range []string{"u1", "u2", "u3"} {
+		mustRemember(t, s, bob, NewMemory{Scope: ScopeUser, Key: k, Body: "x"})
+	}
+	if _, err := s.Forget(ctx, bob, ScopeUser, "u1", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	mustRemember(t, s, bob, NewMemory{Scope: ScopeUser, Key: "u4", Body: "x"})
+	if rows("u1") != 0 {
+		t.Errorf("bob's user tombstone u1 kept after a new key at the cap")
 	}
 }
 
