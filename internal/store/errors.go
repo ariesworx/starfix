@@ -136,7 +136,8 @@ func (e *StaleEpochError) Unwrap() error { return ErrConflict }
 // ForbiddenError refuses a change the actor may not make. Either Holder,
 // another principal, holds the issue under a live claim until Until, and
 // only the holder or an admin may change it; or Action is for admins only
-// (for example "close --force"). It wraps ErrForbidden.
+// (for example "close --force" on ID, or "prices set", which has no ID).
+// It wraps ErrForbidden.
 type ForbiddenError struct {
 	ID     IssueID
 	Holder Actor
@@ -145,7 +146,10 @@ type ForbiddenError struct {
 }
 
 func (e *ForbiddenError) Error() string {
-	if e.Action != "" {
+	switch {
+	case e.Action != "" && e.ID == "":
+		return e.Action + " is for admins"
+	case e.Action != "":
 		return fmt.Sprintf("%s on %s is for admins", e.Action, e.ID)
 	}
 	return fmt.Sprintf("issue %s is held by %s/%s until %s; only the holder or an admin may change it",
