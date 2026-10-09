@@ -96,7 +96,8 @@ func TestTokenUsage(t *testing.T) {
 	}
 
 	digest := alice.ok("digest")
-	if !strings.Contains(digest, "\nheld 0m\ntokens claude-opus-4-1: 2.4k in, 600 out, 5k cache write (1k 1h), 90k cache read\n") {
+	// No model has a price here, so the cost is marked unpriced (cost_test.go).
+	if !strings.Contains(digest, "\nheld 0m\ncost unpriced\ntokens claude-opus-4-1: 2.4k in, 600 out, 5k cache write (1k 1h), 90k cache read\n") {
 		t.Errorf("digest lacks the usage lines:\n%s", digest)
 	}
 	if d := decode[proto.DigestResult](t, alice.ok("digest", "--json")); d.Usage == nil || len(d.Usage.Models) != 1 {
