@@ -38,11 +38,12 @@ import (
 //
 // Protocol 4 adds memory (design §6): the remember, recall, forget and
 // pin ops, and start's memories, a result field older clients ignore.
-// ProtoMin stays at 2. Each bump so far moved it to the newest protocol
-// a release speaks, and none speaks 3 yet (v0.2.2 speaks 2), so raising
-// it would refuse every released client while keeping no promise to one.
-// When a release speaks 3 or 4, the next bump moves ProtoMin to that.
-// A protocol 2 or 3 client sends no memory op and is served as before.
+// ProtoMin stays at 2: v0.2.x clients speak 2 and v0.3.x clients speak 3,
+// and this server accepts both. Neither sends a memory op, and both
+// ignore start's memories, so a protocol 3 client keeps working against
+// a protocol 4 server exactly as against a protocol 3 one, and a
+// protocol 2 client as it did before protocol 3. Raising ProtoMin to 3
+// would refuse v0.2.x clients; TestReleasedClients pins the range.
 const (
 	Proto    = 4
 	ProtoMin = 2

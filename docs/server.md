@@ -454,8 +454,9 @@ Upgrade the server first, then the clients. A newer server accepts older
 clients. A newer client that needs a newer protocol is refused by an older
 server at the handshake, with exit code 3 and a fix that says to upgrade
 the server. This release speaks protocol 4 (memory) and accepts clients
-that speak 2 to 4, so v0.2.x clients keep working and v0.1.x clients,
-which speak 1, must upgrade.
+that speak 2 to 4, so v0.2.x clients (protocol 2) and v0.3.x clients
+(protocol 3) keep working, without memory, and v0.1.x clients, which
+speak 1, must upgrade.
 
 On the server, as the `starfix` user:
 
