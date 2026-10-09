@@ -255,8 +255,9 @@ unpin KEY`. Agents cannot pin.
 
 **No secrets.** The server refuses a memory that looks like it holds a
 credential, in every scope: a private key, an AWS access key id, a
-GitHub, GitLab, Slack or Stripe token, a JSON web token, a `password=`
-or `secret:` assignment, or a long random token. The refusal names what
+GitHub, GitLab, Slack or Stripe token, a JSON web token, a bearer
+token, a password in a URL or after `mysql -p`, a `password=` or
+`secret:` assignment, or a long random token. The refusal names what
 it looks like, never the text. Write where the secret is kept instead,
 such as a vault path or an environment variable's name.
 

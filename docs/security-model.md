@@ -178,8 +178,10 @@ caps, their settings and what a refusal past each one says.
 - **Memories refuse secrets.** A memory that looks like it holds a
   credential is refused in every scope, `user` included, and by
   `import-bd`: private keys, AWS access key ids, GitHub, GitLab, Slack and
-  Stripe tokens, JSON web tokens, `password=` or `secret:` assignments
-  with a real-looking value, and long random tokens (32 or more
+  Stripe tokens, JSON web tokens, bearer tokens, passwords in a URL
+  (`scheme://user:password@host`) or after `mysql -p`, `password=`,
+  `pwd=` or `secret:` assignments with a real-looking value (a quoted
+  passphrase after `=` included), and long random tokens (32 or more
   characters mixing cases and digits, at high entropy). The refusal names
   the kind, never the text. The check (`internal/secretscan`) errs toward
   letting text through, so it is a guard against mistakes, not a

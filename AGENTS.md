@@ -32,7 +32,7 @@ stage is in progress.
 | `internal/server` | Daemon: socket, peer check, sshd bridge, dispatch of ops to the store, error mapping, settings |
 | `internal/client` | In-process SSH client with a pinned host key, over TCP or a Google Cloud IAP tunnel; `.starfix.yaml` discovery, session ids |
 | `internal/safetext` | Unsafe characters (controls, bidi): the store's validation, bd import cleaning, and the escaping of everything clients print |
-| `internal/secretscan` | Text that looks like a credential (private keys, service tokens, JWTs, secret assignments, long random tokens): the store's secrets lint for memories |
+| `internal/secretscan` | Text that looks like a credential (private keys, service and bearer tokens, JWTs, passwords in URLs and commands, secret assignments, long random tokens): the store's secrets lint for memories |
 | `internal/cli` | `sfx` commands; writes only to the `Env` it is given |
 | `internal/board` | `sfx tui`, the live board: the model and its golden-tested frames, `Live` (event push, debounced rereads, reconnects), and the terminal loop over `golang.org/x/term` |
 | `internal/capture` | Token usage read from a harness's local records (Claude Code transcripts) for `sfx usage --hook`, with per-file offsets in a 0600 state file |

@@ -5,7 +5,7 @@
 // the same way (design §6: a secrets lint refuses anything that looks
 // like a key or password).
 //
-// It errs towards letting text through: a memory refused for a secret it
+// It errs toward letting text through: a memory refused for a secret it
 // does not hold costs an agent a rewrite, so the patterns are specific
 // and the entropy threshold conservative. Text that names where a secret
 // lives (a vault path, a variable) passes.
@@ -23,15 +23,18 @@ type Kind string
 
 // Kinds of finding, in the order Find checks them.
 const (
-	KindPrivateKey   Kind = "private key"
-	KindAWSAccessKey Kind = "AWS access key id"
-	KindGitHubToken  Kind = "GitHub token"
-	KindGitLabToken  Kind = "GitLab token"
-	KindSlackToken   Kind = "Slack token"
-	KindStripeKey    Kind = "Stripe key"
-	KindJWT          Kind = "JSON web token"
-	KindAssignment   Kind = "password or secret assignment"
-	KindHighEntropy  Kind = "long random token"
+	KindPrivateKey      Kind = "private key"
+	KindAWSAccessKey    Kind = "AWS access key id"
+	KindGitHubToken     Kind = "GitHub token"
+	KindGitLabToken     Kind = "GitLab token"
+	KindSlackToken      Kind = "Slack token"
+	KindStripeKey       Kind = "Stripe key"
+	KindJWT             Kind = "JSON web token"
+	KindBearerToken     Kind = "bearer token"
+	KindURLPassword     Kind = "password in a URL"
+	KindCommandPassword Kind = "password on a command line"
+	KindAssignment      Kind = "password or secret assignment"
+	KindHighEntropy     Kind = "long random token"
 )
 
 // Finding is the first credential-like text Find saw: what it looks like
@@ -61,9 +64,21 @@ var tokenPatterns = []struct {
 
 // assignment is a name that holds a credential, then = or :, then a
 // value. The name may have a prefix (DB_PASSWORD, client_secret) and a
-// closing quote (JSON). Group 1 is the name, 2 the separator, 3 the
-// value, quoted or not.
-var assignment = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])([a-z0-9_.-]*(?:password|passwd|passphrase|secret|api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|token|private[_-]?key|credentials?))["']?[ \t]*(=|:)[ \t]*("[^"\n]*"|'[^'\n]*'|[^\s,;"'&)}\]]+)`)
+// closing quote (JSON); the short names pwd and pass take a prefix only
+// after a separator (SMTP_PASS), so a word such as compass is no name.
+// Group 1 is the name, 2 the separator, 3 the value, quoted or not.
+var assignment = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])([a-z0-9_.-]*(?:password|passwd|passphrase|secret|api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|token|private[_-]?key|credentials?)|(?:[a-z0-9_.-]*[_.-])?(?:pwd|pass))["']?[ \t]*(=|:)[ \t]*("[^"\n]*"|'[^'\n]*'|[^\s,;"'&)}\]]+)`)
+
+// bearer is an HTTP bearer token: group 1 is the token.
+var bearer = regexp.MustCompile(`(?i)\bbearer[ \t]+([A-Za-z0-9._~+/-]{20,}=*)`)
+
+// urlPassword is a URL's userinfo with a password: group 1 is the
+// password.
+var urlPassword = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:([^\s/@]+)@`)
+
+// commandPassword is a MySQL client given its password with -p, which
+// takes the value with no space: group 1 is the password.
+var commandPassword = regexp.MustCompile(`\bmysql(?:dump|admin|import|show|check|binlog)?\b[^\n]*?[ \t]-p(\S+)`)
 
 // placeholders are values that stand for a secret rather than being one.
 var placeholders = map[string]bool{
@@ -102,12 +117,26 @@ var sshKeyType = regexp.MustCompile(`(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-nistp
 
 // Find returns the first credential-like text in s and true, or false
 // when s holds none. Formats with a known shape are checked first, then
+// bearer tokens, passwords in URLs and on a MySQL command line, then
 // assignments, then long random tokens; within a check the earliest
 // match wins.
 func Find(s string) (Finding, bool) {
 	for _, p := range tokenPatterns {
 		if loc := p.re.FindStringIndex(s); loc != nil {
 			return Finding{Kind: p.kind, Offset: loc[0]}, true
+		}
+	}
+	for _, c := range []struct {
+		kind Kind
+		re   *regexp.Regexp
+		ok   func(string) bool
+	}{
+		{KindBearerToken, bearer, func(v string) bool { return strings.ContainsAny(v, "0123456789") }},
+		{KindURLPassword, urlPassword, plainValue},
+		{KindCommandPassword, commandPassword, plainValue},
+	} {
+		if off, ok := findValue(s, c.re, c.ok); ok {
+			return Finding{Kind: c.kind, Offset: off}, true
 		}
 	}
 	if off, ok := findAssignment(s); ok {
@@ -119,16 +148,32 @@ func Find(s string) (Finding, bool) {
 	return Finding{}, false
 }
 
+// findValue returns the offset of the first match of re whose group 1
+// passes ok.
+func findValue(s string, re *regexp.Regexp, ok func(string) bool) (int, bool) {
+	for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
+		if ok(s[m[2]:m[3]]) {
+			return m[0], true
+		}
+	}
+	return 0, false
+}
+
+// plainValue reports whether an unquoted value may be a credential.
+func plainValue(v string) bool { return secretValue(v, false) }
+
 // findAssignment returns the offset of the first name assigned a value
 // that may be a credential, one that is no placeholder and holds a digit
 // or a symbol, as an English word does not. With =, a value of letters
-// alone counts too once it is minLetters long. With :, which prose uses
-// too, the name must be quoted or start a line, as in JSON or YAML.
+// alone counts too once it is minLetters long, and a quoted value may
+// hold spaces, as a passphrase does. With :, which prose uses too, the
+// name must be quoted or start a line, as in JSON or YAML, and the value
+// must be one word.
 func findAssignment(s string) (int, bool) {
 	for _, m := range assignment.FindAllStringSubmatchIndex(s, -1) {
-		name, sep := m[2], s[m[4]:m[5]]
-		value := unquote(s[m[6]:m[7]])
-		if !secretValue(value) {
+		name, sep, raw := m[2], s[m[4]:m[5]], s[m[6]:m[7]]
+		value := unquote(raw)
+		if !secretValue(value, sep == "=" && value != raw) {
 			continue
 		}
 		symbol := hasDigitOrSymbol(value)
@@ -163,13 +208,15 @@ func unquote(v string) string {
 }
 
 // secretValue reports whether an assigned value may be a credential: long
-// enough, one word, and not a placeholder, a variable, a template, a
-// call or a pointer to where the secret lives.
-func secretValue(v string) bool {
-	if len(v) < minAssigned || strings.ContainsAny(v, " \t(") {
+// enough, one word unless quoted is set, and not a placeholder, a
+// variable, a template, a call, a file path or a pointer to where the
+// secret lives.
+func secretValue(v string, quoted bool) bool {
+	if len(v) < minAssigned || (!quoted && strings.ContainsAny(v, " \t(")) {
 		return false
 	}
-	if placeholders[strings.ToLower(v)] || strings.ContainsAny(v[:1], "$<{%*[") {
+	if placeholders[strings.ToLower(v)] || strings.ContainsAny(v[:1], "$<{%*[/") ||
+		strings.HasPrefix(v, "~/") || strings.HasPrefix(v, "./") {
 		return false
 	}
 	if strings.Trim(v, "xX*.•-_") == "" {
