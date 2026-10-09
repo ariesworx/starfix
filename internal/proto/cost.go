@@ -104,16 +104,18 @@ type CostGroup struct {
 
 // CostResult is a cost report. Groups are by cost, largest first; Total
 // covers every record read. Unpriced names the models with tokens and no
-// price at their time, at most MaxUsageModels. Truncated: the window had
-// more records than the server reads, so every figure is a lower bound.
+// price at their time, at most MaxUsageModels, and UnpricedMore counts
+// the rest. Truncated: the window had more records than the server
+// reads, so every figure is a lower bound.
 type CostResult struct {
-	By        string      `json:"by"`
-	Since     time.Time   `json:"since"`
-	Until     time.Time   `json:"until"`
-	Groups    []CostGroup `json:"groups"`
-	Total     CostGroup   `json:"total"`
-	Unpriced  []string    `json:"unpriced,omitempty"`
-	Truncated bool        `json:"truncated,omitempty"`
+	By           string      `json:"by"`
+	Since        time.Time   `json:"since"`
+	Until        time.Time   `json:"until"`
+	Groups       []CostGroup `json:"groups"`
+	Total        CostGroup   `json:"total"`
+	Unpriced     []string    `json:"unpriced,omitempty"`
+	UnpricedMore int         `json:"unpriced_more,omitempty"`
+	Truncated    bool        `json:"truncated,omitempty"`
 }
 
 // picoPerUSD is picodollars in a dollar.

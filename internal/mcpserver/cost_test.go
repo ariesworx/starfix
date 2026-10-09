@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +99,22 @@ func TestCostToolFits(t *testing.T) {
 	want := fmt.Sprintf("%s: %s, some unpriced, %s tokens, split", proto.OtherModels, proto.Dollars(usd), proto.TokenCount(tokens))
 	if got := c.Groups[kept]; got != want || c.Total != "$8.35, some unpriced, 4.3M tokens" {
 		t.Errorf("cost kept %d groups, then %q, total %q; want %q, the total whole", kept, got, c.Total, want)
+	}
+}
+
+// The tool names five unpriced models and counts the rest, the ones the
+// server did not name included.
+func TestCostToolUnpricedMore(t *testing.T) {
+	f := &fakeConn{reply: func(string, any) (any, error) {
+		return proto.CostResult{By: "model", Groups: []proto.CostGroup{}, Total: proto.CostGroup{CostUSD: "0"},
+			Unpriced: []string{"m1", "m2", "m3", "m4", "m5", "m6"}, UnpricedMore: 2}, nil
+	}}
+	cs, _ := connect(t, f)
+	var c Cost
+	if err := json.Unmarshal([]byte(text(t, callTool(t, cs, "cost", map[string]any{"since": "7d"}))), &c); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"m1", "m2", "m3", "m4", "m5", "3 more models"}; !slices.Equal(c.Unpriced, want) {
+		t.Errorf("cost unpriced = %q, want %q", c.Unpriced, want)
 	}
 }

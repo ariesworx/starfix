@@ -61,7 +61,8 @@ func cost(ctx context.Context, s *Server, _ store.Actor, in proto.CostArgs) (any
 	for _, g := range r.Groups {
 		out.Groups = append(out.Groups, wireCostGroup(g))
 	}
-	out.Unpriced = r.Unpriced[:min(len(r.Unpriced), proto.MaxUsageModels)]
+	n := min(len(r.Unpriced), proto.MaxUsageModels)
+	out.Unpriced, out.UnpricedMore = r.Unpriced[:n], len(r.Unpriced)-n
 	return out, nil
 }
 

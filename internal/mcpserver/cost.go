@@ -59,7 +59,7 @@ func cost(ctx context.Context, c Conn, in CostIn) (Cost, error) {
 		name, _ := cut(m, usageModelLen)
 		out.Unpriced = append(out.Unpriced, name)
 	}
-	if more := len(r.Unpriced) - usageModels; more > 0 {
+	if more := max(len(r.Unpriced)-usageModels, 0) + r.UnpricedMore; more > 0 {
 		out.Unpriced = append(out.Unpriced, fmt.Sprintf("%d more models", more))
 	}
 	for _, g := range r.Groups {

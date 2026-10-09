@@ -100,7 +100,11 @@ func printCost(w io.Writer, c proto.CostResult) {
 		p("split: shared by time with other work, so an estimate\n")
 	}
 	if len(c.Unpriced) > 0 {
-		p("unpriced: no price for %s; an admin sets one with `sfx admin prices set`\n", strings.Join(escAll(c.Unpriced), ", "))
+		names := strings.Join(escAll(c.Unpriced), ", ")
+		if c.UnpricedMore > 0 {
+			names += fmt.Sprintf(" and %d more", c.UnpricedMore)
+		}
+		p("unpriced: no price for %s; an admin sets one with `sfx admin prices set`\n", names)
 	}
 	if c.Truncated {
 		p("partial: more records than the server reads; narrow the window\n")

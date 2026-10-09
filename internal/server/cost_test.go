@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -155,5 +156,23 @@ func TestDispatchCostLongestWindow(t *testing.T) {
 	r := mustCall[proto.CostResult](t, s, bob, proto.OpCost, proto.CostArgs{By: "model", Since: "366d"})
 	if got, want := r.Until.Sub(r.Since), 366*24*time.Hour; got != want {
 		t.Errorf("cost since 366d covers %s, want %s", got, want)
+	}
+}
+
+// A report names at most MaxUsageModels unpriced models and counts the
+// rest, so a client can say how many it does not list.
+func TestDispatchCostUnpricedMore(t *testing.T) {
+	s := newServer(t)
+	now := time.Now().UTC()
+	var recs []proto.UsageRecord
+	for i := range proto.MaxUsageModels + 2 {
+		r := usageRec(fmt.Sprintf("r%d", i), now, 10)
+		r.Model = fmt.Sprintf("mystery-%02d", i)
+		recs = append(recs, r)
+	}
+	mustCall[proto.UsageResult](t, s, alice, proto.OpUsage, proto.UsageArgs{Records: recs})
+	r := mustCall[proto.CostResult](t, s, bob, proto.OpCost, proto.CostArgs{By: "model", Since: "1h"})
+	if len(r.Unpriced) != proto.MaxUsageModels || r.UnpricedMore != 2 {
+		t.Errorf("cost names %d unpriced models and %d more, want %d and 2", len(r.Unpriced), r.UnpricedMore, proto.MaxUsageModels)
 	}
 }
