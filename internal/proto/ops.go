@@ -478,12 +478,14 @@ type StartArgs struct {
 }
 
 // StartResult is the issue taken, in full, its latest handoff note with
-// its fields, the claim and the acceptance items (protocol 2).
+// its fields, the claim and the acceptance items (protocol 2), and the
+// memories relevant to it, pinned first and then newest (protocol 4).
 type StartResult struct {
-	Issue   Issue            `json:"issue"`
-	Handoff *Handoff         `json:"handoff,omitempty"`
-	Claim   *Claim           `json:"claim,omitempty"`
-	Items   []AcceptanceItem `json:"items,omitempty"`
+	Issue    Issue            `json:"issue"`
+	Handoff  *Handoff         `json:"handoff,omitempty"`
+	Claim    *Claim           `json:"claim,omitempty"`
+	Items    []AcceptanceItem `json:"items,omitempty"`
+	Memories []Memory         `json:"memories,omitempty"`
 }
 
 // Claim is a lease on an issue. Epoch rises each time a new holder takes

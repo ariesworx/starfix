@@ -23,6 +23,10 @@ func TestWritesRetryWithTheirKey(t *testing.T) {
 			return a.Idem
 		case proto.FinishArgs:
 			return a.Idem
+		case proto.RememberArgs:
+			return a.Idem
+		case proto.ForgetArgs:
+			return a.Idem
 		}
 		return ""
 	}
@@ -34,6 +38,8 @@ func TestWritesRetryWithTheirKey(t *testing.T) {
 		{"comment", map[string]any{"id": "sf-1", "body": "hi"}},
 		{"handoff", map[string]any{"id": "sf-1", "note": "later"}},
 		{"finish", map[string]any{"id": "sf-1"}},
+		{"remember", map[string]any{"key": "k", "body": "b"}},
+		{"forget", map[string]any{"key": "k"}},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			var keys []string

@@ -11,11 +11,11 @@ command line. One small Go server keeps the data in
 [Dolt](https://github.com/dolthub/dolt), a SQL database with Git-style
 history.
 
-> **Status: stage 3 of 7 in progress.** Issues, claims, handoffs, the
-> inbox, a live board, agent setup and importing from bd (beads) work
-> today. Memory and
-> an offline cache come next. Not ready for production use yet; see the
-> [roadmap](#roadmap).
+> **Status: stage 4 of 7 in progress** (stage 3 waits only on token
+> capture for Codex and Gemini CLI). Issues, claims, handoffs, the inbox,
+> a live board, scoped memory, agent setup and importing from bd (beads)
+> work today. Token prices and an offline cache come next. Not ready for
+> production use yet; see the [roadmap](#roadmap).
 
 ## Why starfix
 
@@ -49,13 +49,14 @@ what. starfix makes that safe:
 | See every session at work and what it holds | `who` | [Who is at work](docs/concepts.md#who-is-at-work) |
 | Watch ready, held and blocked work, and every change as it happens, in a terminal | `tui` | [The live board](docs/cli.md#the-live-board) |
 | Summarize a day or a week for a standup | `digest` | [The digest](docs/concepts.md#the-digest) |
+| Keep what the next session needs to know, for the project, the team or yourself alone | `remember`, `recall`, `memories`, `pin` | [Memory](docs/concepts.md#memory) |
 | See the time and tokens each issue took, by account (tokens from Claude Code so far) | `show`, `digest`, `usage --hook` | [Accounts, time and tokens](docs/concepts.md#accounts-time-and-tokens) |
 | Set up Claude Code, Codex, Gemini CLI, Cursor, VS Code, Junie, JetBrains AI Assistant or Claude Desktop | `setup` | [Agents](docs/agents.md) |
 | Move a bd (beads) backlog over, keeping its IDs | `starfixd import-bd` | [Moving from bd](docs/migrate-from-bd.md) |
 | Reach a server that has no public address, through Google Cloud IAP | `iap:` in `.starfix.yaml` | [Using sfx](docs/cli.md#servers-without-a-public-ip-google-cloud-iap) |
 | Upgrade clients and the server from signed releases | `upgrade` | [Installing starfix](docs/install.md#upgrade-and-roll-back) |
 
-Planned: team and personal memory, token prices and cost reports, an offline cache,
+Planned: token prices and cost reports, an offline cache,
 and **Bearings**, an orchestrator that runs and supervises many agents on
 top of starfix ([design](docs/design/bearings.md)).
 
@@ -162,7 +163,7 @@ binary, building from source and verifying a download by hand.
 | 1 | Store, server, SSH transport, version handshake, issue CLI, bd import | Done |
 | 2 | MCP server, `start`/`finish`, `digest`, `prime`, `upgrade`, agent setup | Done |
 | 3 | Claims with leases, agents registry, inbox, event push, handoff, files to issues, live board, token capture | In progress. Built: claims, agents registry, inbox, event push, structured handoffs, idempotency, files to issues, acceptance checklists, similar closed issues, the live board, accounts, time and token reporting, and token capture for Claude Code. The stage's gate, a multi-session soak test, passes. Left: token capture for Codex and Gemini CLI, held until the maintainer uses them and their formats can be checked against real files |
-| 4 | Team and personal memory with tags; prices and `sfx cost` | |
+| 4 | Team and personal memory with tags; prices and `sfx cost` | In progress. Built: scoped, tagged memory with pins and issue links (`remember`, `recall`, `forget`, `memories`, `pin`), ranked in `prime` and `start`, private user scope, a secrets lint, and import of bd's memories. Left: prices, `sfx cost`, `sfx log` and the digest's cost line |
 | 5 | Offline cache, outbox, conflict resolution | |
 | 6 | Locks, gates, formulas, swarm, cross-project | |
 | 7 | Scheduled digests, GitHub sync, compaction, vectors | |

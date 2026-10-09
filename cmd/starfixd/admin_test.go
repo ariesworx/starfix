@@ -93,10 +93,10 @@ func TestImportBDCommand(t *testing.T) {
 	if got.err != nil {
 		t.Fatalf("import: %v\n%s", got.err, got.stderr)
 	}
-	if want := "imported 10 issues (10 created), 8 deps (8 created), 3 comments (3 created); 0 errors, 17 warnings\n"; got.stdout != want {
+	if want := "imported 10 issues (10 created), 8 deps (8 created), 3 comments (3 created), 1 memory (1 created); 0 errors, 16 warnings\n"; got.stdout != want {
 		t.Errorf("stdout = %q, want %q", got.stdout, want)
 	}
-	if n, f := strings.Count(got.stderr, "warning: "), strings.Count(got.stderr, "\nfix: "); n != 17 || f != 17 {
+	if n, f := strings.Count(got.stderr, "warning: "), strings.Count(got.stderr, "\nfix: "); n != 16 || f != 16 {
 		t.Errorf("stderr has %d warnings and %d fix lines:\n%s", n, f, got.stderr)
 	}
 
@@ -121,7 +121,7 @@ func TestImportBDCommand(t *testing.T) {
 	if dec.More() {
 		t.Error("more than one JSON document")
 	}
-	if doc.Issues.Unchanged != 10 || len(doc.Problems) != 17 || !strings.HasPrefix(doc.Summary, "imported 10 issues (10 unchanged)") {
+	if doc.Issues.Unchanged != 10 || len(doc.Problems) != 16 || !strings.HasPrefix(doc.Summary, "imported 10 issues (10 unchanged)") {
 		t.Errorf("json report = %+v", doc)
 	}
 }

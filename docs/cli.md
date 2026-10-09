@@ -110,7 +110,7 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 
 | Command | Does |
 |---|---|
-| `start [ID]` | Claim an issue, the top ready one if you give no ID, and show it with its checklist, last handoff and branch name. `--for 4h` sets the lease (default 8h, at most 24h). `--branch` checks the branch out; `--worktree DIR` creates a worktree on it. `--take` takes the claim over from another session of yours |
+| `start [ID]` | Claim an issue, the top ready one if you give no ID, and show it with its checklist, last handoff, relevant memories and branch name. `--for 4h` sets the lease (default 8h, at most 24h). `--branch` checks the branch out; `--worktree DIR` creates a worktree on it. `--take` takes the claim over from another session of yours |
 | `finish ID` | Close your issue and end the claim in one step: `--reason`, a `--handoff` note (with the handoff fields below), and `--discovered TITLE` for each new issue found on the way. `--tick 1,3` and `--waive N=REASON` settle acceptance items first; finish is refused while any item is open. `--epoch N` refuses unless N is still the claim's epoch ([Claims and leases](concepts.md#claims-and-leases)). It sends the paths the issue's work touched, read from git ([Files](concepts.md#files-what-an-issue-touches)) |
 | `accept ID N...` | Tick acceptance items. `--undo` unticks them; `--waive REASON` waives them |
 | `handoff ID NOTE` | Leave a note for whoever continues. Fields: `--state done\|partial\|blocked`, `--next TEXT`, `--branch B`, `--worktree DIR`, and `--to P` to put it in P's inbox. `--release` ends your claim and unassigns the issue, and takes `--epoch N` like `finish`. It sends the issue's paths like `finish` |
@@ -141,7 +141,21 @@ in DIR. `--json` prints exactly one JSON document, errors included.
 | `tui` | Show the [live board](#the-live-board) until `q` |
 | `who` | List the sessions seen in the last 5 minutes (`--since 2h`, up to 7d) and the issues each holds; at most 100 (`-n N`, up to 500), then a count of the rest |
 | `digest` | Summarize a window: `--since 24h` (default), `7d`, a date or a time; filter with `--by PRINCIPAL` or `--label L`. Under its header it prints the time issues were held (saying when some tokens were split by time), the tokens reported by model, and those no issue was held for |
-| `prime` | Orient a session: your issues in progress, your inbox, the top ready work and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
+| `prime` | Orient a session: your issues in progress, your inbox, the top ready work, memories (pinned, then relevant to your work, then newest) and version notices. `--hook[=AGENT]` is for an agent's session-start hook ([agent guide](agents.md#session-start-hooks)) |
+
+### Memory
+
+Memories are notes kept across sessions, in `project` (the default),
+`team` or `user` scope; a `user` memory is yours alone
+([Memory](concepts.md#memory)). Every command takes `--scope S`.
+
+| Command | Does |
+|---|---|
+| `remember KEY TEXT` | Keep a memory and print `KEY (SCOPE) rev N` (`-` reads stdin). `--tag T` (repeatable or comma-separated), `--issue ID` links it to an issue, `--pin` pins it. Without `--rev` the key must be new; `--rev N` replaces the memory at revision N and is refused if it changed since. A replace keeps the tags, issue and pin it is not given; `--tag ''` and `--issue ''` clear them. A memory that looks like it holds a secret is refused |
+| `recall [TEXT]` | Search memories: TEXT in the key or body, `--key K` exactly, `--tag T`, `--scope S`. Pinned first, then newest; 20, or `-n N` (at most 500), then a count of the rest |
+| `memories` | List the memories you can see, pinned first, then newest; `--scope S`, `-n N` |
+| `forget KEY` | Delete a memory. `--rev N` refuses if it changed since revision N |
+| `pin KEY`, `unpin KEY` | Pin a memory, so `prime` always shows it, or unpin it |
 
 ### Agents and maintenance
 

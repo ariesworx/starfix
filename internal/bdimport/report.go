@@ -42,11 +42,12 @@ type Report struct {
 	Issues   Counts `json:"issues"`
 	Deps     Counts `json:"deps"`
 	Comments Counts `json:"comments"`
+	Memories Counts `json:"memories"`
 	// LabelsAdded counts labels merged into issues that already existed or
 	// were created.
 	LabelsAdded int `json:"labels_added"`
-	// Skipped counts lines that are not issues: memory, tombstone and
-	// header records.
+	// Skipped counts lines that are neither issues nor memories:
+	// tombstone, header and other records.
 	Skipped  int       `json:"skipped"`
 	Problems []Problem `json:"problems"`
 
@@ -70,7 +71,7 @@ func (r *Report) Summary() string {
 	if r.DryRun {
 		verb = "would import"
 	}
-	part := func(name string, c Counts) string {
+	part := func(name, names string, c Counts) string {
 		var xs []string
 		for _, f := range []struct {
 			n    int
@@ -81,13 +82,20 @@ func (r *Report) Summary() string {
 			}
 		}
 		if len(xs) == 0 {
-			return "0 " + name + "s"
+			return "0 " + names
 		}
-		return fmt.Sprintf("%d %s (%s)", c.total(), plural(c.total(), name), strings.Join(xs, ", "))
+		if c.total() == 1 {
+			names = name
+		}
+		return fmt.Sprintf("%d %s (%s)", c.total(), names, strings.Join(xs, ", "))
+	}
+	parts := []string{part("issue", "issues", r.Issues), part("dep", "deps", r.Deps), part("comment", "comments", r.Comments)}
+	// Most bd backlogs hold no memories; the count shows when one does.
+	if r.Memories.total() > 0 {
+		parts = append(parts, part("memory", "memories", r.Memories))
 	}
 	warnings := len(r.Problems) - r.Errors()
-	return fmt.Sprintf("%s %s, %s, %s; %d %s, %d %s", verb,
-		part("issue", r.Issues), part("dep", r.Deps), part("comment", r.Comments),
+	return fmt.Sprintf("%s %s; %d %s, %d %s", verb, strings.Join(parts, ", "),
 		r.Errors(), plural(r.Errors(), "error"), warnings, plural(warnings, "warning"))
 }
 

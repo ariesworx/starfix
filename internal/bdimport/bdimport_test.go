@@ -192,14 +192,15 @@ func TestImportBacklog(t *testing.T) {
 		{"issues", rep.Issues, Counts{Created: 10}},
 		{"deps", rep.Deps, Counts{Created: 8}},
 		{"comments", rep.Comments, Counts{Created: 3}},
+		{"memories", rep.Memories, Counts{Created: 1}},
 	}
 	for _, c := range wantCounts {
 		if c.got != c.want {
 			t.Errorf("%s = %+v, want %+v", c.name, c.got, c.want)
 		}
 	}
-	if rep.Skipped != 3 || rep.LabelsAdded != 12 || rep.Lines != 13 {
-		t.Errorf("skipped %d, labels %d, lines %d; want 3, 12, 13", rep.Skipped, rep.LabelsAdded, rep.Lines)
+	if rep.Skipped != 2 || rep.LabelsAdded != 12 || rep.Lines != 13 {
+		t.Errorf("skipped %d, labels %d, lines %d; want 2, 12, 13", rep.Skipped, rep.LabelsAdded, rep.Lines)
 	}
 
 	// Every field bd has and the store cannot hold is reported, with ids.
@@ -214,7 +215,6 @@ func TestImportBacklog(t *testing.T) {
 		`field: field external_ref is not stored [acme-q4m]`,
 		`field: field started_at is not stored [acme-7k2.1]`,
 		`label: label "has space" is not a valid starfix label; skipped [acme-t3m]`,
-		`memory: memory records are not imported yet []`,
 		`status: status hooked stored as in_progress, labeled bd-status:hooked [acme-h7k]`,
 		`status: status pinned stored as open with the pinned flag [acme-p1n]`,
 		`tombstone: tombstones (issues deleted in bd) are skipped [acme-old]`,
@@ -368,7 +368,8 @@ func TestImportIsIdempotent(t *testing.T) {
 		name string
 		got  Counts
 		n    int
-	}{{"issues", second.Issues, first.Issues.Created}, {"deps", second.Deps, first.Deps.Created}, {"comments", second.Comments, first.Comments.Created}}
+	}{{"issues", second.Issues, first.Issues.Created}, {"deps", second.Deps, first.Deps.Created}, {"comments", second.Comments, first.Comments.Created},
+		{"memories", second.Memories, first.Memories.Created}}
 	for _, w := range want {
 		if w.got != (Counts{Unchanged: w.n}) {
 			t.Errorf("second import %s = %+v, want %d unchanged", w.name, w.got, w.n)
@@ -377,7 +378,7 @@ func TestImportIsIdempotent(t *testing.T) {
 	if second.LabelsAdded != 0 || second.Errors() != 0 {
 		t.Errorf("second import added %d labels with %d errors", second.LabelsAdded, second.Errors())
 	}
-	if second.Summary() != "imported 10 issues (10 unchanged), 8 deps (8 unchanged), 3 comments (3 unchanged); 0 errors, 17 warnings" {
+	if second.Summary() != "imported 10 issues (10 unchanged), 8 deps (8 unchanged), 3 comments (3 unchanged), 1 memory (1 unchanged); 0 errors, 16 warnings" {
 		t.Errorf("summary = %q", second.Summary())
 	}
 }
@@ -389,7 +390,7 @@ func TestDryRun(t *testing.T) {
 	if got := snap(t, s); len(got.Issues)+len(got.Deps)+len(got.Comments) != 0 || lastSeq(t, s) != 0 {
 		t.Fatalf("dry run wrote: %s", mustJSON(t, got))
 	}
-	if !strings.HasPrefix(dry.Summary(), "would import 10 issues (10 created), 8 deps (8 created), 3 comments (3 created)") {
+	if !strings.HasPrefix(dry.Summary(), "would import 10 issues (10 created), 8 deps (8 created), 3 comments (3 created), 1 memory (1 created)") {
 		t.Errorf("dry summary = %q", dry.Summary())
 	}
 	done := importBytes(t, s, b, false)

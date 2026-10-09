@@ -401,6 +401,11 @@ limits:
 | `usage_records` | 500 | Token usage records in one `usage` call |
 | `usage_per_day` | 50000 | Token usage records one principal may add in 24 hours, counted by when the server stored them. Per principal, because a client can name any number of sessions |
 | `paths_per_issue` | 200 | Paths one issue keeps, declared and from commits, and the commit paths one `renew`, `finish` or `handoff` records. Too many declared paths are refused with `invalid`; past the cap, commit paths keep the request's first (most recent) and the issue's most recently recorded, and the request still succeeds |
+| `memory_body` | 4096 | Bytes in one memory's body (at most 65535) |
+| `memory_key_length` | 128 | Bytes in a memory's key (at most 255) |
+| `memory_tags` | 20 | Tags on one memory |
+| `memory_tag_length` | 64 | Bytes in one memory tag (at most 255) |
+| `memories_per_scope` | 1000 | Memories one principal may author in one scope, forgotten ones included. A new key at the cap first deletes that principal's oldest forgotten memories in the scope; only when live memories fill it is the key refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.
@@ -448,8 +453,10 @@ error and exits 1, and the unit's `Restart=on-failure` starts it again.
 Upgrade the server first, then the clients. A newer server accepts older
 clients. A newer client that needs a newer protocol is refused by an older
 server at the handshake, with exit code 3 and a fix that says to upgrade
-the server. This release speaks protocol 3 (token capture) and accepts
-clients that speak 2 or 3, so v0.1.x clients, which speak 1, must upgrade.
+the server. This release speaks protocol 4 (memory) and accepts clients
+that speak 2 to 4, so v0.2.x clients (protocol 2) and v0.3.x clients
+(protocol 3) keep working, without memory, and v0.1.x clients, which
+speak 1, must upgrade.
 
 On the server, as the `starfix` user:
 

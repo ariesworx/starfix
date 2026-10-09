@@ -40,22 +40,29 @@
 //   - An issue's account is starfix's own and bd has no field for it, so
 //     export leaves it out and import never writes it. Re-importing an
 //     export keeps each issue's stored account and reads as unchanged.
+//   - Memory records ({"_type":"memory","key":…,"value":…}, bd's
+//     kv.memory.* entries) become project memories authored by the
+//     importing principal, keyed without a kv.memory. prefix. A key the
+//     store already holds is kept as it is, since bd records no time to
+//     tell which side is newer; one that looks like a secret is refused
+//     like any memory. Export writes issues only, as it did before
+//     memories: starfix's scopes, tags and links have no bd form.
 //
 // Everything else is reported, never dropped silently: other dependency
 // types (replies-to, tracks, authored-by and the rest), external:
-// dependencies, memory records, and any issue field the store has no column
-// for (external_ref, spec_id, estimated_minutes, started_at and so on) each
-// produce one warning naming the affected IDs. Derived fields bd computes
+// dependencies, and any issue or memory field the store has no column
+// for (external_ref, spec_id, estimated_minutes, started_at and so on)
+// each produce one warning naming the affected IDs. Derived fields bd computes
 // on export (counts, parent, is_blocked) are ignored.
 //
 // # Order and safety
 //
 // Issues are written parents first, then every dependency, then comments,
-// so a dependency is only added once both ends exist. A dangling reference,
+// then memories, so a dependency is only added once both ends exist. A dangling reference,
 // a parent or blocking cycle, or an invalid record is reported with the
 // offending IDs and the rest of the file still imports. Importing the same
 // file twice changes nothing the first run got right: identical rows are
 // left alone, an issue is overwritten only when the file's updated_at is
-// later than the stored one, labels merge, and dependencies and comments
-// are never rewritten.
+// later than the stored one, labels merge, and dependencies, comments and
+// memories are never rewritten.
 package bdimport
