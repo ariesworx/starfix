@@ -21,3 +21,31 @@ CREATE TABLE hours (
   KEY hours_principal (principal, on_date),
   KEY hours_on (on_date)
 );
+
+-- Subscription plans (design §12.1): a flat-rate plan's fee per seat per
+-- month, its seats, and the principals whose usage it pays for, from a
+-- month on until a later row of the same name supersedes it; a row with
+-- no fee or no seats ends the plan. fee is integer micro-dollars (10^-6
+-- USD), as prices' rates are, so the amortized cost a report splits from
+-- fee x seats is exact. Costs are computed when read, never stored.
+-- set_by and set_at say who last set the row; write_id makes a replace a
+-- write Dolt sees as a conflict. A row's principals are in plan_principals,
+-- replaced with it.
+
+CREATE TABLE plans (
+  name       VARCHAR(64)  COLLATE utf8mb4_0900_bin NOT NULL,
+  from_month DATE         NOT NULL,
+  fee        BIGINT       NOT NULL,
+  seats      INT          NOT NULL,
+  set_by     VARCHAR(255) NOT NULL,
+  set_at     DATETIME(6)  NOT NULL,
+  write_id   BIGINT       NOT NULL,
+  PRIMARY KEY (name, from_month)
+);
+
+CREATE TABLE plan_principals (
+  name       VARCHAR(64)  COLLATE utf8mb4_0900_bin NOT NULL,
+  from_month DATE         NOT NULL,
+  principal  VARCHAR(255) NOT NULL,
+  PRIMARY KEY (name, from_month, principal)
+);
