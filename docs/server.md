@@ -448,8 +448,9 @@ error and exits 1, and the unit's `Restart=on-failure` starts it again.
 Upgrade the server first, then the clients. A newer server accepts older
 clients. A newer client that needs a newer protocol is refused by an older
 server at the handshake, with exit code 3 and a fix that says to upgrade
-the server. This release speaks protocol 3 (token capture) and accepts
-clients that speak 2 or 3, so v0.1.x clients, which speak 1, must upgrade.
+the server. This release speaks protocol 4 (memory) and accepts clients
+that speak 2 to 4, so v0.2.x clients keep working and v0.1.x clients,
+which speak 1, must upgrade.
 
 On the server, as the `starfix` user:
 

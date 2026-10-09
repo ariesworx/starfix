@@ -96,4 +96,14 @@ const (
 	// FixAsk: forbidden, another principal holds the issue, whom the fix
 	// asks.
 	FixAsk = "ask "
+	// FixRecall: conflict, a memory exists or changed since the caller's
+	// rev; the fix names the stored rev.
+	FixRecall = "recall it"
+	// FixFindMemory: not_found, no memory has the key in the scope.
+	FixFindMemory = "find the key"
+	// FixSecret: invalid, a memory looks like it holds a secret.
+	FixSecret = "remove the secret"
+	// FixForgetSome: invalid, the caller holds as many memories in the
+	// scope as the server allows.
+	FixForgetSome = "forget memories"
 )

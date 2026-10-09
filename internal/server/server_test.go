@@ -309,26 +309,27 @@ func TestHandshake(t *testing.T) {
 		closed  bool       // no reply at all
 		session string
 	}{
-		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(3, project, "s-mine")}, session: "s-mine"},
+		{name: "welcome with client session", frames: []*proto.Frame{bridge, hello(proto.Proto, project, "s-mine")}, session: "s-mine"},
+		{name: "protocol 3 still welcome", frames: []*proto.Frame{bridge, hello(3, project, "s-3")}, session: "s-3"},
 		{name: "protocol 2 still welcome", frames: []*proto.Frame{bridge, hello(2, project, "s-old")}, session: "s-old"},
-		{name: "welcome assigns a session", frames: []*proto.Frame{bridge, hello(2, project, "")}, session: "s-"},
-		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(4, project, "")}, code: proto.CodeVersion},
+		{name: "welcome assigns a session", frames: []*proto.Frame{bridge, hello(proto.Proto, project, "")}, session: "s-"},
+		{name: "protocol too new", frames: []*proto.Frame{bridge, hello(proto.ProtoMax+1, project, "")}, code: proto.CodeVersion},
 		{name: "protocol 1 too old", frames: []*proto.Frame{bridge, hello(1, project, "")}, code: proto.CodeVersion},
-		{name: "other project", frames: []*proto.Frame{bridge, hello(2, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
+		{name: "other project", frames: []*proto.Frame{bridge, hello(proto.Proto, "00000000-0000-4000-8000-000000000002", "")}, code: proto.CodeNotFound},
 		{name: "request before hello", frames: []*proto.Frame{bridge, {T: proto.FrameReq, ID: 1, Op: "show"}}, code: proto.CodeInvalid},
-		{name: "no bridge frame", frames: []*proto.Frame{hello(2, project, "")}, closed: true},
+		{name: "no bridge frame", frames: []*proto.Frame{hello(proto.Proto, project, "")}, closed: true},
 		{name: "C1 control in the machine", frames: []*proto.Frame{bridge,
-			{T: proto.FrameHello, Proto: 2, Project: project, Session: "s", Machine: "m\u009b2J"}}, code: proto.CodeInvalid},
-		{name: "bidi control in the session", frames: []*proto.Frame{bridge, hello(2, project, "s\u202e")}, code: proto.CodeInvalid},
+			{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: "s", Machine: "m\u009b2J"}}, code: proto.CodeInvalid},
+		{name: "bidi control in the session", frames: []*proto.Frame{bridge, hello(proto.Proto, project, "s\u202e")}, code: proto.CodeInvalid},
 		// Each forged bridge frame is followed by a valid hello, so the
 		// connection closes because the principal is checked, not for want
 		// of a hello (T-6).
-		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}, hello(2, project, "")}, closed: true},
-		{name: "empty principal", frames: []*proto.Frame{{T: proto.FrameBridge}, hello(2, project, "")}, closed: true},
-		{name: "principal with a newline", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "alice\nbob"}, hello(2, project, "")}, closed: true},
-		{name: "valid principal in a hello frame", frames: []*proto.Frame{{T: proto.FrameHello, Principal: "alice"}, hello(2, project, "")}, closed: true},
-		{name: "reaper principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "starfixd"}, hello(2, project, "")}, closed: true},
-		{name: "importer principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "import"}, hello(2, project, "")}, closed: true},
+		{name: "client forges principal", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "Robert'); DROP"}, hello(proto.Proto, project, "")}, closed: true},
+		{name: "empty principal", frames: []*proto.Frame{{T: proto.FrameBridge}, hello(proto.Proto, project, "")}, closed: true},
+		{name: "principal with a newline", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "alice\nbob"}, hello(proto.Proto, project, "")}, closed: true},
+		{name: "valid principal in a hello frame", frames: []*proto.Frame{{T: proto.FrameHello, Principal: "alice"}, hello(proto.Proto, project, "")}, closed: true},
+		{name: "reaper principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "starfixd"}, hello(proto.Proto, project, "")}, closed: true},
+		{name: "importer principal reserved", frames: []*proto.Frame{{T: proto.FrameBridge, Principal: "import"}, hello(proto.Proto, project, "")}, closed: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -342,7 +343,7 @@ func TestHandshake(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 2 || f.Max != 3 {
+			if f.T != proto.FrameWelcome || f.Version != "v0.2.0" || f.Min != 2 || f.Max != 4 {
 				t.Fatalf("welcome: %+v", f)
 			}
 			if tc.code == "" {
@@ -470,7 +471,7 @@ func TestServeAcceptErrors(t *testing.T) {
 				if err := enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: alice.Principal}); err != nil {
 					t.Fatal(err)
 				}
-				if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: alice.Session,
+				if err := enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: alice.Session,
 					Machine: alice.Machine}); err != nil {
 					t.Fatal(err)
 				}
@@ -612,7 +613,7 @@ func TestBridgeFrameOnlyFirst(t *testing.T) {
 	enc, dec := proto.NewEncoder(cli), proto.NewDecoder(cli)
 	wg.Go(func() {
 		_ = enc.Encode(&proto.Frame{T: proto.FrameBridge, Principal: "alice"})
-		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: 2, Project: project})
+		_ = enc.Encode(&proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project})
 	})
 	if f, err := dec.Decode(); err != nil || f.Err != nil {
 		t.Fatalf("welcome: %v %+v", err, f)
@@ -993,7 +994,7 @@ func TestHandshakeRegistersAgent(t *testing.T) {
 	s := newServer(t)
 	bridge := func(p string) *proto.Frame { return &proto.Frame{T: proto.FrameBridge, Principal: p} }
 	hello := func(session, harness string) *proto.Frame {
-		return &proto.Frame{T: proto.FrameHello, Proto: 2, Project: project, Session: session, Machine: "laptop-a", Harness: harness}
+		return &proto.Frame{T: proto.FrameHello, Proto: proto.Proto, Project: project, Session: session, Machine: "laptop-a", Harness: harness}
 	}
 	for _, fs := range [][]*proto.Frame{
 		{bridge("alice"), hello("s-1", "claude-code")},

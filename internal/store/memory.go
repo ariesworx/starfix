@@ -85,8 +85,9 @@ type Memory struct {
 	// UpdatedAt is when its content last changed; pinning leaves it.
 	UpdatedAt time.Time `json:"updated_at"`
 	Rev       Rev       `json:"rev"`
-	// Relevant is set by [Store.RankMemories] on a memory linked to one
-	// of the issues it ranks for, or tagged with one of their labels.
+	// Relevant is set by [Store.PrimeMemories] and [Store.IssueMemories]
+	// on a memory linked to one of the issues they rank for, or tagged
+	// with one of their labels.
 	Relevant bool `json:"relevant,omitempty"`
 }
 
@@ -359,9 +360,23 @@ func loadMemory(ctx context.Context, q querier, scope Scope, principal, key stri
 	return ms[0], true, nil
 }
 
+// MemoryNotFoundError says the memory with Key in Scope is not there, or
+// is another principal's. It wraps ErrNotFound.
+type MemoryNotFoundError struct {
+	Scope Scope
+	Key   string
+}
+
+func (e *MemoryNotFoundError) Error() string {
+	return fmt.Sprintf("memory %s not found in %s scope", e.Key, e.Scope)
+}
+
+// Unwrap makes errors.Is(err, ErrNotFound) hold.
+func (e *MemoryNotFoundError) Unwrap() error { return ErrNotFound }
+
 // errMemoryNotFound says the memory with key in scope is not there.
 func errMemoryNotFound(scope Scope, key string) error {
-	return fmt.Errorf("memory %s in %s scope: %w", key, scope, ErrNotFound)
+	return &MemoryNotFoundError{Scope: scope, Key: key}
 }
 
 // memoryState is a memory as its events record it. A user-scope memory's

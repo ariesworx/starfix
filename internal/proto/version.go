@@ -35,10 +35,18 @@ import (
 // recorded for it. The live board's reads join it the same way: watch's
 // events, the event push (EvEvent) and the claims op, none of which a
 // protocol 2 client sends.
+//
+// Protocol 4 adds memory (design §6): the remember, recall, forget and
+// pin ops, and start's memories, a result field older clients ignore.
+// ProtoMin stays at 2. Each bump so far moved it to the newest protocol
+// a release speaks, and none speaks 3 yet (v0.2.2 speaks 2), so raising
+// it would refuse every released client while keeping no promise to one.
+// When a release speaks 3 or 4, the next bump moves ProtoMin to that.
+// A protocol 2 or 3 client sends no memory op and is served as before.
 const (
-	Proto    = 3
+	Proto    = 4
 	ProtoMin = 2
-	ProtoMax = 3
+	ProtoMax = 4
 )
 
 // CheckProto returns nil when the client protocol version p is in
