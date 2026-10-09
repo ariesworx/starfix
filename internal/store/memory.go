@@ -458,23 +458,25 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 		if err != nil {
 			return err
 		}
+		live := found && !cur.forgotten
+		switch {
+		case in.Rev == 0 && live:
+			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Current: cur.Rev, By: cur.UpdatedBy}
+		case in.Rev != 0 && !live:
+			return errMemoryNotFound(in.Scope, in.Key)
+		case in.Rev != 0 && cur.Rev != in.Rev:
+			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Rev: in.Rev, Current: cur.Rev, By: cur.UpdatedBy}
+		}
 		if id := in.issue(); id != "" {
 			if err := mustExist(ctx, w.tx, id); err != nil {
 				return err
 			}
 		}
-		live := found && !cur.forgotten
 		switch {
-		case in.Rev == 0 && live:
-			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Current: cur.Rev, By: cur.UpdatedBy}
 		case in.Rev == 0 && found:
 			out, err = w.reviveMemory(ctx, cur, in, OpMemoryCreate, true)
 		case in.Rev == 0:
 			out, err = w.insertMemory(ctx, in, OpMemoryCreate, true)
-		case !live:
-			return errMemoryNotFound(in.Scope, in.Key)
-		case cur.Rev != in.Rev:
-			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Rev: in.Rev, Current: cur.Rev, By: cur.UpdatedBy}
 		default:
 			out, err = w.replaceMemory(ctx, cur, in)
 			if err == nil && out.Rev == cur.Rev {

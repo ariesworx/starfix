@@ -147,6 +147,13 @@ func TestRememberCompareAndSwap(t *testing.T) {
 	if _, err := s.Remember(ctx, alice, NewMemory{Key: "nope", Body: "x", Rev: 3}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Remember at a rev of a missing key = %v, want ErrNotFound", err)
 	}
+	// A refusal for the rev comes before one for the linked issue.
+	missing := ptr(IssueID("tst-zzzzzzzz"))
+	for _, rev := range []Rev{0, 1} {
+		if _, err := s.Remember(ctx, alice, NewMemory{Key: "k", Body: "x", Issue: missing, Rev: rev}); !errors.As(err, &mc) {
+			t.Errorf("Remember at rev %d, stored rev 2, linking a missing issue = %v, want the conflict", rev, err)
+		}
+	}
 	// The same content again changes nothing.
 	m3, err := s.Remember(ctx, bob, NewMemory{Key: "k", Body: "two", Rev: 2})
 	if err != nil || m3.Rev != 2 {
