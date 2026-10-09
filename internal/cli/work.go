@@ -71,6 +71,10 @@ func cmdStart(ctx context.Context, r *runner, args []string) error {
 	printIssue(r.env.Stdout, proto.ShowResult{Issue: is, Claim: out.Claim, Items: out.Items})
 	printItems(r.env.Stdout, out.Items)
 	printHandoff(r.env.Stdout, out.Handoff)
+	if len(out.Memories) > 0 {
+		_, _ = fmt.Fprintln(r.env.Stdout, "\nmemories:")
+		printMemories(r.env.Stdout, proto.RecallResult{Memories: out.Memories})
+	}
 	_, _ = fmt.Fprintf(r.env.Stdout, "\nbranch: %s%s\n", esc(out.Branch), esc(note))
 	return nil
 }
