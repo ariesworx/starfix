@@ -499,6 +499,13 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 
 // checkCap refuses, with a [*MemoryLimitError], a new memory of w's
 // actor in scope past Limits.Memories. Tombstones do not count.
+//
+// It counts, then the caller inserts, and Dolt sees no conflict between
+// overlapping transactions that insert different keys. One Store's
+// writes run one at a time on its writer connection, so only two stores
+// writing one database at once (two starfixd processes) can each pass
+// the count and together exceed the cap: by at most one memory per
+// store.
 func (w *wtx) checkCap(ctx context.Context, scope Scope) error {
 	p := w.actor.Principal
 	var n int
