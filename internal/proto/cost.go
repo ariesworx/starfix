@@ -2,6 +2,7 @@ package proto
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"regexp"
 	"strings"
@@ -134,6 +135,20 @@ func USD(pico *big.Int) string {
 // amountPattern is an amount of money that is not negative, as USD
 // writes one.
 var amountPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+
+// ParseUSD reads an amount USD wrote back into picodollars. It refuses
+// text that is not an amount, a negative one, and one finer than a
+// picodollar.
+func ParseUSD(usd string) (*big.Int, error) {
+	r, ok := new(big.Rat).SetString(usd)
+	if !amountPattern.MatchString(usd) || !ok {
+		return nil, fmt.Errorf("%q is not an amount of US dollars", usd)
+	}
+	if r.Mul(r, new(big.Rat).SetInt(picoPerUSD)); !r.IsInt() {
+		return nil, fmt.Errorf("%q is finer than a picodollar", usd)
+	}
+	return r.Num(), nil
+}
 
 // Dollars renders an exact amount of US dollars for people, rounded to
 // the cent with halves up and thousands grouped: "$1,234.57". An amount

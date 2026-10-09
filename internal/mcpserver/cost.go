@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/ariesworx/starfix/internal/proto"
@@ -43,33 +44,67 @@ func (s *Server) registerCost() {
 		func(ctx context.Context, c Conn, in CostIn) (Cost, error) { return cost(ctx, c, in) })
 }
 
-// cost is the cost tool. A report that would pass MaxResultTokens is
-// asked for again with fewer groups, so the server's (other) keeps the
-// groups adding up to the total.
+// cost is the cost tool. A report that would pass MaxResultTokens keeps
+// as many groups as fit and sums the rest, the server's (other)
+// included, into one (other), so the groups still add up to the total.
 func cost(ctx context.Context, c Conn, in CostIn) (Cost, error) {
+	var r proto.CostResult
 	args := proto.CostArgs{By: orDefault(in.By, "account"), Since: in.Since, Until: in.Until, Limit: costGroups}
-	for {
-		var r proto.CostResult
-		if err := c.Call(ctx, proto.OpCost, args, &r); err != nil {
+	if err := c.Call(ctx, proto.OpCost, args, &r); err != nil {
+		return Cost{}, err
+	}
+	out := Cost{By: r.By, Since: stamp(r.Since), Until: stamp(r.Until), Groups: []string{}, Truncated: r.Truncated,
+		Total: costText(r.Total.CostUSD, r.Total.Unpriced) + ", " + proto.TokenCount(tokenSum(r.Total.Tokens)) + " tokens"}
+	for _, m := range r.Unpriced[:min(len(r.Unpriced), usageModels)] {
+		name, _ := cut(m, usageModelLen)
+		out.Unpriced = append(out.Unpriced, name)
+	}
+	if more := len(r.Unpriced) - usageModels; more > 0 {
+		out.Unpriced = append(out.Unpriced, fmt.Sprintf("%d more models", more))
+	}
+	for _, g := range r.Groups {
+		out.Groups = append(out.Groups, groupLine(g))
+	}
+	// Fold one more group into (other) until the result fits. Each try
+	// is local, and there are at most costGroups+1 groups.
+	for keep := len(r.Groups) - 1; size(out) > MaxResultTokens && keep >= 0; keep-- {
+		other, err := fold(r.Groups[keep:])
+		if err != nil {
 			return Cost{}, err
 		}
-		out := Cost{By: r.By, Since: stamp(r.Since), Until: stamp(r.Until), Groups: []string{}, Truncated: r.Truncated,
-			Total: costText(r.Total.CostUSD, r.Total.Unpriced) + ", " + proto.TokenCount(tokenSum(r.Total.Tokens)) + " tokens"}
-		for _, g := range r.Groups {
-			out.Groups = append(out.Groups, groupLine(g))
-		}
-		for _, m := range r.Unpriced[:min(len(r.Unpriced), usageModels)] {
-			name, _ := cut(m, usageModelLen)
-			out.Unpriced = append(out.Unpriced, name)
-		}
-		if more := len(r.Unpriced) - usageModels; more > 0 {
-			out.Unpriced = append(out.Unpriced, fmt.Sprintf("%d more models", more))
-		}
-		if size(out) <= MaxResultTokens || args.Limit <= 1 {
-			return out, nil
-		}
-		args.Limit /= 2
+		out.Groups = append(out.Groups[:keep], groupLine(other))
 	}
+	return out, nil
+}
+
+// fold sums groups into one (other) group: their exact cost, the counts
+// any of them knows, and whether any was unpriced or split.
+func fold(gs []proto.CostGroup) (proto.CostGroup, error) {
+	out := proto.CostGroup{Key: proto.OtherModels}
+	pico := new(big.Int)
+	for _, g := range gs {
+		n, err := proto.ParseUSD(g.CostUSD)
+		if err != nil {
+			return out, fmt.Errorf("cost of %s: %w", g.Key, err)
+		}
+		pico.Add(pico, n)
+		for _, c := range []struct{ in, out **int64 }{
+			{&g.Input, &out.Input}, {&g.Output, &out.Output}, {&g.CacheWrite, &out.CacheWrite},
+			{&g.CacheWrite1h, &out.CacheWrite1h}, {&g.CacheRead, &out.CacheRead},
+		} {
+			if *c.in == nil {
+				continue
+			}
+			if *c.out == nil {
+				*c.out = new(int64)
+			}
+			**c.out += **c.in
+		}
+		out.Unpriced = out.Unpriced || g.Unpriced
+		out.Split = out.Split || g.Split
+	}
+	out.CostUSD = proto.USD(pico)
+	return out, nil
 }
 
 // groupLine is one group: "KEY TITLE: $8.35, 4.3M tokens, split".

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -58,28 +59,44 @@ func TestCostTool(t *testing.T) {
 	}
 }
 
-// A report too large for MaxResultTokens is asked for again with fewer
-// groups, so the server sums the rest into (other) and the total stays
-// whole.
+// A report too large for MaxResultTokens keeps its first groups and sums
+// the rest, the server's (other) included, into one (other), so the
+// groups still add up to the total. It takes one call: asking again with
+// fewer groups ran up to five full reports.
 func TestCostToolFits(t *testing.T) {
 	var groups []proto.CostGroup
 	for i := range 60 { // principals as long as their pattern allows
 		groups = append(groups, proto.CostGroup{Key: fmt.Sprintf("p%03d%s", i, strings.Repeat("x", 251)),
-			Tokens: proto.Tokens{Input: n64(int64(1000 - i))}, CostUSD: "1", Unpriced: true, Split: true})
+			Tokens: proto.Tokens{Input: n64(int64(1000 - i)), Output: n64(1)}, CostUSD: "0.335", Unpriced: true})
 	}
+	groups[costGroups-1].Split = true // in the tail, so (other) is split
 	f := &fakeConn{reply: costReply(groups)}
 	cs, _ := connect(t, f)
 	raw := text(t, callTool(t, cs, "cost", map[string]any{"since": "7d", "by": "person"}))
 	if got := Tokens([]byte(raw)); got > MaxResultTokens {
 		t.Errorf("cost result is ~%d tokens, over %d", got, MaxResultTokens)
 	}
+	if len(f.calls) != 1 {
+		t.Errorf("cost made %d calls, want 1", len(f.calls))
+	}
 	var c Cost
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		t.Fatal(err)
 	}
-	last := c.Groups[len(c.Groups)-1]
-	if len(f.calls) < 2 || !strings.HasPrefix(last, proto.OtherModels+": $0.50") || c.Total != "$8.35, some unpriced, 4.3M tokens" {
-		t.Errorf("after %d calls: %d groups, last %q, total %q; want fewer groups asked again, (other) last, the total whole",
-			len(f.calls), len(c.Groups), last, c.Total)
+	kept := len(c.Groups) - 1
+	if kept < 1 || kept >= costGroups {
+		t.Fatalf("cost kept %d of %d groups, want some folded into (other)", kept, costGroups)
+	}
+	// The server sent costGroups groups at 0.335 USD and 1001-i tokens
+	// each, then (other) at 0.5 USD and 1 token.
+	folded := int64(costGroups - kept)
+	tokens := int64(1)
+	for i := kept; i < costGroups; i++ {
+		tokens += 1001 - int64(i)
+	}
+	usd := proto.USD(big.NewInt(folded*335_000_000_000 + 500_000_000_000))
+	want := fmt.Sprintf("%s: %s, some unpriced, %s tokens, split", proto.OtherModels, proto.Dollars(usd), proto.TokenCount(tokens))
+	if got := c.Groups[kept]; got != want || c.Total != "$8.35, some unpriced, 4.3M tokens" {
+		t.Errorf("cost kept %d groups, then %q, total %q; want %q, the total whole", kept, got, c.Total, want)
 	}
 }

@@ -29,6 +29,34 @@ func TestUSD(t *testing.T) {
 	}
 }
 
+func TestParseUSD(t *testing.T) {
+	tests := []struct {
+		usd  string
+		pico string // "" for refused
+	}{
+		{"0", "0"},
+		{"0.000000000001", "1"},
+		{"12.5", "12500000000000"},
+		{"123456789012345678.90123456789", "123456789012345678901234567890"},
+		{"0.0000000000001", ""}, // finer than a picodollar
+		{"-2.5", ""},            // a cost is never negative
+		{"1/3", ""},
+		{"1e3", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		got, err := ParseUSD(tc.usd)
+		switch {
+		case tc.pico == "" && err == nil:
+			t.Errorf("ParseUSD(%q) = %s, want an error", tc.usd, got)
+		case tc.pico != "" && (err != nil || got.String() != tc.pico):
+			t.Errorf("ParseUSD(%q) = %v, %v; want %s picodollars", tc.usd, got, err, tc.pico)
+		case tc.pico != "" && USD(got) != tc.usd:
+			t.Errorf("USD(ParseUSD(%q)) = %q, want it back", tc.usd, USD(got))
+		}
+	}
+}
+
 func TestDollars(t *testing.T) {
 	tests := []struct{ usd, want string }{
 		{"0", "$0.00"},
@@ -115,6 +143,24 @@ func FuzzParseRate(f *testing.F) {
 		}
 		if back, err := ParseRate(FormatRate(n)); err != nil || back != n {
 			t.Fatalf("ParseRate(FormatRate(ParseRate(%q))) = %d, %v; want %d", s, back, err, n)
+		}
+	})
+}
+
+func FuzzParseUSD(f *testing.F) {
+	for _, s := range []string{"0", "12.5", "0.000000000001", "0.0000000000001", "-1", "1e3", "1/3", "007.50", ""} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		n, err := ParseUSD(s)
+		if err != nil {
+			return
+		}
+		if n.Sign() < 0 {
+			t.Fatalf("ParseUSD(%q) = %s, negative", s, n)
+		}
+		if back, err := ParseUSD(USD(n)); err != nil || back.Cmp(n) != 0 {
+			t.Fatalf("ParseUSD(USD(ParseUSD(%q))) = %v, %v; want %s", s, back, err, n)
 		}
 	})
 }
