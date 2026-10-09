@@ -315,3 +315,27 @@ func TestCostReportRefuses(t *testing.T) {
 		})
 	}
 }
+
+// A window back from now reads both ends from one now, so the longest
+// window passes on a clock that moves between reads. Taking since from
+// one reading and until from a later one made a 366-day window a moment
+// longer than 366 days, and always refused it.
+func TestCostReportWindow(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
+	s := openStore(t, newDSN(t), Options{Now: func() time.Time { c.add(time.Millisecond); return c.now() }})
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByModel, Window: MaxCostWindow})
+	if err != nil {
+		t.Fatalf("CostReport(window %s) = %v, want a report", MaxCostWindow, err)
+	}
+	if got := r.Until.Sub(r.Since); got != MaxCostWindow {
+		t.Errorf("CostReport(window %s) covers %s, want %s", MaxCostWindow, got, MaxCostWindow)
+	}
+	for _, f := range []CostFilter{
+		{By: CostByModel, Window: MaxCostWindow + time.Millisecond},
+		{By: CostByModel, Window: -time.Hour},
+	} {
+		if _, err := s.CostReport(t.Context(), f); !errors.Is(err, ErrInvalid) {
+			t.Errorf("CostReport(window %s) = %v, want ErrInvalid", f.Window, err)
+		}
+	}
+}

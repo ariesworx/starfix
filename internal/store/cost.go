@@ -165,11 +165,16 @@ const (
 
 // CostFilter selects a cost report: records whose time is in [Since,
 // Until), Until zero meaning now, grouped By: Limit groups (0 takes
-// DefaultCostGroups), then the rest summed into one. Account is the project's default account, for
-// issues whose chain sets none; grouping by account needs it.
+// DefaultCostGroups), then the rest summed into one. Account is the
+// project's default account, for issues whose chain sets none; grouping
+// by account needs it.
 type CostFilter struct {
-	By           CostBy
+	By CostBy
+	// Since starts the window. If zero, the window starts Window back
+	// from the server's now, the same now a zero Until takes, and Window
+	// must be positive.
 	Since, Until time.Time
+	Window       time.Duration
 	Account      string
 	Limit        int
 }
@@ -226,7 +231,7 @@ func (a *costAcc) group(key, title string) CostGroup {
 
 // CostReport prices the tokens reported in f's window, grouped as f
 // asks, in one snapshot. It refuses with ErrInvalid an unknown grouping,
-// a window with no start, an end before its start or a window longer than
+// a window with no start and no positive Window, an end before its start or a window longer than
 // MaxCostWindow, a limit out of range, and grouping by account without a
 // valid default account.
 func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error) {
@@ -236,11 +241,14 @@ func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error
 		until = now
 	}
 	since := f.Since.UTC()
+	if f.Since.IsZero() {
+		since = now.Add(-f.Window)
+	}
 	switch {
 	case !f.By.Valid():
 		return CostReport{}, fmt.Errorf("%w: by %q must be account, issue, epic, person or model", ErrInvalid, f.By)
-	case f.Since.IsZero():
-		return CostReport{}, fmt.Errorf("%w: a cost report needs since", ErrInvalid)
+	case f.Since.IsZero() && f.Window <= 0:
+		return CostReport{}, fmt.Errorf("%w: a cost report needs since, or a positive window", ErrInvalid)
 	case until.Before(since):
 		return CostReport{}, fmt.Errorf("%w: until %s is before since %s", ErrInvalid, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	case until.Sub(since) > MaxCostWindow:

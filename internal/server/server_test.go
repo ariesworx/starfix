@@ -76,6 +76,13 @@ func newServerWith(t *testing.T, lim Limits) *Server {
 // tests that plant rows the store would not write.
 func newServerDSN(t *testing.T, lim Limits) (*Server, string) {
 	t.Helper()
+	return newServerClock(t, lim, nil)
+}
+
+// newServerClock is newServerDSN on a store that reads the time from
+// now, or the real clock if now is nil.
+func newServerClock(t *testing.T, lim Limits, now func() time.Time) (*Server, string) {
+	t.Helper()
 	if errors.Is(doltErr, dolttest.ErrNoDolt) {
 		t.Skip("dolt is not on PATH: install dolt to run the server tests")
 	}
@@ -87,7 +94,7 @@ func newServerDSN(t *testing.T, lim Limits) (*Server, string) {
 		t.Fatal(err)
 	}
 	st, err := store.Open(t.Context(), dsn, store.Options{Prefix: "sf", CommitInterval: -1, Admins: []string{dana.Principal},
-		Limits: lim.Limits})
+		Limits: lim.Limits, Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,12 +71,9 @@ func (s *Server) costFilter(in proto.CostArgs) (store.CostFilter, error) {
 	if in.Since == "" {
 		return f, fmt.Errorf("%w: a cost report needs since: a date, a time or a duration such as 7d", store.ErrInvalid)
 	}
-	since, window, err := parseSince(in.Since)
-	if err != nil {
+	var err error
+	if f.Since, f.Window, err = parseSince(in.Since); err != nil {
 		return f, err
-	}
-	if f.Since = since; window > 0 {
-		f.Since = s.cfg.Store.Now().Add(-window)
 	}
 	if in.Until != "" {
 		if f.Until, err = parseTime("until", in.Until); err != nil {

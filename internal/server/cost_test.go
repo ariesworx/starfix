@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,6 +128,7 @@ func TestDispatchCost(t *testing.T) {
 		{"bad until", `{"by":"model","since":"7d","until":"3d"}`, `until "3d"`},
 		{"until before since", `{"by":"model","since":"2026-02-01","until":"2026-01-01"}`, "before since"},
 		{"limit too large", `{"by":"model","since":"7d","limit":501}`, "limit"},
+		{"over a year", `{"by":"model","since":"367d"}`, "366 days"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -135,5 +137,23 @@ func TestDispatchCost(t *testing.T) {
 				t.Fatalf("cost(%s) = %+v; want invalid naming %q, fix with sfx cost -h", tc.args, perr, tc.msg)
 			}
 		})
+	}
+}
+
+// The longest window back from now passes on a clock that moves between
+// readings, as a real one does: both ends come from one reading. Taking
+// since in the server and until in the store refused since 366d always.
+func TestDispatchCostLongestWindow(t *testing.T) {
+	var mu sync.Mutex
+	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	s, _ := newServerClock(t, Limits{}, func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		clock = clock.Add(time.Millisecond)
+		return clock
+	})
+	r := mustCall[proto.CostResult](t, s, bob, proto.OpCost, proto.CostArgs{By: "model", Since: "366d"})
+	if got, want := r.Until.Sub(r.Since), 366*24*time.Hour; got != want {
+		t.Errorf("cost since 366d covers %s, want %s", got, want)
 	}
 }
