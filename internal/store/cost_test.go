@@ -314,7 +314,46 @@ func TestCostReport(t *testing.T) {
 			if !slices.Equal(r.Unpriced, []string{"mystery"}) || r.Capped {
 				t.Errorf("CostReport(by %s): unpriced %v capped %v; want [mystery], not capped", tc.by, r.Unpriced, r.Capped)
 			}
+			// However grouped, the groups add up to the total exactly.
+			var in, out int64
+			pico := new(big.Int)
+			for _, g := range r.Groups {
+				in, out = in+*g.Input, out+*g.Output
+				if g.Cost.Picodollars != nil {
+					pico.Add(pico, g.Cost.Picodollars)
+				}
+			}
+			if in != *r.Total.Input || out != *r.Total.Output || pico.Cmp(r.Total.Cost.Picodollars) != 0 {
+				t.Errorf("CostReport(by %s) groups sum to %d/%d $%s, want the total %s", tc.by, in, out, pico, groupsText([]CostGroup{r.Total}))
+			}
 		})
+	}
+
+	// An issue's group in a report costs what show gives it, when the
+	// window holds all its records.
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: since, Until: until})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"T1", "T2", "T3"} {
+		id := ids[name]
+		i := slices.IndexFunc(r.Groups, func(g CostGroup) bool { return g.Key == string(id) })
+		if i < 0 {
+			t.Errorf("CostReport(by issue) has no group %s (%s)", id, name)
+			continue
+		}
+		u := mustUsage(t, s, id)
+		g := r.Groups[i]
+		if got, want := summaryCost(u.Cost), summaryCost(&g.Cost); got != want || len(u.Models) == 0 {
+			t.Errorf("IssueUsage(%s).Cost = %s, want the report's %s", id, got, want)
+		}
+		var uin int64
+		for _, m := range u.Models {
+			uin += *m.Input
+		}
+		if uin != *g.Input {
+			t.Errorf("IssueUsage(%s) has %d input tokens, want the report's %d", id, uin, *g.Input)
+		}
 	}
 }
 
@@ -379,6 +418,87 @@ func TestCostReportWindow(t *testing.T) {
 	} {
 		if _, err := s.CostReport(t.Context(), f); !errors.Is(err, ErrInvalid) {
 			t.Errorf("CostReport(window %s) = %v, want ErrInvalid", f.Window, err)
+		}
+	}
+}
+
+// A turn record spanning two holds and time on either side is cut at the
+// holds' edges: each issue gets the tokens of its time, and the time no
+// issue was held is unattributed. Each issue's part is priced as its own.
+func TestCostReportSpanCutAtHolds(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now() // 12:00
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(1_000_000, 0, 0, 0, 0))
+	a, b := mustCreate(t, s, NewIssue{Title: "a"}), mustCreate(t, s, NewIssue{Title: "b"})
+	for _, id := range []IssueID{a.ID, b.ID} { // a 12:00-12:02, then b 12:02-12:04
+		if _, _, err := s.StartIssue(ctx, alice, id, time.Hour, false); err != nil {
+			t.Fatal(err)
+		}
+		clk.add(2 * time.Minute)
+		if _, _, err := s.FinishIssue(ctx, alice, id, 0, Finish{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.add(10 * time.Minute)
+	// 11:58 to 12:06: two minutes each held, four not.
+	mustAddUsage(t, s, alice, UsageRecord{Harness: "codex", RequestID: "turn", Model: "example-large", At: t0.Add(6 * time.Minute),
+		Granularity: GranularityTurn, SpanStart: ptr(t0.Add(-2 * time.Minute)), Tokens: Tokens{Input: n64(800), Output: n64(0)}})
+	r, err := s.CostReport(ctx, CostFilter{By: CostByIssue, Since: t0.Add(-time.Hour), Until: t0.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := map[IssueID]string{a.ID: "a", b.ID: "b"}
+	first, second := min(a.ID, b.ID), max(a.ID, b.ID) // equal groups go by key
+	want := fmt.Sprintf("(unattributed) 400/0 $400000000 split; %s %s 200/0 $200000000 split; %s %s 200/0 $200000000 split",
+		first, title[first], second, title[second])
+	if got := groupsText(r.Groups); got != want {
+		t.Errorf("CostReport(by issue).Groups =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// An issue's account and epic come from its nearest ancestor that sets
+// one, however many generations up; a parent that no longer exists ends
+// the chain, so the issue takes the default account and no epic.
+func TestCostReportChains(t *testing.T) {
+	s, clk := clockStore(t)
+	ctx := t.Context()
+	t0 := clk.now()
+	mustSetPrice(t, s, "example-large", day("2026-01-01"), rates(1_000_000, 0, 0, 0, 0))
+	e := mustCreate(t, s, NewIssue{Title: "epic", Type: TypeEpic, Account: "acme"})
+	f := mustCreate(t, s, NewIssue{Title: "feature", ParentID: e.ID})
+	g := mustCreate(t, s, NewIssue{Title: "grandchild", ParentID: f.ID})
+	h := mustCreate(t, s, NewIssue{Title: "orphan", ParentID: f.ID})
+	// No foreign key holds parent_id, so a parent can go missing.
+	if _, err := s.w.ExecContext(ctx, `UPDATE issues SET parent_id = 'tst-gone', write_id = ? WHERE id = ?`, randomInt63(), h.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		a  Actor
+		id IssueID
+	}{{alice, g.ID}, {bob, h.ID}} {
+		if _, _, err := s.StartIssue(ctx, c.a, c.id, time.Hour, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.add(time.Minute)
+	mustAddUsage(t, s, alice, rec("g1", "example-large", clk.now(), 30, 0))
+	mustAddUsage(t, s, bob, rec("h1", "example-large", clk.now(), 20, 0))
+	clk.add(time.Minute)
+	tests := []struct {
+		by   CostBy
+		want string
+	}{
+		{CostByAccount, "acme 30/0 $30000000; internal 20/0 $20000000"},
+		{CostByEpic, fmt.Sprintf("%s epic 30/0 $30000000; (no epic) 20/0 $20000000", e.ID)},
+	}
+	for _, tc := range tests {
+		r, err := s.CostReport(ctx, CostFilter{By: tc.by, Since: t0, Until: clk.now(), Account: "internal"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := groupsText(r.Groups); got != tc.want {
+			t.Errorf("CostReport(by %s).Groups = %q, want %q", tc.by, got, tc.want)
 		}
 	}
 }
