@@ -58,6 +58,9 @@ func TestHoursAndPlansCLI(t *testing.T) {
 	if got := bob.ok("admin", "plans"); !strings.Contains(got, "team  "+month+"  30   1      30       alice       dana\n") {
 		t.Errorf("admin plans:\n%s", got)
 	}
+	if ps := decode[proto.PlansResult](t, bob.ok("admin", "--json", "plans")); len(ps.Plans) != 1 || ps.Plans[0].Name != "team" {
+		t.Errorf("admin --json plans = %+v, want the team plan", ps)
+	}
 
 	in := int64(1000)
 	alice.rawDial("s-agent").usageCall(1, []proto.UsageRecord{

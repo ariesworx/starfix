@@ -173,17 +173,20 @@ func isZero(usd string) bool { return strings.Trim(usd, "0.") == "" }
 // usage gives them.
 var rateFlags = []string{"input", "output", "cache-write", "cache-write-1h", "cache-read"}
 
+// cmdAdmin runs the first of its arguments that is prices or plans, with
+// the rest, so flags given before the subcommand are the subcommand's.
 func cmdAdmin(ctx context.Context, r *runner, args []string) error {
 	const usage = "admin prices|plans ..."
+	i := slices.IndexFunc(args, func(a string) bool { return a == "prices" || a == "plans" })
 	switch {
-	case len(args) == 0 || strings.HasPrefix(args[0], "-"):
-		return usagef(usage, "admin needs prices or plans")
-	case args[0] == "prices":
-		return adminPrices(ctx, r, args[1:])
-	case args[0] == "plans":
-		return adminPlans(ctx, r, args[1:])
+	case i >= 0 && args[i] == "prices":
+		return adminPrices(ctx, r, slices.Delete(slices.Clone(args), i, i+1))
+	case i >= 0:
+		return adminPlans(ctx, r, slices.Delete(slices.Clone(args), i, i+1))
+	case len(args) > 0 && !strings.HasPrefix(args[0], "-"):
+		return usagef(usage, "unknown admin command %q", args[0])
 	}
-	return usagef(usage, "unknown admin command %q", args[0])
+	return usagef(usage, "admin needs prices or plans")
 }
 
 func adminPrices(ctx context.Context, r *runner, args []string) error {
