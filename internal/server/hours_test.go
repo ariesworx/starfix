@@ -163,6 +163,9 @@ func TestDispatchCostAmortized(t *testing.T) {
 	mustCall[proto.UsageResult](t, s, bob, proto.OpUsage, proto.UsageArgs{Records: []proto.UsageRecord{usageRec("r2", at, 100)}})
 	mustCall[proto.PlanSetResult](t, s, dana, proto.OpPlanSet, proto.PlanSetArgs{Name: "team", From: "2026-10", Fee: 10_000_001, Seats: 1,
 		Principals: []string{"alice"}})
+	mu.Lock()
+	now = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) // October has accrued its whole fee
+	mu.Unlock()
 	r := mustCall[proto.CostResult](t, s, bob, proto.OpCost, proto.CostArgs{By: "issue", Since: "2026-10-01", Until: "2026-11-01"})
 	want := map[string]string{is.ID: "10.000001", proto.CostUnattributed: "0"}
 	if len(r.Groups) != 2 || r.Total.AmortizedUSD != "10.000001" {

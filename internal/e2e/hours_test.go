@@ -16,14 +16,15 @@ import (
 // carry the hours, and cost the plan's amortized cost beside the list
 // price.
 func TestHoursAndPlansCLI(t *testing.T) {
-	w := newWorld(t, daemonOpts{admins: []string{"dana"}})
+	clk := &clock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
+	w := newWorld(t, daemonOpts{admins: []string{"dana"}, now: clk.now})
 	alice, bob, dana := w.newUser("alice", ""), w.newUser("bob", ""), w.newUser("dana", "")
 	alice.env["STARFIX_SESSION"] = "s-agent"
 	task := strings.TrimSpace(alice.ok("create", "Do the work"))
 	alice.ok("start", task)
 
 	e := decode[proto.HoursLogResult](t, alice.ok("log", "1h30m", task, "--note", "pairing", "--json"))
-	if e.ID == "" || e.On != time.Now().UTC().Format(time.DateOnly) {
+	if e.ID == "" || e.On != "2026-10-08" {
 		t.Fatalf("log --json = %+v, want an entry for today", e)
 	}
 	if got := bob.ok("log", "15m", task); !strings.HasPrefix(got, "logged 0.25h on "+task+" for ") {
@@ -46,7 +47,7 @@ func TestHoursAndPlansCLI(t *testing.T) {
 		t.Errorf("digest lacks the hours:\n%s", d)
 	}
 
-	month := time.Now().UTC().Format("2006-01")
+	const month = "2026-10"
 	set := []string{"admin", "plans", "set", "team", "--from", month, "--fee", "30", "--seats", "1", "--principal", "alice"}
 	if got := dana.ok(set...); got != "team from "+month+": added\n" {
 		t.Fatalf("admin plans set: %q", got)
@@ -60,8 +61,9 @@ func TestHoursAndPlansCLI(t *testing.T) {
 
 	in := int64(1000)
 	alice.rawDial("s-agent").usageCall(1, []proto.UsageRecord{
-		{Harness: "claude-code", RequestID: "msg_01", Model: "example-large", At: time.Now().UTC(), Granularity: "request", Tokens: proto.Tokens{Input: &in}},
+		{Harness: "claude-code", RequestID: "msg_01", Model: "example-large", At: clk.now(), Granularity: "request", Tokens: proto.Tokens{Input: &in}},
 	})
+	clk.add(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Sub(clk.now())) // October has accrued its whole fee
 	report := alice.ok("cost", "--since", month+"-01", "--by", "issue")
 	for _, want := range []string{
 		", list price and amortized\n",

@@ -21,6 +21,10 @@ import (
 // window are of the month's. A month whose principals reported no tokens
 // is prorated by time instead, into (unattributed). Each split is exact
 // (splitExact), so a whole month sums to the total to the picodollar.
+//
+// A fee accrues by time: the month that holds now has cost only the part
+// of its total that has passed, and the months after it nothing, however
+// far the window reaches.
 
 // picosPerMicro is picodollars in a micro-dollar.
 const picosPerMicro = 1_000_000
@@ -47,8 +51,9 @@ type monthPrincipal struct {
 // A nil amortizer is a server with no plans: it notes nothing and splits
 // nothing.
 type amortizer struct {
-	since, until time.Time
-	months       []planMonth
+	// until is the window's end, or now if that is sooner.
+	since, until, now time.Time
+	months            []planMonth
 	// covering lists, by month and principal, the months' plans that pay
 	// for the principal's records, as indexes into months.
 	covering map[monthPrincipal][]int
@@ -61,15 +66,15 @@ func monthOf(t time.Time) time.Time {
 }
 
 // newAmortizer reads the plans on q and the month totals of the tokens
-// their principals reported in each month [since, until) touches. It is
-// nil when there are no plans.
-func newAmortizer(ctx context.Context, q querier, since, until time.Time) (*amortizer, error) {
+// their principals reported in each month [since, until) touches, up to
+// now. It is nil when there are no plans.
+func newAmortizer(ctx context.Context, q querier, since, until, now time.Time) (*amortizer, error) {
 	plans, err := loadPlans(ctx, q)
 	if err != nil || len(plans) == 0 {
 		return nil, err
 	}
-	z := &amortizer{since: since, until: until, covering: map[monthPrincipal][]int{}}
-	for m := monthOf(since); m.Before(until); m = m.AddDate(0, 1, 0) {
+	z := &amortizer{since: since, until: minTime(until, now), now: now, covering: map[monthPrincipal][]int{}}
+	for m := monthOf(since); m.Before(z.until); m = m.AddDate(0, 1, 0) {
 		// The terms in effect: each name's latest row from m or before.
 		// Plans are by name, then month.
 		in := map[string]Plan{}
@@ -155,21 +160,25 @@ func (z *amortizer) note(a *costAcc, r usageRow, t Tokens) {
 
 // split sets each group's amortized cost: its part of every plan month,
 // by its weight there. A month with no tokens is prorated by the time
-// the window covers of it, into (unattributed), which acc makes when
-// missing.
+// the window covers of it, up to now, into (unattributed), which acc
+// makes when missing. A month with tokens that holds now is split for
+// the part of its fee that has accrued.
 func (z *amortizer) split(groups map[string]*costAcc, acc func(string) *costAcc) {
 	if z == nil {
 		return
 	}
 	keys := slices.Sorted(maps.Keys(groups))
 	for i, pm := range z.months {
+		end := pm.month.AddDate(0, 1, 0)
 		if pm.tokens == 0 {
-			end := pm.month.AddDate(0, 1, 0)
-			covered := minTime(end, z.until).Sub(maxTime(pm.month, z.since))
-			part := new(big.Int).Mul(pm.fee, big.NewInt(int64(covered)))
-			part.Quo(part, big.NewInt(int64(end.Sub(pm.month))))
-			acc(proto.CostUnattributed).addAmortized(part)
+			if covered := minTime(end, z.until).Sub(maxTime(pm.month, z.since)); covered > 0 {
+				acc(proto.CostUnattributed).addAmortized(prorate(pm.fee, covered, end.Sub(pm.month)))
+			}
 			continue
+		}
+		fee := pm.fee
+		if z.now.Before(end) {
+			fee = prorate(fee, z.now.Sub(pm.month), end.Sub(pm.month))
 		}
 		weights := make([]int64, len(keys), len(keys)+1)
 		outside := pm.tokens
@@ -177,7 +186,7 @@ func (z *amortizer) split(groups map[string]*costAcc, acc func(string) *costAcc)
 			weights[j] = groups[k].planTokens[i]
 			outside -= weights[j]
 		}
-		parts := splitExact(pm.fee, append(weights, max(outside, 0)))
+		parts := splitExact(fee, append(weights, max(outside, 0)))
 		for j, k := range keys {
 			groups[k].addAmortized(parts[j])
 		}
@@ -185,6 +194,12 @@ func (z *amortizer) split(groups map[string]*costAcc, acc func(string) *costAcc)
 	for _, a := range groups {
 		a.addAmortized(new(big.Int))
 	}
+}
+
+// prorate is the part d of length is of fee, rounded down.
+func prorate(fee *big.Int, d, length time.Duration) *big.Int {
+	part := new(big.Int).Mul(fee, big.NewInt(int64(d)))
+	return part.Quo(part, big.NewInt(int64(length)))
 }
 
 // total sums the groups' amortized costs, nil when there are no plans.

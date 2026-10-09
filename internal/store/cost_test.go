@@ -587,8 +587,9 @@ func amortizedText(gs []CostGroup, ids map[string]IssueID) string {
 // from September 2026, covering alice and bob; carol is on no plan. In
 // September alice's 100 tokens went to A and bob's 200 to no issue; in
 // October, to 7 Oct 12:00, alice's 50 went to B and bob's 50 to no
-// issue. carol's 1000 tokens in September went to C.
-func amortizedFixture(t *testing.T) (*Store, map[string]IssueID) {
+// issue. carol's 1000 tokens in September went to C. The clock is left
+// at 7 Oct 12:00.
+func amortizedFixture(t *testing.T) (*Store, *clock, map[string]IssueID) {
 	t.Helper()
 	s, clk := clockStore(t) // 2026-10-07 12:00
 	ctx := t.Context()
@@ -617,7 +618,7 @@ func amortizedFixture(t *testing.T) (*Store, map[string]IssueID) {
 	mustAddUsage(t, s, bob, rec("b-sep", "example-large", time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC), 200, 0),
 		rec("b-oct", "example-large", time.Date(2026, 10, 3, 6, 0, 0, 0, time.UTC), 50, 0))
 	mustAddUsage(t, s, carol, rec("c-sep", "example-large", time.Date(2026, 9, 11, 12, 5, 0, 0, time.UTC), 1000, 0))
-	return s, map[string]IssueID{"A": a.ID, "B": b.ID, "C": c.ID}
+	return s, clk, map[string]IssueID{"A": a.ID, "B": b.ID, "C": c.ID}
 }
 
 // A plan's monthly total, fee × seats, is split across each month's
@@ -627,8 +628,9 @@ func amortizedFixture(t *testing.T) (*Store, map[string]IssueID) {
 // covers in part gets the part its tokens in the window are of the
 // month's. carol, on no plan, adds nothing.
 func TestCostReportAmortized(t *testing.T) {
-	s, ids := amortizedFixture(t)
-	const usd = 1_000_000_000_000 // picodollars
+	s, clk, ids := amortizedFixture(t)
+	clk.add(month("2026-11").Sub(clk.now())) // October is over, so it has cost its whole fee
+	const usd = 1_000_000_000_000            // picodollars
 	tests := []struct {
 		name         string
 		by           CostBy
@@ -674,6 +676,28 @@ func TestCostReportAmortized(t *testing.T) {
 	}
 }
 
+// The month that holds now has cost only the part of its fee that has
+// accrued, by time, before it is split; a window reaching past now
+// charges nothing for the months to come.
+func TestCostReportAccrues(t *testing.T) {
+	s, _, ids := amortizedFixture(t) // 7 Oct 12:00: 6.5 of October's 31 days
+	// 30 USD × 6.5/31, split evenly between alice's 50 tokens on B and
+	// bob's 50 on no issue.
+	const accrued = 6_290_322_580_645
+	for _, until := range []time.Time{{}, month("2027-01")} {
+		r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: month("2026-10"), Until: until})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := amortizedText(r.Groups, ids), "(unattributed)=3145161290323 B=3145161290322"; got != want {
+			t.Errorf("CostReport(October to %s) on 7 Oct amortized = %q, want %q", until, got, want)
+		}
+		if r.Total.Amortized == nil || r.Total.Amortized.Cmp(big.NewInt(accrued)) != 0 {
+			t.Errorf("CostReport(October to %s) on 7 Oct: Total.Amortized = %v, want %d", until, r.Total.Amortized, accrued)
+		}
+	}
+}
+
 // A plan month whose principals reported no tokens still cost its fee:
 // it goes to (unattributed), prorated by the share of the month the
 // window covers. A report on a server with no plans has no amortized
@@ -694,5 +718,14 @@ func TestCostReportAmortizedIdle(t *testing.T) {
 	}
 	if got, want := amortizedText(r.Groups, nil), "(unattributed)=1000000000000"; got != want {
 		t.Errorf("CostReport(1 Oct) of an idle 31 USD plan = %q, want %q (a 31st of it)", got, want)
+	}
+	// On 7 Oct 12:00, the idle month has accrued 6.5 of its 31 days, and
+	// the months to come nothing.
+	r, err = s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: month("2026-10"), Until: month("2027-01")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := amortizedText(r.Groups, nil), "(unattributed)=6500000000000"; got != want {
+		t.Errorf("CostReport(October to January) on 7 Oct of an idle 31 USD plan = %q, want %q (6.5 days of it)", got, want)
 	}
 }

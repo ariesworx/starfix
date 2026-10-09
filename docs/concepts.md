@@ -332,8 +332,11 @@ the total. A window that covers part of a month gets the part of the fee
 that its tokens are of the month's: from the 15th, with two thirds of a
 month's tokens after it, two thirds of the fee. A month whose principals
 reported no tokens still cost its fee: it goes to `(unattributed)`,
-prorated by the share of the month the window covers. A principal on no
-plan adds nothing. Reports show amortized cost beside the list-price
+prorated by the share of the month the window covers. A fee accrues by
+time: the current month has cost only the part of its fee that has
+passed (on the 8th of a 31-day month, a week's worth), split the same
+way, and a window that reaches past now charges nothing for the months
+to come. A principal on no plan adds nothing. Reports show amortized cost beside the list-price
 equivalent, never instead of it, and only `sfx cost` and the `cost` tool
 show it, since `show` and `digest` would have to read whole months.
 

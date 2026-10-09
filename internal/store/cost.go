@@ -316,7 +316,7 @@ func (s *Store) CostReport(ctx context.Context, f CostFilter) (CostReport, error
 	if err != nil {
 		return CostReport{}, err
 	}
-	z, err := newAmortizer(ctx, q, since, until)
+	z, err := newAmortizer(ctx, q, since, until, now)
 	if err != nil {
 		return CostReport{}, err
 	}
