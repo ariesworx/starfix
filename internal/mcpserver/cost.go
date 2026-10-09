@@ -39,7 +39,7 @@ type Cost struct {
 func (r *Cost) mark() { r.set(len(r.Groups) > 0) }
 
 func (s *Server) registerCost() {
-	add(s, tool{name: "cost", desc: "Token cost at list price.", ann: readOnly, retry: true,
+	add(s, tool{name: "cost", desc: "Token cost, plan share and hours.", ann: readOnly, retry: true,
 		enums: enums{"by": costBys}},
 		func(ctx context.Context, c Conn, in CostIn) (Cost, error) { return cost(ctx, c, in) })
 }
