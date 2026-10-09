@@ -15,8 +15,13 @@ import (
 
 // command is the CLI spelling of an op, for fix lines.
 func command(op string) string {
-	if op == proto.OpAck {
+	switch op {
+	case proto.OpAck:
 		return "inbox" // sfx inbox --ack
+	case proto.OpPriceSet:
+		return "admin prices set"
+	case proto.OpPrices:
+		return "admin prices"
 	}
 	return strings.ReplaceAll(op, ".", " ")
 }
@@ -32,6 +37,7 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 	var forbidden *store.ForbiddenError
 	var state *store.StateError
 	var batch *store.UsageBatchError
+	var priceCap *store.PriceLimitError
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return proto.Errf(proto.CodeNotFound, "find the id with `sfx list`",
@@ -79,6 +85,11 @@ func (s *Server) mapErr(ctx context.Context, op, id string, rev int64, err error
 
 	case errors.As(err, &batch):
 		return proto.Errf(proto.CodeInvalid, fmt.Sprintf("send at most %d records per call; nothing from the batch was stored", batch.Max),
+			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
+
+	case errors.As(err, &priceCap):
+		return proto.Errf(proto.CodeInvalid,
+			"replace an existing price (the same model and --from) instead, or ask the server admin to raise prices under limits: in starfixd's config",
 			strings.TrimPrefix(text, store.ErrInvalid.Error()+": "))
 
 	case errors.Is(err, store.ErrInvalid) && op == proto.OpUsage:
@@ -140,6 +151,10 @@ func unmetErr(op string, e *store.AcceptanceError) *proto.Error {
 // forbiddenErr refuses a change to an issue another principal holds,
 // naming the holder and the ways forward, or an admin-only action.
 func forbiddenErr(e *store.ForbiddenError) *proto.Error {
+	if e.Action != "" && e.ID == "" {
+		return proto.Errf(proto.CodeForbidden, "ask a starfix admin (admins: in starfixd's config) to run it",
+			fmt.Sprintf("%s is for starfix admins", e.Action))
+	}
 	if e.Action != "" {
 		return proto.Errf(proto.CodeForbidden,
 			fmt.Sprintf("tick or waive the open items with `sfx accept %s N`, or ask a starfix admin to run it", e.ID),

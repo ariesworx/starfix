@@ -244,7 +244,9 @@ const (
 // held. Account is the account that applies: the issue's own, the
 // nearest ancestor's (AccountFrom names it), or the server's default.
 // Capped says more records matched than the server reads, so the tokens
-// are a lower bound.
+// are a lower bound. CostUSD is the tokens' list-price equivalent, an
+// exact decimal of US dollars, left out when there are no tokens;
+// Unpriced says some tokens had no price at their time (protocol 4).
 type IssueUsage struct {
 	Account     string        `json:"account"`
 	AccountFrom string        `json:"account_from,omitempty"`
@@ -252,6 +254,8 @@ type IssueUsage struct {
 	Split       bool          `json:"split,omitempty"`
 	Models      []ModelTokens `json:"models,omitempty"`
 	Capped      bool          `json:"capped,omitempty"`
+	CostUSD     string        `json:"cost_usd,omitempty"`
+	Unpriced    bool          `json:"unpriced,omitempty"`
 }
 
 // UsageRecord is what a harness reported for one request, or for a turn
@@ -654,6 +658,10 @@ type DigestUsage struct {
 	// Split is set when a record in the window was split by time, among
 	// issues or with time none was held, so the parts are estimates.
 	Split bool `json:"split,omitempty"`
+	// CostUSD and Unpriced are Models' list-price equivalent, as
+	// IssueUsage's (protocol 4).
+	CostUSD  string `json:"cost_usd,omitempty"`
+	Unpriced bool   `json:"unpriced,omitempty"`
 }
 
 // Span formats a duration compactly for people and agents: 45m, 5h, 3d4h.

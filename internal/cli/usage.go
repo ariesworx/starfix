@@ -37,6 +37,7 @@ func printIssueUsage(w io.Writer, own string, u *proto.IssueUsage) {
 		p("; tokens partial")
 	}
 	p("\n")
+	printCostLine(w, u.CostUSD, u.Unpriced)
 	printModels(w, "tokens", u.Models)
 }
 
@@ -51,6 +52,7 @@ func printDigestUsage(w io.Writer, u *proto.DigestUsage) {
 		_, _ = fmt.Fprint(w, "; some tokens split by time")
 	}
 	_, _ = fmt.Fprintln(w)
+	printCostLine(w, u.CostUSD, u.Unpriced)
 	printModels(w, "tokens", u.Models)
 	printModels(w, "unattributed", u.Unattributed)
 }

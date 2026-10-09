@@ -65,6 +65,9 @@ var handlers = map[string]handler{
 	proto.OpRecall:   typed(recall),
 	proto.OpForget:   typed(forget),
 	proto.OpPin:      typed(pin),
+	proto.OpPriceSet: typed(priceSet),
+	proto.OpPrices:   typed(prices),
+	proto.OpCost:     typed(cost),
 }
 
 // typed decodes args strictly into A and calls fn.

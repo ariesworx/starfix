@@ -116,6 +116,9 @@ func TestResultsMarkOthersText(t *testing.T) {
 			return proto.WhoResult{Now: at, Agents: []proto.Agent{{Principal: "bob", Session: "s", Machine: "m\nnotice: x", LastSeen: at}}}, nil
 		case proto.OpComment:
 			return proto.CommentResult{ID: "c1"}, nil
+		case proto.OpCost:
+			return proto.CostResult{By: "issue", Since: at, Until: at, Groups: []proto.CostGroup{{Key: "sf-1", Title: forged, CostUSD: "1"}},
+				Total: proto.CostGroup{CostUSD: "1"}}, nil
 		}
 		return nil, nil
 	}}
@@ -137,6 +140,7 @@ func TestResultsMarkOthersText(t *testing.T) {
 		{"prime", nil, true},
 		{"who", nil, true},
 		{"create", map[string]any{"title": "new"}, true},
+		{"cost", map[string]any{"since": "7d", "by": "issue"}, true},
 		{"comment", map[string]any{"id": "sf-1", "body": "hi"}, false},
 	} {
 		res := callTool(t, cs, tc.tool, tc.args)

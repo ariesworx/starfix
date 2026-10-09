@@ -165,7 +165,7 @@ func TestTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ro := []string{"blocked", "comments", "digest", "history", "list", "prime", "ready", "recall", "show", "who"}
+	ro := []string{"blocked", "comments", "cost", "digest", "history", "list", "prime", "ready", "recall", "show", "who"}
 	var names []string
 	for _, tool := range res.Tools {
 		names = append(names, tool.Name)
@@ -184,19 +184,20 @@ func TestTools(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"blocked", "close", "comment", "comments", "create", "dep", "digest", "finish", "forget", "handoff", "history",
+	want := []string{"blocked", "close", "comment", "comments", "cost", "create", "dep", "digest", "finish", "forget", "handoff", "history",
 		"inbox", "label", "list", "prime", "ready", "recall", "remember", "reopen", "show", "start", "update", "who"}
 	if !slices.Equal(names, want) {
 		t.Errorf("tools = %v\nwant    %v", names, want)
 	}
-	// Design §5 aims for about 2k tokens for the whole verb set. These 23
-	// tools are about 7.5 KiB, some 1.9k real tokens; the budget below is
+	// Design §5 aims for about 2k tokens for the whole verb set. These 24
+	// tools are about 7.8 KiB, some 2k real tokens; the budget below is
 	// in Tokens' deliberately high estimate, raised from 2,200 to 2,400
 	// for the inbox and the structured handoff (finish's ticked and waived
-	// fit by trimming descriptions), and to 2,600 for remember, recall and
+	// fit by trimming descriptions), to 2,600 for remember, recall and
 	// forget, after trimming the descriptions that restated a default or
-	// the instructions. Counted is what a model reads: names, descriptions
-	// and input schemas; annotations steer the harness's approval prompts.
+	// the instructions, and to 2,700 for cost (about 105 of it). Counted is
+	// what a model reads: names, descriptions and input schemas;
+	// annotations steer the harness's approval prompts.
 	type seen struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -214,7 +215,7 @@ func TestTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("tool schemas cost ~%d tokens (%d bytes)", Tokens(b), len(b))
-	if got, budget := Tokens(b), 2600; got > budget {
+	if got, budget := Tokens(b), 2700; got > budget {
 		t.Errorf("tool schemas cost ~%d tokens (%d bytes), budget %d", got, len(b), budget)
 	}
 }

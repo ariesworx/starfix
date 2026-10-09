@@ -338,8 +338,33 @@ Only an admin may change an issue another principal holds, or close one
 with acceptance items still open (`close --force`). A change to an issue
 another principal holds is recorded first as an `admin.override` event
 that names the holder; a forced close records the open items in its close
-event. Nothing over the protocol or MCP reads or changes the list, and a
+event. Only an admin may set a model's price ([Prices](#prices)).
+Nothing over the protocol or MCP reads or changes the list, and a
 reserved name cannot be an admin.
+
+## Prices
+
+`sfx cost`, `show` and `digest` price tokens at each model's list rates,
+which an admin records with `sfx admin prices set`. Rates are US dollars
+per million tokens, from an effective date (midnight UTC) or time; the
+model is spelled exactly as the harness reports it, which `sfx cost --by
+model` shows. For example, with invented rates for an invented model:
+
+```sh
+sfx admin prices set example-large --from 2026-01-01 \
+  --input 4 --output 20 --cache-write 5 --cache-write-1h 8 --cache-read 0.4
+sfx admin prices
+```
+
+`--cache-write` is a five-minute cache write and `--cache-write-1h` a
+one-hour one. A record is priced by the newest price for its model whose
+effective time is no later than the record's, so a new price applies from
+its date on and never rewrites past costs; costs are computed when read,
+never stored. A model with no price in effect is reported as unpriced,
+never guessed; until the first price is set, `show` and `digest` show no
+cost at all. Setting the same model and date again replaces the rates;
+setting them to what they are changes nothing. Each change is a
+`price.set` event. Anyone may list prices.
 
 ## Settings
 
@@ -406,6 +431,7 @@ limits:
 | `memory_tags` | 20 | Tags on one memory |
 | `memory_tag_length` | 64 | Bytes in one memory tag (at most 255) |
 | `memories_per_scope` | 1000 | Memories one principal may author in one scope, forgotten ones included. A new key at the cap first deletes that principal's oldest forgotten memories in the scope; only when live memories fill it is the key refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
+| `prices` | 1000 | Rows of the prices table (at most 10000, since every cost report, show and digest reads them all): a model's rates from one date are one row. A new price past it is refused with `invalid`, and its fix says to replace an existing one or raise the limit; replacing a price is not refused |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.
@@ -430,6 +456,10 @@ Fixed caps that no setting changes:
   attribute at most 100,000 records a read, and mark the tokens partial
   past that. `show` reads only the records made while the issue was held,
   and the spans that reach into those stretches.
+- **Cost reports:** `cost` covers a window of at most 366 days, prices at
+  most 100,000 records and marks the report partial past that, and lists
+  at most 500 groups, summing the rest as `(other)`. A rate is at most
+  1,000,000 US dollars per million tokens.
 - **Similar issues:** lookups read closed titles from a cache refreshed on
   close and reopen, or after a minute.
 
@@ -541,6 +571,7 @@ how fast one principal can grow it.
 Token usage is one row per harness request in `token_usage`, about 200
 bytes each, also never pruned; a `usage` call adds one summary event, not
 one per row. `usage_per_day` bounds how fast one principal can grow it.
+Prices are at most `prices` rows, and only admins add them.
 
 An issue's paths are at most `paths_per_issue` rows in `issue_paths`. A
 call that adds paths records one `issue.paths` event listing at most 20;

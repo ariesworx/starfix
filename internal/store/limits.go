@@ -57,12 +57,17 @@ type Limits struct {
 	Memories int `yaml:"memories_per_scope"`
 	// MemoryKeyLength caps a memory's key, in bytes; at most 255.
 	MemoryKeyLength int `yaml:"memory_key_length"`
+	// Prices caps the rows of the prices table: a model's rates from one
+	// effective time are one row, and replacing them is no new row; at
+	// most 10,000.
+	Prices int `yaml:"prices"`
 }
 
 // DefaultLimits are the limits a zero field takes.
 var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10,
 	UsageRecords: 500, UsagePerDay: 50000, Paths: proto.MaxPaths,
-	MemoryBody: 4096, MemoryTags: 20, MemoryTagLength: 64, Memories: 1000, MemoryKeyLength: 128}
+	MemoryBody: 4096, MemoryTags: 20, MemoryTagLength: 64, Memories: 1000, MemoryKeyLength: 128,
+	Prices: 1000}
 
 // Column sizes that bound the memory limits: a body is TEXT, and a key
 // and a tag VARCHAR(255).
@@ -70,6 +75,10 @@ const (
 	maxMemoryBody = maxText
 	maxMemoryName = 255
 )
+
+// maxPrices bounds the prices limit: every cost report, show and digest
+// reads the whole prices table into memory.
+const maxPrices = 10000
 
 // withDefaults returns l with each zero field set from DefaultLimits.
 func (l Limits) withDefaults() Limits {
@@ -81,6 +90,7 @@ func (l Limits) withDefaults() Limits {
 		{&l.Paths, &DefaultLimits.Paths}, {&l.MemoryBody, &DefaultLimits.MemoryBody},
 		{&l.MemoryTags, &DefaultLimits.MemoryTags}, {&l.MemoryTagLength, &DefaultLimits.MemoryTagLength},
 		{&l.Memories, &DefaultLimits.Memories}, {&l.MemoryKeyLength, &DefaultLimits.MemoryKeyLength},
+		{&l.Prices, &DefaultLimits.Prices},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -100,7 +110,7 @@ func (l Limits) Validate() error {
 		{"sessions_per_principal", l.Sessions}, {"inbox_unread", l.InboxUnread}, {"notices_per_minute", l.Notices},
 		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay}, {"paths_per_issue", l.Paths},
 		{"memory_body", l.MemoryBody}, {"memory_tags", l.MemoryTags}, {"memory_tag_length", l.MemoryTagLength},
-		{"memories_per_scope", l.Memories}, {"memory_key_length", l.MemoryKeyLength},
+		{"memories_per_scope", l.Memories}, {"memory_key_length", l.MemoryKeyLength}, {"prices", l.Prices},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%w: limit %s is %d; give a positive number, or leave it out for the default", ErrInvalid, f.name, f.v)
@@ -111,7 +121,7 @@ func (l Limits) Validate() error {
 		v, most int
 	}{
 		{"memory_body", l.MemoryBody, maxMemoryBody}, {"memory_tag_length", l.MemoryTagLength, maxMemoryName},
-		{"memory_key_length", l.MemoryKeyLength, maxMemoryName},
+		{"memory_key_length", l.MemoryKeyLength, maxMemoryName}, {"prices", l.Prices, maxPrices},
 	} {
 		if f.v > f.most {
 			return fmt.Errorf("%w: limit %s is %d; it can be at most %d", ErrInvalid, f.name, f.v, f.most)

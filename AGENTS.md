@@ -154,11 +154,11 @@ skip without it too.
     The CLI prints the message and a `fix:` line; `internal/mcpserver`
     rewords the fix as the agent's next tool call (`errors.go`).
 12. **MCP is for agents and stays small.** No admin tools over MCP: import,
-    export, setup, upgrade and settings are CLI only. Identity is implicit:
-    the principal comes from the SSH key and the session from the
-    environment, never from a tool argument. Results are capped
+    export, setup, upgrade, settings and prices are CLI only. Identity is
+    implicit: the principal comes from the SSH key and the session from
+    the environment, never from a tool argument. Results are capped
     (`budget.go`: 2,000 tokens, prime and digest 1,500) and the whole tool
-    schema set at about 2,600 estimated tokens; the tests enforce both and
+    schema set at about 2,700 estimated tokens; the tests enforce both and
     pin the tool list. Keep schema descriptions terse.
 13. **Output stays terse.** Writes return `{id, rev}`; lists return the
     compact summary. `sfx --json` prints exactly one JSON document, errors

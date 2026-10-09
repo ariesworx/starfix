@@ -62,3 +62,48 @@ func BenchmarkDivide(b *testing.B) {
 		divide(r, x)
 	}
 }
+
+// The 1-hour cache writes are part of the cache writes, so each part's
+// 1-hour writes are part of its cache writes. Divided independently,
+// weights 3:1:10 gave 7 writes as 2, 0 and 5 and their 6 1-hour writes
+// as 1, 1 and 4: the second part had more 1-hour writes than writes.
+func TestShareKeepsCacheWrite1hWithinCacheWrite(t *testing.T) {
+	d := division{issues: []IssueID{"tst-a", "tst-b"}, weights: []float64{3, 1, 10}}
+	tests := []struct {
+		name     string
+		in       Tokens
+		cw, cw1h []int64 // per part; nil for unknown
+	}{
+		{"both known", Tokens{CacheWrite: n64(7), CacheWrite1h: n64(6)}, []int64{1, 1, 5}, []int64{1, 1, 4}},
+		{"all 1h", Tokens{CacheWrite: n64(6), CacheWrite1h: n64(6)}, []int64{1, 1, 4}, []int64{1, 1, 4}},
+		{"1h unknown", Tokens{CacheWrite: n64(7)}, []int64{2, 0, 5}, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cw, cw1h int64
+			for b := range d.weights {
+				got := d.share(tc.in, b)
+				if *got.CacheWrite != tc.cw[b] {
+					t.Errorf("share(%s, %d).CacheWrite = %d, want %d", tokensText(ModelUsage{Tokens: tc.in}), b, *got.CacheWrite, tc.cw[b])
+				}
+				cw += *got.CacheWrite
+				if tc.cw1h == nil {
+					if got.CacheWrite1h != nil {
+						t.Errorf("share(%s, %d).CacheWrite1h = %d, want unknown", tokensText(ModelUsage{Tokens: tc.in}), b, *got.CacheWrite1h)
+					}
+					continue
+				}
+				if *got.CacheWrite1h != tc.cw1h[b] {
+					t.Errorf("share(%s, %d).CacheWrite1h = %d, want %d", tokensText(ModelUsage{Tokens: tc.in}), b, *got.CacheWrite1h, tc.cw1h[b])
+				}
+				cw1h += *got.CacheWrite1h
+			}
+			if cw != *tc.in.CacheWrite {
+				t.Errorf("parts of %s sum to %d cache writes, want %d", tokensText(ModelUsage{Tokens: tc.in}), cw, *tc.in.CacheWrite)
+			}
+			if tc.cw1h != nil && cw1h != *tc.in.CacheWrite1h {
+				t.Errorf("parts of %s sum to %d 1-hour writes, want %d", tokensText(ModelUsage{Tokens: tc.in}), cw1h, *tc.in.CacheWrite1h)
+			}
+		})
+	}
+}

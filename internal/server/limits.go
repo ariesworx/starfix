@@ -73,6 +73,7 @@ func (l Limits) WithDefaults() Limits {
 		{&l.Conns, &d.Conns}, {&l.ConnsPerPrincipal, &d.ConnsPerPrincipal}, {&l.WriteBurst, &d.WriteBurst},
 		{&l.RefusalLogs, &d.RefusalLogs}, {&l.MemoryBody, &d.MemoryBody}, {&l.MemoryTags, &d.MemoryTags},
 		{&l.MemoryTagLength, &d.MemoryTagLength}, {&l.Memories, &d.Memories}, {&l.MemoryKeyLength, &d.MemoryKeyLength},
+		{&l.Prices, &d.Prices},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -116,7 +117,7 @@ func (l Limits) Validate() error {
 var readOps = map[string]bool{
 	proto.OpShow: true, proto.OpList: true, proto.OpReady: true, proto.OpBlocked: true, proto.OpComments: true,
 	proto.OpHistory: true, proto.OpDigest: true, proto.OpWho: true, proto.OpInbox: true, proto.OpWatch: true,
-	proto.OpClaims: true, proto.OpRecall: true,
+	proto.OpClaims: true, proto.OpRecall: true, proto.OpPrices: true, proto.OpCost: true,
 }
 
 // buckets is a token bucket per principal: each holds up to burst tokens,
