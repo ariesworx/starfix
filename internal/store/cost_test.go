@@ -219,6 +219,9 @@ func groupsText(gs []CostGroup) string {
 		if g.Cost.Unpriced {
 			s += " unpriced"
 		}
+		if g.Logged > 0 {
+			s += " logged " + g.Logged.String()
+		}
 		out = append(out, s)
 	}
 	return strings.Join(out, "; ")
@@ -500,5 +503,61 @@ func TestCostReportChains(t *testing.T) {
 		if got := groupsText(r.Groups); got != tc.want {
 			t.Errorf("CostReport(by %s).Groups = %q, want %q", tc.by, got, tc.want)
 		}
+	}
+}
+
+// Hours logged on the days a report's window overlaps join the groups:
+// an issue's by its issue, account or epic, a person's by who logged
+// them, and all of them as (human) by model, so under every grouping the
+// groups' hours add up to the total. An issue with hours and no tokens
+// is a group of its own.
+func TestCostReportHours(t *testing.T) {
+	s, ids := costFixture(t) // now 13:00 on 2026-10-07
+	t4 := mustCreate(t, s, NewIssue{Title: "four"})
+	ids["T4"] = t4.ID
+	mustLogHours(t, s, alice, NewHours{Issue: ids["T1"], Duration: time.Hour})
+	mustLogHours(t, s, bob, NewHours{Issue: ids["T3"], Duration: 2 * time.Hour})
+	mustLogHours(t, s, alice, NewHours{Issue: t4.ID, Duration: 15 * time.Minute})
+	mustLogHours(t, s, alice, NewHours{Issue: ids["T2"], Duration: 8 * time.Hour, On: day("2026-10-06")}) // outside
+	since := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	tests := []struct {
+		by   CostBy
+		want string
+	}{
+		{CostByIssue, "(unattributed) 1000/0 $1000000000; T1 one 106/10 $126000000 split logged 1h0m0s; " +
+			"T3 three 57/0 $7000000 unpriced logged 2h0m0s; T2 two 6/0 $6000000 split; T4 four ?/? $0 logged 15m0s"},
+		{CostByAccount, "(unattributed) 1000/0 $1000000000; acme 106/10 $126000000 split logged 1h0m0s; " +
+			"internal 57/0 $7000000 unpriced logged 2h15m0s; beta 6/0 $6000000 split"},
+		{CostByEpic, "(unattributed) 1000/0 $1000000000; E the epic 106/10 $126000000 split logged 1h0m0s; " +
+			"(no epic) 63/0 $13000000 split unpriced logged 2h15m0s"},
+		{CostByPerson, "alice 1112/10 $1132000000 logged 1h15m0s; bob 57/0 $7000000 unpriced logged 2h0m0s"},
+		{CostByModel, "example-large 1119/10 $1139000000; mystery 50/0 $0 unpriced; (human) ?/? $0 logged 3h15m0s"},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.by), func(t *testing.T) {
+			r, err := s.CostReport(t.Context(), CostFilter{By: tc.by, Since: since, Until: until, Account: "internal"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.want
+			for name, id := range ids {
+				want = strings.ReplaceAll(want, name+" ", string(id)+" ")
+			}
+			if got := groupsText(r.Groups); got != want {
+				t.Errorf("CostReport(by %s).Groups =\n%s\nwant\n%s", tc.by, got, want)
+			}
+			if r.Total.Logged != 3*time.Hour+15*time.Minute {
+				t.Errorf("CostReport(by %s).Total.Logged = %s, want 3h15m0s", tc.by, r.Total.Logged)
+			}
+		})
+	}
+	// Past the limit, the rest's hours are summed with the rest.
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: since, Until: until, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := r.Groups[len(r.Groups)-1]; last.Key != "(other)" || last.Logged != 2*time.Hour+15*time.Minute {
+		t.Errorf("CostReport(by issue, limit 2) last group %s logged %s, want (other) logged 2h15m0s", last.Key, last.Logged)
 	}
 }

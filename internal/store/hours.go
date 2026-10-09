@@ -293,6 +293,16 @@ type hoursSum struct {
 // startDay is the first day a window starting at since overlaps.
 func startDay(since time.Time) time.Time { return since.UTC().Truncate(24 * time.Hour) }
 
+// endDay is the first day a window ending before until does not
+// overlap.
+func endDay(until time.Time) time.Time {
+	d := until.UTC().Truncate(24 * time.Hour)
+	if d.Before(until) {
+		d = d.Add(24 * time.Hour)
+	}
+	return d
+}
+
 // windowHours sums the entries matching where, a constant clause with
 // placeholders for args, by issue and principal.
 func windowHours(ctx context.Context, q querier, where string, args ...any) ([]hoursSum, error) {

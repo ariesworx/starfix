@@ -22,11 +22,13 @@ const (
 
 // Cost report group keys that no account, issue, principal or model can
 // be, since none of those holds parentheses: the tokens no issue was held
-// for, the issues under no epic, and the groups past a report's limit,
-// summed (OtherModels, "(other)").
+// for, the issues under no epic, the hours people logged in a report by
+// model, and the groups past a report's limit, summed (OtherModels,
+// "(other)").
 const (
 	CostUnattributed = "(unattributed)"
 	CostNoEpic       = "(no epic)"
+	CostHuman        = "(human)"
 )
 
 // MaxRate bounds a rate: a million US dollars per million tokens.
