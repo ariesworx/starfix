@@ -401,6 +401,11 @@ limits:
 | `usage_records` | 500 | Token usage records in one `usage` call |
 | `usage_per_day` | 50000 | Token usage records one principal may add in 24 hours, counted by when the server stored them. Per principal, because a client can name any number of sessions |
 | `paths_per_issue` | 200 | Paths one issue keeps, declared and from commits, and the commit paths one `renew`, `finish` or `handoff` records. Too many declared paths are refused with `invalid`; past the cap, commit paths keep the request's first (most recent) and the issue's most recently recorded, and the request still succeeds |
+| `memory_body` | 4096 | Bytes in one memory's body (at most 65535) |
+| `memory_key_length` | 128 | Bytes in a memory's key (at most 255) |
+| `memory_tags` | 20 | Tags on one memory |
+| `memory_tag_length` | 64 | Bytes in one memory tag (at most 255) |
+| `memories_per_scope` | 1000 | Memories one principal may author in one scope. A new key past it is refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.

@@ -1,8 +1,8 @@
 # How starfix works
 
 This page explains the ideas behind every `sfx` command and MCP tool:
-identity, issues, claims, handoffs, the inbox and the registry of who is
-at work.
+identity, issues, claims, handoffs, the inbox, the registry of who is at
+work and memory.
 The [CLI reference](cli.md) and the [agent guide](agents.md) build on it.
 
 ## Identity: principals and sessions
@@ -90,8 +90,9 @@ acceptance items. See [Admins](server.md#admins).
 A unit of work is two steps:
 
 1. `start` claims the top ready issue (or the one you name). It returns the
-   issue, its acceptance checklist, the last handoff note and a branch name
-   such as `fix/sf-a1b2c3d4-fix-the-login-redirect`.
+   issue, its acceptance checklist, the last handoff note, the
+   [memories](#memory) relevant to it and a branch name such as
+   `fix/sf-a1b2c3d4-fix-the-login-redirect`.
 2. `finish` closes the issue, records a handoff note and files any work
    found on the way as new issues, linked `discovered-from`.
 
@@ -197,6 +198,67 @@ no activity for 48 hours counts as stalled. The digest is structured data
 for a standup or a status report. starfix runs no model; the agent writes
 any narrative. It also totals the time issues were held in the window and
 the tokens reported in it ([below](#accounts-time-and-tokens)).
+
+## Memory
+
+A memory is something worth knowing in a later session: how deploys
+work, a decision and its reason, a person's preferences. Each has a
+**key**, a **body**, optional **tags**, an optional **issue** it is
+about, and a **pin**. `sfx remember` and the MCP `remember` tool write
+one, `recall` searches them and `forget` deletes one.
+
+**Scopes.** Every memory has one of three:
+
+| Scope | Who can read and change it |
+|---|---|
+| `project` (the default) | Everyone on the server |
+| `team` | Everyone on the server |
+| `user` | Its author alone |
+
+A `user` memory is private, and the server, not the client, enforces
+it: no other principal can recall, list, change or forget it, and its
+key and body never appear in an issue's history, the digest, the events
+the server pushes, `prime` or `start`. The digest's count of events does
+include a change to one, without saying what it was. Two people's `user`
+memories with the same key are two records.
+
+One starfix server serves one project, so today `team` and `project`
+reach the same people. `team` is for what holds across the team's
+projects, such as a review rule, and will reach further once one server
+holds several projects; the scope is stored, and `recall --scope`
+filters by it, now. An agent remembers in `project` scope unless the
+memory is the person's own preference, when it uses `user` and asks if
+unsure, and uses `team` only when someone chose it.
+
+**Keys and revisions.** A key names one memory in its scope. Each
+memory has a revision, `rev`, that every change raises. `remember`
+without `--rev` creates the key and is refused if it exists, naming the
+stored revision. With `--rev N` it replaces revision N and is refused
+if someone changed the memory since, so two edits of the same key never
+overwrite each other silently. New keys never conflict. `forget --rev
+N` is refused the same way. Forgetting deletes the memory; remembering
+its key again starts a new one at revision 1.
+
+**Recall** finds memories by text (in the key or body, in any case), by
+exact key, by tag and by scope: pinned first, then the newest. There is
+no search by meaning yet.
+
+**Prime and start.** `prime` shows the pinned memories, then those
+relevant to your in-progress issues (linked to one of them, or tagged
+with one of their labels), then the newest, as many as fit its budget;
+never in key order. `start` shows up to five memories relevant to the
+issue it takes. Pinning is a person's call: `sfx pin KEY` and `sfx
+unpin KEY`. Agents cannot pin.
+
+**No secrets.** The server refuses a memory that looks like it holds a
+credential, in every scope: a private key, an AWS access key id, a
+GitHub, GitLab, Slack or Stripe token, a JSON web token, a `password=`
+or `secret:` assignment, or a long random token. The refusal names what
+it looks like, never the text. Write where the secret is kept instead,
+such as a vault path or an environment variable's name.
+
+How large a memory may be, and how many each principal may keep, are
+[server limits](server.md#limits).
 
 ## Accounts, time and tokens
 

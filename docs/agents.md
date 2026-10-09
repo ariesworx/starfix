@@ -189,11 +189,12 @@ first release runs SessionEnd async; `--check` names the hooks to fix.
 
 ## Tools
 
-The MCP server offers 20 tools: `prime`, `start`, `finish`, `handoff`,
+The MCP server offers 23 tools: `prime`, `start`, `finish`, `handoff`,
 `ready`, `blocked`, `list`, `show`, `create`, `update`, `close`, `reopen`,
-`dep`, `label`, `comment`, `comments`, `history`, `digest`, `who` and
-`inbox`. There are no admin tools: import, export, setup, upgrade and
-server settings stay on the command line.
+`dep`, `label`, `comment`, `comments`, `history`, `digest`, `who`,
+`inbox`, `remember`, `recall` and `forget`. There are no admin tools:
+import, export, setup, upgrade and server settings stay on the command
+line.
 
 - **Results are compact.** Writes return `{id, rev}`, and lists return the
   id, title, status and priority. A result is capped at about 2,000 tokens;
@@ -207,6 +208,16 @@ server settings stay on the command line.
   ([Security](security-model.md#untrusted-text)).
 - **`digest` is data.** It returns structured facts from the event log;
   the agent writes any narrative.
+- **Memory is scoped.** `remember` keeps a memory in `project` scope
+  unless told otherwise; its description tells the agent to use `user`
+  for the person's own preferences, asking if unsure, and `team` only
+  when someone chose it ([Memory](concepts.md#memory)). It takes `rev`
+  to replace a memory, so a concurrent edit is refused rather than lost.
+  `recall` searches by text, key, tag and scope; `forget` deletes. `prime`
+  shows the pinned and relevant memories and `start` those relevant to
+  its issue. Pinning is left to people (`sfx pin`). A memory that looks
+  like it holds a secret is refused, and the fix tells the agent to name
+  where the secret is kept instead.
 - **`show` and `digest` carry time and tokens.** `show` gives the issue's
   `account` and a one-line `usage`: time held, tokens for the five largest
   models, and whether any were split by time with other work. `digest`
@@ -224,8 +235,8 @@ server settings stay on the command line.
 
 One SSH connection serves an MCP session. It opens on the first tool call
 and is redialed if it drops. Reads, `create`, `comment`, `finish`,
-`handoff` and `inbox` are retried on the new connection, since a retry
-cannot write twice. `start`, `update`, `close`, `reopen`, `dep` and
+`handoff`, `inbox`, `remember` and `forget` are retried on the new
+connection, since a retry cannot write twice. `start`, `update`, `close`, `reopen`, `dep` and
 `label` report that they may have applied.
 
 ## Sessions
