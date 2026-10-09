@@ -89,6 +89,9 @@ type Memory struct {
 	// on a memory linked to one of the issues they rank for, or tagged
 	// with one of their labels.
 	Relevant bool `json:"relevant,omitempty"`
+
+	// forgotten marks a tombstone, which only loadMemory returns.
+	forgotten bool
 }
 
 // NewMemory is the input to Remember.
@@ -275,11 +278,12 @@ func (in *NewMemory) secrets() error {
 // memoryCols are the columns scanMemory reads, in its order, from
 // memories aliased m.
 const memoryCols = `m.id, m.scope, m.mem_key, m.body, m.issue_id, m.pinned, m.author, m.updated_by,
-  m.created_at, m.updated_at, m.rev`
+  m.created_at, m.updated_at, m.rev, m.deleted`
 
 // memoryVisible is the condition on memories aliased m that keeps what
-// its one argument, the reader's principal, may see.
-const memoryVisible = `(m.scope <> 'user' OR m.owner = ?)`
+// its one argument, the reader's principal, may see: no tombstone, and
+// no other principal's user memory.
+const memoryVisible = `(NOT m.deleted AND (m.scope <> 'user' OR m.owner = ?))`
 
 // scanMemory scans memoryCols into a Memory; Tags are left for
 // attachTags.
@@ -287,7 +291,7 @@ func scanMemory(sc scanner) (Memory, error) {
 	var m Memory
 	var issue sql.NullString
 	if err := sc.Scan(&m.ID, &m.Scope, &m.Key, &m.Body, &issue, &m.Pinned, &m.Author, &m.UpdatedBy,
-		&m.CreatedAt, &m.UpdatedAt, &m.Rev); err != nil {
+		&m.CreatedAt, &m.UpdatedAt, &m.Rev, &m.forgotten); err != nil {
 		return Memory{}, err
 	}
 	m.Issue = IssueID(issue.String)
@@ -350,7 +354,8 @@ func attachTags(ctx context.Context, q querier, ms []Memory) error {
 }
 
 // loadMemory reads the memory with key in scope for principal, and
-// reports whether there is one.
+// reports whether there is one. It may be a tombstone (forgotten): its
+// rev is where the key's next memory continues.
 func loadMemory(ctx context.Context, q querier, scope Scope, principal, key string) (Memory, bool, error) {
 	ms, err := queryMemories(ctx, q, `SELECT `+memoryCols+` FROM memories m WHERE m.scope = ? AND m.owner = ? AND m.mem_key = ?`,
 		string(scope), owner(scope, principal), key)
@@ -434,12 +439,15 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 				return err
 			}
 		}
+		live := found && !cur.forgotten
 		switch {
-		case in.Rev == 0 && found:
+		case in.Rev == 0 && live:
 			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Current: cur.Rev, By: cur.UpdatedBy}
+		case in.Rev == 0 && found:
+			out, err = w.reviveMemory(ctx, cur, in, OpMemoryCreate, true)
 		case in.Rev == 0:
 			out, err = w.insertMemory(ctx, in, OpMemoryCreate, true)
-		case !found:
+		case !live:
 			return errMemoryNotFound(in.Scope, in.Key)
 		case cur.Rev != in.Rev:
 			return &MemoryConflictError{Scope: in.Scope, Key: in.Key, Rev: in.Rev, Current: cur.Rev, By: cur.UpdatedBy}
@@ -457,18 +465,28 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 	return out, nil
 }
 
+// checkCap refuses, with a [*MemoryLimitError], a new memory of w's
+// actor in scope past Limits.Memories. Tombstones do not count.
+func (w *wtx) checkCap(ctx context.Context, scope Scope) error {
+	p := w.actor.Principal
+	var n int
+	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM memories WHERE author = ? AND scope = ? AND NOT deleted`,
+		p, string(scope)).Scan(&n); err != nil {
+		return fmt.Errorf("count memories: %w", err)
+	}
+	if n >= w.lim.Memories {
+		return &MemoryLimitError{Principal: p, Scope: scope, Max: w.lim.Memories}
+	}
+	return nil
+}
+
 // insertMemory writes in as a new memory of w's actor and records op.
 // With capped set, it first refuses a memory past Limits.Memories.
 func (w *wtx) insertMemory(ctx context.Context, in NewMemory, op Op, capped bool) (Memory, error) {
 	p := w.actor.Principal
 	if capped {
-		var n int
-		if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM memories WHERE author = ? AND scope = ?`,
-			p, string(in.Scope)).Scan(&n); err != nil {
-			return Memory{}, fmt.Errorf("count memories: %w", err)
-		}
-		if n >= w.lim.Memories {
-			return Memory{}, &MemoryLimitError{Principal: p, Scope: in.Scope, Max: w.lim.Memories}
+		if err := w.checkCap(ctx, in.Scope); err != nil {
+			return Memory{}, err
 		}
 	}
 	m := Memory{ID: newMemoryID(), Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.Tags, Issue: in.Issue,
@@ -484,6 +502,29 @@ func (w *wtx) insertMemory(ctx context.Context, in NewMemory, op Op, capped bool
 			return Memory{}, fmt.Errorf("%w: memory %s: %w", errRetry, m.Key, err)
 		}
 		return Memory{}, fmt.Errorf("insert memory: %w", err)
+	}
+	if err := w.insertTags(ctx, m.ID, m.Tags); err != nil {
+		return Memory{}, err
+	}
+	return m, w.event(ctx, op, MemoryTarget(m.ID), nil, memoryState(m))
+}
+
+// reviveMemory writes in as a new memory of w's actor over the tombstone
+// cur, keeping its id and continuing its rev, and records op. With
+// capped set, it first refuses a memory past Limits.Memories.
+func (w *wtx) reviveMemory(ctx context.Context, cur Memory, in NewMemory, op Op, capped bool) (Memory, error) {
+	p := w.actor.Principal
+	if capped {
+		if err := w.checkCap(ctx, in.Scope); err != nil {
+			return Memory{}, err
+		}
+	}
+	m := Memory{ID: cur.ID, Scope: in.Scope, Key: in.Key, Body: in.Body, Tags: in.Tags, Issue: in.Issue,
+		Pinned: in.Pinned != nil && *in.Pinned, Author: p, UpdatedBy: p, CreatedAt: w.now, UpdatedAt: w.now, Rev: cur.Rev + 1}
+	if err := w.updateMemory(ctx, cur, `UPDATE memories SET deleted = FALSE, body = ?, issue_id = ?, pinned = ?, author = ?,
+  updated_by = ?, created_at = ?, updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`,
+		m.Body, nullStr(m.Issue), m.Pinned, p, p, w.now, w.now); err != nil {
+		return Memory{}, err
 	}
 	if err := w.insertTags(ctx, m.ID, m.Tags); err != nil {
 		return Memory{}, err
@@ -557,10 +598,13 @@ type forgetArgs struct {
 }
 
 // Forget deletes the actor's memory with key in scope (empty is
-// ScopeProject) and returns it as it was. Rev 0 deletes whatever is
-// stored; any other must be the stored revision, or the forget is refused
-// with a [*MemoryConflictError]. A key that is not there is ErrNotFound.
-// With an idempotency key idem, a repeat returns the first result.
+// ScopeProject) and returns it as it was, at the revision the forget
+// gave it. Rev 0 deletes whatever is stored; any other must be the
+// stored revision, or the forget is refused with a [*MemoryConflictError].
+// A key that is not there is ErrNotFound. The row stays as a tombstone,
+// its body, issue and tags cleared, so the key's revisions keep rising
+// when it is remembered again. With an idempotency key idem, a repeat
+// returns the first result.
 func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string, rev Rev, idem string) (Memory, error) {
 	if err := checkScope(scope); err != nil {
 		return Memory{}, err
@@ -584,7 +628,7 @@ func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string
 		switch {
 		case err != nil:
 			return err
-		case !found:
+		case !found || cur.forgotten:
 			return errMemoryNotFound(scope, key)
 		case rev != 0 && cur.Rev != rev:
 			return &MemoryConflictError{Scope: scope, Key: key, Rev: rev, Current: cur.Rev, By: cur.UpdatedBy}
@@ -592,14 +636,12 @@ func (s *Store) Forget(ctx context.Context, actor Actor, scope Scope, key string
 		if _, err := w.exec(ctx, `DELETE FROM memory_tags WHERE memory_id = ?`, cur.ID); err != nil {
 			return fmt.Errorf("forget memory: %w", err)
 		}
-		n, err := w.exec(ctx, `DELETE FROM memories WHERE id = ? AND rev = ?`, cur.ID, cur.Rev)
-		if err != nil {
-			return fmt.Errorf("forget memory: %w", err)
-		}
-		if n == 0 {
-			return fmt.Errorf("%w: memory %s moved", errRetry, key)
-		}
 		out = cur
+		out.UpdatedBy, out.UpdatedAt, out.Rev = w.actor.Principal, w.now, cur.Rev+1
+		if err := w.updateMemory(ctx, cur, `UPDATE memories SET deleted = TRUE, body = '', issue_id = NULL, pinned = FALSE,
+  updated_by = ?, updated_at = ?, rev = rev + 1, write_id = ? WHERE id = ? AND rev = ?`, out.UpdatedBy, out.UpdatedAt); err != nil {
+			return err
+		}
 		if err := w.event(ctx, OpMemoryForget, MemoryTarget(cur.ID), memoryState(cur), nil); err != nil {
 			return err
 		}
@@ -630,7 +672,7 @@ func (s *Store) PinMemory(ctx context.Context, actor Actor, scope Scope, key str
 		switch {
 		case err != nil:
 			return err
-		case !found:
+		case !found || cur.forgotten:
 			return errMemoryNotFound(scope, key)
 		case cur.Pinned == pinned:
 			out = cur
@@ -878,12 +920,12 @@ func (in *NewMemory) normalizeImport(lim Limits) error {
 }
 
 // planMemory is what importing in does given what is stored: a key not
-// there is created, one holding the same body, tags and issue is
-// unchanged, and any other is stale and kept as it is, since an import
-// carries no time to tell which side is newer.
+// there, or forgotten, is created, one holding the same body, tags and
+// issue is unchanged, and any other is stale and kept as it is, since an
+// import carries no time to tell which side is newer.
 func planMemory(cur Memory, found bool, in NewMemory) ImportOutcome {
 	switch {
-	case !found:
+	case !found || cur.forgotten:
 		return ImportCreated
 	case cur.Body == in.Body && slices.Equal(cur.Tags, in.Tags) && cur.Issue == in.Issue:
 		return ImportUnchanged
@@ -933,7 +975,11 @@ func (s *Store) ImportMemory(ctx context.Context, actor Actor, in NewMemory) (Im
 				return err
 			}
 		}
-		_, err = w.insertMemory(ctx, in, OpMemoryImport, false)
+		if found {
+			_, err = w.reviveMemory(ctx, cur, in, OpMemoryImport, false)
+		} else {
+			_, err = w.insertMemory(ctx, in, OpMemoryImport, false)
+		}
 		return err
 	})
 	if err != nil {

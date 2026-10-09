@@ -58,6 +58,9 @@ pinned](cli.md#the-host-key-is-pinned)).
   does not exist. Its events record its scope and revision but not its
   key, body, tags or issue, so history, the digest and pushed events
   carry none of it; the digest's event count still includes its changes.
+  Forgetting one clears its body, tags and issue but keeps its key and
+  revision in the row, so its revisions keep rising if it is remembered
+  again.
   `team` and `project` memories, like issues, anyone may read and change
   ([Memory](concepts.md#memory)).
 

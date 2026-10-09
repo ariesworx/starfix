@@ -6,7 +6,10 @@
 -- enforces that. author is who first remembered it, and the per-scope
 -- limit (limits: memories_per_scope) counts by author (memories_author);
 -- updated_by is the last writer. rev and write_id make a replace a
--- compare-and-swap Dolt enforces, as for issues. Keys and tags compare
+-- compare-and-swap Dolt enforces, as for issues. Forgetting a memory
+-- keeps its row as a tombstone (deleted, its body, issue and tags
+-- cleared) so its rev keeps rising when the key is remembered again,
+-- and a rev read before the forget never matches. Keys and tags compare
 -- byte for byte. Recall and prime read the newest first (memories_recent)
 -- and the memories linked to an issue (memories_issue).
 
@@ -18,6 +21,7 @@ CREATE TABLE memories (
   body       TEXT         NOT NULL,
   issue_id   VARCHAR(64)  NULL,
   pinned     BOOLEAN      NOT NULL DEFAULT FALSE,
+  deleted    BOOLEAN      NOT NULL DEFAULT FALSE,
   author     VARCHAR(255) NOT NULL,
   updated_by VARCHAR(255) NOT NULL,
   created_at DATETIME(6)  NOT NULL,

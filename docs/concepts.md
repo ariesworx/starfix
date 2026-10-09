@@ -236,8 +236,9 @@ without `--rev` creates the key and is refused if it exists, naming the
 stored revision. With `--rev N` it replaces revision N and is refused
 if someone changed the memory since, so two edits of the same key never
 overwrite each other silently. New keys never conflict. `forget --rev
-N` is refused the same way. Forgetting deletes the memory; remembering
-its key again starts a new one at revision 1.
+N` is refused the same way. Forgetting removes the memory but not its
+revision count: remembering its key again continues from the next
+revision, so a revision read before the forget never matches again.
 
 **Recall** finds memories by text (in the key or body, in any case), by
 exact key, by tag and by scope: pinned first, then the newest. There is

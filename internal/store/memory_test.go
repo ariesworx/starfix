@@ -286,8 +286,8 @@ func TestForgetMemory(t *testing.T) {
 		t.Fatalf("Forget at a stale rev = %v, want a conflict at rev 2", err)
 	}
 	got, err := s.Forget(ctx, alice, ScopeProject, "k", m.Rev, "")
-	if err != nil || got.ID != m.ID || got.Rev != m.Rev || got.Body != "two" {
-		t.Fatalf("Forget = %+v, %v; want the forgotten memory at rev %d", got, err, m.Rev)
+	if err != nil || got.ID != m.ID || got.Rev != m.Rev+1 || got.Body != "two" {
+		t.Fatalf("Forget = %+v, %v; want the forgotten memory, at rev %d", got, err, m.Rev+1)
 	}
 	if left := recall(t, s, alice, MemoryQuery{}); len(left) != 0 {
 		t.Errorf("after forget, recall = %q", left)
@@ -301,6 +301,63 @@ func TestForgetMemory(t *testing.T) {
 	// A forgotten key is new again.
 	if again := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "fresh"}); again.Body != "fresh" {
 		t.Errorf("Remember after forget = %+v", again)
+	}
+}
+
+// A memory's revisions only rise, across a forget too: a key remembered
+// again continues from the forgotten one's revision, so a rev read before
+// the forget can never match the new memory and replace or forget it.
+func TestForgetKeepsRevsMonotonic(t *testing.T) {
+	s := openStore(t, newDSN(t), Options{Limits: Limits{Memories: 1}})
+	ctx := t.Context()
+	m := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "one", Pinned: new(true)})
+	old := mustRemember(t, s, alice, NewMemory{Key: "k", Body: "two", Rev: m.Rev}) // rev 2, read by a slow client
+	gone, err := s.Forget(ctx, bob, ScopeProject, "k", old.Rev, "")
+	if err != nil || gone.Rev != 3 {
+		t.Fatalf("Forget = %+v, %v; want rev 3", gone, err)
+	}
+	if _, err := s.Remember(ctx, alice, NewMemory{Key: "k", Body: "stale", Rev: old.Rev}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Remember at a pre-forget rev while forgotten = %v, want ErrNotFound", err)
+	}
+	for _, op := range []func() error{
+		func() error { _, err := s.PinMemory(ctx, alice, ScopeProject, "k", true); return err },
+		func() error { _, err := s.Forget(ctx, alice, ScopeProject, "k", 0, ""); return err },
+	} {
+		if err := op(); !errors.Is(err, ErrNotFound) {
+			t.Errorf("pin or forget of a forgotten key = %v, want ErrNotFound", err)
+		}
+	}
+	// The per-scope cap of 1 counts no forgotten memory.
+	again := mustRemember(t, s, bob, NewMemory{Key: "k", Body: "fresh"})
+	if again.Rev != 4 || again.Author != "bob" || again.Pinned || again.Body != "fresh" {
+		t.Fatalf("Remember after forget = %+v; want a new memory by bob, unpinned, at rev 4", again)
+	}
+	var mc *MemoryConflictError
+	for _, rev := range []Rev{1, old.Rev, gone.Rev} {
+		if _, err := s.Remember(ctx, alice, NewMemory{Key: "k", Body: "stale", Rev: rev}); !errors.As(err, &mc) || mc.Current != again.Rev {
+			t.Errorf("Remember at pre-forget rev %d = %v, want a conflict at rev %d", rev, err, again.Rev)
+		}
+		if _, err := s.Forget(ctx, alice, ScopeProject, "k", rev, ""); !errors.As(err, &mc) {
+			t.Errorf("Forget at pre-forget rev %d = %v, want a conflict", rev, err)
+		}
+	}
+	if got := recall(t, s, alice, MemoryQuery{}); !slices.Equal(got, []string{"project/k"}) {
+		t.Errorf("recall = %q, want the one live memory", got)
+	}
+	// An import onto a forgotten key creates it, continuing its revisions.
+	if _, err := s.Forget(ctx, bob, ScopeProject, "k", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	imp := Actor{Principal: "import", Session: "bd", Machine: "m"}
+	if plan, err := s.PlanImportMemory(ctx, NewMemory{Key: "k", Body: "from bd"}); err != nil || plan != ImportCreated {
+		t.Errorf("PlanImportMemory onto a forgotten key = %q, %v; want created", plan, err)
+	}
+	if out, err := s.ImportMemory(ctx, imp, NewMemory{Key: "k", Body: "from bd"}); err != nil || out != ImportCreated {
+		t.Fatalf("ImportMemory onto a forgotten key = %q, %v; want created", out, err)
+	}
+	ms, _, err := s.Recall(ctx, alice, MemoryQuery{Key: "k"})
+	if err != nil || len(ms) != 1 || ms[0].Rev != 6 || ms[0].Body != "from bd" {
+		t.Errorf("imported memory = %+v, %v; want it at rev 6", ms, err)
 	}
 }
 

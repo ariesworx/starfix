@@ -405,7 +405,7 @@ limits:
 | `memory_key_length` | 128 | Bytes in a memory's key (at most 255) |
 | `memory_tags` | 20 | Tags on one memory |
 | `memory_tag_length` | 64 | Bytes in one memory tag (at most 255) |
-| `memories_per_scope` | 1000 | Memories one principal may author in one scope. A new key past it is refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
+| `memories_per_scope` | 1000 | Memories one principal may author in one scope, not counting forgotten ones. A new key past it is refused with `invalid`, and its fix says to forget some or raise the limit; replacing an existing memory is not refused. `import-bd` is exempt |
 
 A request past a per-request cap is refused with `invalid`. A write past
 the write rate is refused with `busy`, and its fix says how long to wait.

@@ -50,8 +50,8 @@ func TestDispatchMemory(t *testing.T) {
 		t.Errorf("unpin = %+v, want rev 3", up)
 	}
 	f := mustCall[proto.WriteResult](t, s, alice, proto.OpForget, proto.ForgetArgs{Key: "deploy", Rev: 3})
-	if f.ID != w.ID || f.Rev != 3 {
-		t.Errorf("forget = %+v, want %s at rev 3", f, w.ID)
+	if f.ID != w.ID || f.Rev != 4 {
+		t.Errorf("forget = %+v, want %s at rev 4", f, w.ID)
 	}
 	if left := mustCall[proto.RecallResult](t, s, bob, proto.OpRecall, proto.RecallArgs{}); len(left.Memories) != 0 {
 		t.Errorf("after forget, bob recalls %+v", left.Memories)
