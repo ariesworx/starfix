@@ -59,7 +59,7 @@ const PriceTarget = "prices"
 const (
 	// MaxRate bounds a rate: a million US dollars per million tokens, far
 	// past any list price, so an extra digit is refused.
-	MaxRate = 1_000_000_000_000
+	MaxRate = proto.MaxRate
 	// PriceLead is how far ahead of the server's clock a price may take
 	// effect, so an announced change can be entered early.
 	PriceLead = 366 * 24 * time.Hour
