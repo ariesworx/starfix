@@ -61,13 +61,17 @@ type Limits struct {
 	// effective time are one row, and replacing them is no new row; at
 	// most 10,000.
 	Prices int `yaml:"prices"`
+	// HoursPerDay caps one principal's hours entries on one day.
+	HoursPerDay int `yaml:"hours_per_day"`
+	// HoursNote caps an hours entry's note, in bytes; at most 65,535.
+	HoursNote int `yaml:"hours_note"`
 }
 
 // DefaultLimits are the limits a zero field takes.
 var DefaultLimits = Limits{Labels: 50, AcceptanceItems: 200, Deps: 200, Sessions: 256, InboxUnread: 1000, Notices: 10,
 	UsageRecords: 500, UsagePerDay: 50000, Paths: proto.MaxPaths,
 	MemoryBody: 4096, MemoryTags: 20, MemoryTagLength: 64, Memories: 1000, MemoryKeyLength: 128,
-	Prices: 1000}
+	Prices: 1000, HoursPerDay: 50, HoursNote: 500}
 
 // Column sizes that bound the memory limits: a body is TEXT, and a key
 // and a tag VARCHAR(255).
@@ -90,7 +94,8 @@ func (l Limits) withDefaults() Limits {
 		{&l.Paths, &DefaultLimits.Paths}, {&l.MemoryBody, &DefaultLimits.MemoryBody},
 		{&l.MemoryTags, &DefaultLimits.MemoryTags}, {&l.MemoryTagLength, &DefaultLimits.MemoryTagLength},
 		{&l.Memories, &DefaultLimits.Memories}, {&l.MemoryKeyLength, &DefaultLimits.MemoryKeyLength},
-		{&l.Prices, &DefaultLimits.Prices},
+		{&l.Prices, &DefaultLimits.Prices}, {&l.HoursPerDay, &DefaultLimits.HoursPerDay},
+		{&l.HoursNote, &DefaultLimits.HoursNote},
 	} {
 		if *f.v == 0 {
 			*f.v = *f.d
@@ -111,6 +116,7 @@ func (l Limits) Validate() error {
 		{"usage_records", l.UsageRecords}, {"usage_per_day", l.UsagePerDay}, {"paths_per_issue", l.Paths},
 		{"memory_body", l.MemoryBody}, {"memory_tags", l.MemoryTags}, {"memory_tag_length", l.MemoryTagLength},
 		{"memories_per_scope", l.Memories}, {"memory_key_length", l.MemoryKeyLength}, {"prices", l.Prices},
+		{"hours_per_day", l.HoursPerDay}, {"hours_note", l.HoursNote},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%w: limit %s is %d; give a positive number, or leave it out for the default", ErrInvalid, f.name, f.v)
@@ -122,6 +128,7 @@ func (l Limits) Validate() error {
 	}{
 		{"memory_body", l.MemoryBody, maxMemoryBody}, {"memory_tag_length", l.MemoryTagLength, maxMemoryName},
 		{"memory_key_length", l.MemoryKeyLength, maxMemoryName}, {"prices", l.Prices, maxPrices},
+		{"hours_note", l.HoursNote, maxText},
 	} {
 		if f.v > f.most {
 			return fmt.Errorf("%w: limit %s is %d; it can be at most %d", ErrInvalid, f.name, f.v, f.most)
