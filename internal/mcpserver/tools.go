@@ -616,6 +616,7 @@ func (s *Server) register() {
 	add(s, tool{name: "history", desc: "An issue's newest changes.", ann: readOnly, retry: true},
 		func(ctx context.Context, c Conn, in PageIn) (History, error) { return history(ctx, c, in) })
 	s.registerMemory()
+	s.registerCost()
 }
 
 // list is the list tool. A page that would pass MaxResultTokens is asked

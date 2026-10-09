@@ -106,7 +106,7 @@ func TestTokenUsage(t *testing.T) {
 
 	ag := alice.mcp("v0.2.0")
 	is := decode[mcpserver.Issue](t, ag.ok("show", map[string]any{"id": task}))
-	if is.Account != "acme" || is.Usage != "held 0m; claude-opus-4-1 2.4k in, 600 out, 5k cache write, 90k cache read" {
+	if is.Account != "acme" || is.Usage != "held 0m; cost unpriced; claude-opus-4-1 2.4k in, 600 out, 5k cache write, 90k cache read" {
 		t.Errorf("mcp show: account %q usage %q", is.Account, is.Usage)
 	}
 	d := decode[mcpserver.Digest](t, ag.ok("digest", map[string]any{}))

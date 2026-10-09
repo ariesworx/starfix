@@ -19,13 +19,16 @@ const (
 	usageModelLen = 64
 )
 
-// issueUsageLine is show's usage in one line: "held 1h; opus 950 in, 12k
-// out; split by time". An issue never held, with no tokens, has none.
+// issueUsageLine is show's usage in one line: "held 1h; cost $8.35; opus
+// 950 in, 12k out; split by time". An issue never held, with no tokens, has none.
 func issueUsageLine(u proto.IssueUsage) string {
 	if u.HeldSeconds == 0 && len(u.Models) == 0 {
 		return ""
 	}
 	parts := []string{held(u.HeldSeconds)}
+	if u.CostUSD != "" {
+		parts = append(parts, "cost "+costText(u.CostUSD, u.Unpriced))
+	}
 	if m := modelsLine(u.Models); m != "" {
 		parts = append(parts, m)
 	}
@@ -42,6 +45,9 @@ func issueUsageLine(u proto.IssueUsage) string {
 // issue was held for.
 func digestUsageLine(u proto.DigestUsage) string {
 	parts := []string{held(u.HeldSeconds)}
+	if u.CostUSD != "" {
+		parts = append(parts, "cost "+costText(u.CostUSD, u.Unpriced))
+	}
 	if m := modelsLine(u.Models); m != "" {
 		parts = append(parts, m)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ariesworx/starfix/internal/cli"
+	"github.com/ariesworx/starfix/internal/mcpserver"
 	"github.com/ariesworx/starfix/internal/proto"
 )
 
@@ -71,6 +72,16 @@ func TestCostCLI(t *testing.T) {
 		js.Total.CostUSD != "8.35" {
 		t.Errorf("cost --by epic --json = %+v", js)
 	}
+	ag := alice.mcp("v0.2.0")
+	if is := decode[mcpserver.Issue](t, ag.ok("show", map[string]any{"id": task})); !strings.Contains(is.Usage, "; cost $8.35, some unpriced; ") {
+		t.Errorf("mcp show usage %q, want the cost", is.Usage)
+	}
+	c := decode[mcpserver.Cost](t, ag.ok("cost", map[string]any{"since": "1h", "by": "epic"}))
+	if len(c.Groups) != 1 || c.Groups[0] != epic+" Client work: $8.35, some unpriced, 4.3M tokens" ||
+		c.Total != "$8.35, some unpriced, 4.3M tokens" || len(c.Unpriced) != 1 {
+		t.Errorf("mcp cost = %+v", c)
+	}
+
 	if r := alice.run("v0.2.0", "cost", "--since", "2026-02-01", "--until", "2026-01-01"); r.code != cli.ExitFailure ||
 		!strings.Contains(r.stderr, "is before since") || !strings.Contains(r.stderr, "fix: correct it and retry; `sfx cost -h` lists the options") {
 		t.Errorf("cost with until before since: exit %d\n%s", r.code, r.stderr)
