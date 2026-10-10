@@ -518,8 +518,7 @@ func (s *Store) Remember(ctx context.Context, actor Actor, in NewMemory) (Memory
 func (w *wtx) checkCap(ctx context.Context, scope Scope, except string) error {
 	p := w.actor.Principal
 	var live, dead int
-	if err := w.tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(CASE WHEN deleted THEN 0 ELSE 1 END), 0),
-  COALESCE(SUM(CASE WHEN deleted THEN 1 ELSE 0 END), 0)
+	if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN NOT deleted THEN 1 END), COUNT(CASE WHEN deleted THEN 1 END)
   FROM memories WHERE author = ? AND scope = ? AND id <> ?`, p, string(scope), except).Scan(&live, &dead); err != nil {
 		return fmt.Errorf("count memories: %w", err)
 	}

@@ -161,7 +161,7 @@ func (s *Store) LogHours(ctx context.Context, actor Actor, in NewHours) (HoursEn
 		}
 		var n int
 		var sum int64
-		if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(seconds), 0) FROM hours WHERE principal = ? AND on_date = ?`,
+		if err := w.tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(`+sumInt(`seconds`)+`, 0) FROM hours WHERE principal = ? AND on_date = ?`,
 			w.actor.Principal, on).Scan(&n, &sum); err != nil {
 			return fmt.Errorf("count hours: %w", err)
 		}
@@ -308,7 +308,7 @@ type PersonHours struct {
 func issueHours(ctx context.Context, q querier, id IssueID) (time.Duration, []PersonHours, error) {
 	var total time.Duration
 	var out []PersonHours
-	err := scanAll(ctx, q, "issue hours", `SELECT principal, SUM(seconds) FROM hours WHERE issue_id = ? GROUP BY principal`,
+	err := scanAll(ctx, q, "issue hours", `SELECT principal, `+sumInt(`seconds`)+` FROM hours WHERE issue_id = ? GROUP BY principal`,
 		[]any{string(id)}, func(rs *sql.Rows) error {
 			var p PersonHours
 			var secs int64
@@ -364,7 +364,7 @@ func endDay(until time.Time) time.Time {
 // placeholders for args, by issue and principal.
 func windowHours(ctx context.Context, q querier, where string, args ...any) ([]hoursSum, error) {
 	var out []hoursSum
-	query := `SELECT issue_id, principal, SUM(seconds) FROM hours WHERE ` + where + ` GROUP BY issue_id, principal` //nolint:gosec // constant terms; values are arguments
+	query := `SELECT issue_id, principal, ` + sumInt(`seconds`) + ` FROM hours WHERE ` + where + ` GROUP BY issue_id, principal` //nolint:gosec // constant terms; values are arguments
 	err := scanAll(ctx, q, "hours", query, args, func(rs *sql.Rows) error {
 		var h hoursSum
 		var secs int64

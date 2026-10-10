@@ -371,3 +371,38 @@ func TestDigestUsageHours(t *testing.T) {
 		})
 	}
 }
+
+// One principal's hours on an issue add up exactly past a million
+// seconds, where Dolt's SUM, a float, prints in exponent form: twelve
+// full days are 1,036,800 seconds.
+func TestHoursPastAMillionSeconds(t *testing.T) {
+	s, _ := clockStore(t) // 2026-10-07 12:00 UTC
+	is := mustCreate(t, s, NewIssue{Title: "long"})
+	for i := range 12 {
+		mustLogHours(t, s, alice, NewHours{Issue: is.ID, Duration: 24 * time.Hour, On: day("2026-10-07").AddDate(0, 0, -i)})
+	}
+	const want = 12 * 24 * time.Hour
+
+	u, err := s.IssueUsage(t.Context(), is.ID)
+	if err != nil {
+		t.Errorf("IssueUsage(%s): %v", is.ID, err)
+	} else if u.Logged != want || len(u.LoggedBy) != 1 || u.LoggedBy[0].Duration != want {
+		t.Errorf("IssueUsage(%s) logged %s by %v, want %s by alice", is.ID, u.Logged, u.LoggedBy, want)
+	}
+
+	since := day("2026-09-01")
+	r, err := s.CostReport(t.Context(), CostFilter{By: CostByIssue, Since: since})
+	if err != nil {
+		t.Errorf("CostReport(by issue, since %s): %v", since.Format(time.DateOnly), err)
+	} else if r.Total.Logged != want {
+		t.Errorf("CostReport(by issue, since %s).Total.Logged = %s, want %s", since.Format(time.DateOnly), r.Total.Logged, want)
+	}
+
+	f := DigestFilter{Window: 30 * 24 * time.Hour}
+	d, err := s.Digest(t.Context(), f)
+	if err != nil {
+		t.Errorf("Digest(%+v): %v", f, err)
+	} else if d.Usage.Logged != want {
+		t.Errorf("Digest(%+v).Usage.Logged = %s, want %s", f, d.Usage.Logged, want)
+	}
+}

@@ -729,3 +729,61 @@ func TestCostReportAmortizedIdle(t *testing.T) {
 		t.Errorf("CostReport(October to January) on 7 Oct of an idle 31 USD plan = %q, want %q (6.5 days of it)", got, want)
 	}
 }
+
+// A plan month is split by its principals' token totals, exactly, at any
+// size: past a million tokens, where Dolt's SUM, a float, prints in
+// exponent form, and past 2⁵³, where a float can no longer hold every
+// integer.
+func TestCostReportAmortizedLargeMonth(t *testing.T) {
+	sept := time.Date(2026, 9, 10, 12, 5, 0, 0, time.UTC)
+	t.Run("a million tokens", func(t *testing.T) {
+		s, clk := clockStore(t)
+		mustSetPlan(t, s, NewPlan{Name: "team", From: month("2026-09"), Fee: 10_000_000, Seats: 1, Principals: []string{"alice"}})
+		mustAddUsage(t, s, alice, rec("big", "example-large", sept, 1_000_000, 100_000))
+		clk.add(month("2026-11").Sub(clk.now()))
+		r, err := s.CostReport(t.Context(), CostFilter{By: CostByPerson, Since: month("2026-09"), Until: month("2026-10")})
+		if err != nil {
+			t.Fatalf("CostReport(by person, September) with 1,100,000 tokens: %v", err)
+		}
+		if got, want := amortizedText(r.Groups, nil), "alice=10000000000000"; got != want {
+			t.Errorf("CostReport(by person, September) with 1,100,000 tokens amortized = %q, want %q", got, want)
+		}
+	})
+	t.Run("past 2^53 tokens", func(t *testing.T) {
+		// alice's 2,300 records of 4×10¹² tokens on A on 10 September,
+		// and one token on the 20th: 9,200,000,000,000,001 tokens, a sum
+		// a float rounds to a neighbor. A window to the 15th holds all
+		// but the one token, so A's share of the 10¹⁸ picodollar fee is
+		// 10¹⁸ × 9.2×10¹⁵ / (9.2×10¹⁵ + 1), short of the whole fee by
+		// 108 and the remainder that wins the last picodollar.
+		s, clk := clockStore(t)
+		ctx := t.Context()
+		mustSetPlan(t, s, NewPlan{Name: "max", From: month("2026-09"), Fee: MaxPlanFee, Seats: 1, Principals: []string{"alice"}})
+		a := mustCreate(t, s, NewIssue{Title: "a"})
+		clk.add(time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC).Sub(clk.now()))
+		if _, _, err := s.StartIssue(ctx, alice, a.ID, time.Hour, false); err != nil {
+			t.Fatal(err)
+		}
+		clk.add(10 * time.Minute)
+		if _, _, err := s.FinishIssue(ctx, alice, a.ID, 0, Finish{}); err != nil {
+			t.Fatal(err)
+		}
+		clk.add(month("2026-11").Sub(clk.now()))
+		const n = MaxUsageCount
+		var recs []UsageRecord
+		for i := range 2300 {
+			recs = append(recs, cacheRec(fmt.Sprintf("r%d", i), "example-large", sept, n, n, n, nil, n))
+		}
+		for batch := range slices.Chunk(recs, 500) {
+			mustAddUsage(t, s, alice, batch...)
+		}
+		mustAddUsage(t, s, alice, rec("loose", "example-large", time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC), 1, 0))
+		r, err := s.CostReport(ctx, CostFilter{By: CostByIssue, Since: month("2026-09"), Until: day("2026-09-15")})
+		if err != nil {
+			t.Fatalf("CostReport(by issue, 1 to 15 September) with 9.2e15+1 tokens: %v", err)
+		}
+		if got, want := amortizedText(r.Groups, map[string]IssueID{"A": a.ID}), "A=999999999999999891"; got != want {
+			t.Errorf("CostReport(by issue, 1 to 15 September) with 9.2e15+1 tokens amortized = %q, want %q", got, want)
+		}
+	})
+}
