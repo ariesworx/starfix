@@ -451,6 +451,17 @@ func lastKey(ctx context.Context, q querier, query string) (int64, error) {
 	return n, err
 }
 
+// sumInt returns SQL for the exact sum of the integer expression expr,
+// as a DECIMAL, which scans into an int64. Dolt 2.4.2 sums integers as a
+// DOUBLE, rounded past 2⁵³ and sent in exponent form from 10⁶ ("1e+06"),
+// which no integer scan accepts. Summing DECIMALs is exact, and casting
+// the result keeps Dolt from sending it as a DOUBLE too. A sum past the
+// int64 range fails the scan rather than being clamped to it, as a CAST
+// to SIGNED would.
+func sumInt(expr string) string {
+	return "CAST(SUM(CAST(" + expr + " AS DECIMAL(65, 0))) AS DECIMAL(65, 0))"
+}
+
 // jsonOrNull encodes an event state as compacted JSON text, or returns
 // nil, which is NULL, for a nil state.
 func jsonOrNull(v any) (any, error) {
