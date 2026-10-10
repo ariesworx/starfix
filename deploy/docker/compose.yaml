@@ -1,0 +1,29 @@
+# A local starfix test server, for testing only: docs/deploy/docker.md.
+#
+#   STARFIX_KEYS="alice $(cat ~/.ssh/id_ed25519.pub)" docker compose -f deploy/docker/compose.yaml up -d --build
+#
+# STARFIX_KEYS holds "NAME TYPE KEY" lines, one principal key each;
+# STARFIX_ADMINS (comma-separated) defaults to the first name;
+# STARFIX_PROJECT fixes the project UUID on the first start;
+# STARFIX_PORT is the port on 127.0.0.1, 2222 by default.
+name: starfix-dev
+services:
+  starfix:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: starfix-dev:local
+    # docker-init reaps the processes sshd leaves behind and forwards stop
+    # signals to the entrypoint.
+    init: true
+    environment:
+      STARFIX_KEYS: ${STARFIX_KEYS:-}
+      STARFIX_ADMINS: ${STARFIX_ADMINS:-}
+      STARFIX_PROJECT: ${STARFIX_PROJECT:-}
+      STARFIX_PORT: ${STARFIX_PORT:-2222}
+    ports:
+      - 127.0.0.1:${STARFIX_PORT:-2222}:22
+    volumes:
+      - state:/state
+volumes:
+  state:
