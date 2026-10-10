@@ -150,7 +150,7 @@ binary, building from source and verifying a download by hand.
 | [Using sfx](docs/cli.md) | Connecting a repository, every command, exit codes |
 | [Agents](docs/agents.md) | Setting agents up, session-start hooks, MCP tools, sessions |
 | [Running a server](docs/server.md) | Setup step by step, principals, admins, settings, limits, upgrades, backups, troubleshooting |
-| [Deployment examples](docs/deploy/README.md) | Local, team and enterprise deployments, with costs |
+| [Deployment examples](docs/deploy/README.md) | Local, team and enterprise deployments, with costs, and a Docker test server |
 | [Installing starfix](docs/install.md) | Install options, manual downloads, verifying releases, upgrades |
 | [Moving from bd](docs/migrate-from-bd.md) | Importing a beads backlog, and exporting it back |
 | [Security model](docs/security-model.md) | Identity, host keys, the Dolt account, untrusted text, releases, CI checks |

@@ -1,0 +1,9 @@
+# Dolt's config, as docs/server.md step 2 writes it.
+log_level: info
+listener:
+  host: 127.0.0.1
+  port: 3306
+data_dir: /var/lib/dolt/data
+cfg_dir: /var/lib/dolt/cfg
+system_variables:
+  secure_file_priv: /var/lib/dolt/no-files

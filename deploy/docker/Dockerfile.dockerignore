@@ -1,0 +1,7 @@
+# The image needs the module and this directory, nothing else.
+*
+!go.mod
+!go.sum
+!cmd
+!internal
+!deploy/docker

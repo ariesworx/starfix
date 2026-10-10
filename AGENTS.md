@@ -45,6 +45,7 @@ stage is in progress.
 | `internal/dolttest` | Starts a throwaway `dolt sql-server` for tests |
 | `internal/iaptest` | A fake `gcloud` for tests of the IAP transport: the test binary, re-executed from `PATH` |
 | `internal/e2e` | End-to-end tests: CLI and MCP through an in-process SSH server to a real daemon and store |
+| `deploy/docker` | The Docker test server ([docs/deploy/docker.md](docs/deploy/docker.md)): image, entrypoint, compose file and `smoke.sh`, which drives it end to end and is not part of CI. It mirrors docs/server.md's setup steps; `internal/version` keeps its Dolt at the pin |
 | `install.sh` | The one-line installer for `sfx` and `starfixd`; `internal/release/install_test.go` runs it and checks that its key is in `keys.go` |
 | `spike/dolt` | Stage 0 measurements, kept as evidence; not maintained and excluded from lint |
 | `docs` | User guides: concepts, `sfx`, agents, running a server, deployment examples, install, moving from bd, the security model |
