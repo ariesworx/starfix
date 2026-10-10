@@ -19,6 +19,9 @@ Costs are Google Cloud list prices for us-central1, on demand and before
 tax, read on 7 October 2026. Each example links the pricing pages; check
 them before you rely on a figure.
 
+To try starfix, or test a branch, on any machine with Docker, use the
+[Docker test server](docker.md). It is for testing, not a deployment.
+
 ## What every deployment shares
 
 - **One server holds one project.** Several projects need several servers.

@@ -17,7 +17,8 @@ your machine
 - **Linux with systemd.** A Linux desktop or laptop works. So does WSL2 on
   Windows, once systemd is turned on in `/etc/wsl.conf`. On a Mac, use a
   Linux VM and run your agents inside it, or point `host` at the VM's
-  address.
+  address. To try starfix or test a change on a Mac, the
+  [Docker test server](docker.md) runs a server in a container instead.
 - **An SSH server**: `apt install openssh-server` on Ubuntu.
 - **About 200 MB of free memory.**
 

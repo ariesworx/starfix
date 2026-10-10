@@ -27,8 +27,11 @@ go test ./...
 Tests that need Dolt, git or root skip without them, and a skipped store
 test proves nothing. [Commands](AGENTS.md#commands) says which tests need
 what, and how CI makes a missing Dolt fail instead. To try a real server
-by hand, follow the [Local](docs/deploy/local.md) example in a Linux VM or
-container you can throw away.
+by hand, start the [Docker test server](docs/deploy/docker.md), which
+builds from your checkout, or follow the [Local](docs/deploy/local.md)
+example in a Linux VM you can throw away. `deploy/docker/smoke.sh`
+drives that server through the main commands end to end; CI does not
+run it.
 
 ### The soak test
 
@@ -64,6 +67,7 @@ that describes it, in the same pull request.
 | An `sfx` command or flag | [docs/cli.md](docs/cli.md) |
 | Agent setup, hooks or MCP tools | [docs/agents.md](docs/agents.md) |
 | A server setting, limit or `starfixd` command | [docs/server.md](docs/server.md) |
+| A setup step in docs/server.md, or the Docker test server | [docs/deploy/docker.md](docs/deploy/docker.md) and `deploy/docker` |
 | A security property | [docs/security-model.md](docs/security-model.md) |
 | The release process | [RELEASING.md](RELEASING.md) |
 | Something that departs from a design | an **As built** note in [docs/design](docs/design/README.md) |
